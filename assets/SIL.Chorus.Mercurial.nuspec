@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<package>
+	<metadata>
+		<id>SIL.Chorus.Mercurial</id>
+		<version>$version$</version>
+		<authors>SIL International</authors>
+		<copyright>Copyright (c) 2020 SIL International</copyright>
+		<license type="expression">GPL-2.0-or-later</license>
+		<projectUrl>https://github.com/sillsdev/Mercurial4Chorus</projectUrl>
+		<requireLicenseAcceptance>false</requireLicenseAcceptance>
+		<tags>native</tags>
+		<summary>Mercurial for Chorus</summary>
+		<description>Chorus is an end-user collaboration library via 3-way xml merging and hg dvcs under the hood.
+
+This package provides the Mercurial implementation that Chorus uses.
+		</description>
+		<language>en-US</language>
+		<references/>
+	</metadata>
+</package>
