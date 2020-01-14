@@ -6,3 +6,17 @@ Mercurial version that Chorus uses. Mercurial is provided in the form of a nuget
 
 After installation of the nuget package the `Mercurial` and `MercurialExtensions` folders will be
 copied to the solutions directory during the build.
+
+## Building
+
+To create a pre-release nuget package:
+
+```bash
+msbuild /p:BuildCounter=1 build/SIL.Chorus.Mercurial.proj
+```
+
+To release a nuget package:
+
+```bash
+msbuild /p:PreRelease=. build/SIL.Chorus.Mercurial.proj
+```
