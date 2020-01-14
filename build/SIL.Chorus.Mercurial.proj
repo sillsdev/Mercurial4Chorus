@@ -1,4 +1,4 @@
-<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003" InitialTargets="Build">
 	<PropertyGroup>
 		<RootDir Condition="'$(teamcity_version)' == '' Or '$(OS)'!='Windows_NT'">$(MSBuildProjectDirectory)\..</RootDir>
 		<RootDir Condition="'$(teamcity_version)' != '' And '$(OS)'=='Windows_NT'">$(teamcity_build_checkoutDir)</RootDir>
@@ -6,7 +6,7 @@
 		<BuildCounter Condition="'$(BuildCounter)' == ''">0</BuildCounter>
 		<NuGetBuildDir>$(MSBuildProjectDirectory)/../output/files</NuGetBuildDir>
 		<PreRelease Condition="'$(PreRelease)' == ''">-beta</PreRelease>
-		<PkgVersion Condition="'$(PkgVersion)' == ''">3.0.1$(PreRelease).$(BuildCounter)</PkgVersion>
+		<PkgVersion Condition="'$(PkgVersion)' == ''">3.0.1$(PreRelease)$(BuildCounter)</PkgVersion>
 	</PropertyGroup>
 
 	<Import Project="NuGet.targets"/>
