@@ -25,7 +25,7 @@
 			<NuGetPackageDir>$(MSBuildProjectDirectory)/../output</NuGetPackageDir>
 			<NuGetRuntimeFolderWin>$(NuGetBuildDir)/runtimes/win/native</NuGetRuntimeFolderWin>
 			<NuGetRuntimeFolderLinux64>$(NuGetBuildDir)/runtimes/linux-x64/native</NuGetRuntimeFolderLinux64>
-			<NuGetRuntimeFolderLinux32>$(NuGetBuildDir)/runtimes/linux-x68/native</NuGetRuntimeFolderLinux32>
+			<NuGetRuntimeFolderLinux32>$(NuGetBuildDir)/runtimes/linux-x86/native</NuGetRuntimeFolderLinux32>
 			<NuGetRuntimeAnyFolder>$(NuGetBuildDir)/runtimes/any</NuGetRuntimeAnyFolder>
 		</PropertyGroup>
 		<ItemGroup>
