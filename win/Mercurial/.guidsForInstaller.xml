@@ -1,0 +1,22 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<!--This file is generated and then updated by an MSBuild task.  It preserves the automatically-generated GUIDs assigned files that will be installed on user machines. So it should be held in source control.-->
+<InstallerMetadata>
+  <File Id="mercurial.add_path.exe" Guid="D63A8C10-90B6-4843-9BCB-187366FEFED0" />
+  <File Id="mercurial.cacert.pem" Guid="6DF15B8B-194E-4322-936D-29AA8E693B89" />
+  <File Id="mercurial.Contributors.txt" Guid="7464E619-428E-4BC3-9637-8E2DFDA3133C" />
+  <File Id="mercurial.Copying.txt" Guid="5F28F762-70C8-4C22-B593-E89F25AC481D" />
+  <File Id="mercurial.hg.exe" Guid="C65B2D2E-3705-4BA7-99D8-6B87FFB6CE81" />
+  <File Id="mercurial.hg.exe.local" Guid="EE1D96EC-14B4-467F-BA2D-849962E49C73" />
+  <File Id="mercurial.library.zip" Guid="30C62CEF-C4BB-4C02-A162-12A0649F790C" />
+  <File Id="mercurial.Mercurial.url" Guid="FC11F10A-E025-4DB8-BB84-A28B4B06606D" />
+  <File Id="mercurial.Microsoft.VC90.CRT.manifest" Guid="E296637A-0C13-4FBA-A514-EA2A141FABEE" />
+  <File Id="mercurial.msvcm90.dll" Guid="A1887C96-D3C6-4833-8446-8CCC038F4F02" />
+  <File Id="mercurial.msvcp90.dll" Guid="60EC2A57-8A66-4663-929A-2F9B4FF8A878" />
+  <File Id="mercurial.msvcr90.dll" Guid="58201B58-B52B-4F05-9B4D-315BF9DE4CDD" />
+  <File Id="mercurial.python27.dll" Guid="5951AD1A-1ACF-41CA-8B5C-6C9048141C9A" />
+  <File Id="mercurial.ReadMe.html" Guid="4CAFA07C-5C74-4D18-A6D6-D7AD07CB5E16" />
+  <File Id="mercurial.ReleaseNotes.txt" Guid="51BEB74D-28F5-486A-8997-5CB317AC1254" />
+  <File Id="mercurial.unins000.dat" Guid="E2B9A683-0CCD-41EA-9F62-5BBA6CCD0A90" />
+  <File Id="mercurial.unins000.exe" Guid="E641CBE9-18B6-4BA7-AB9E-B05EDC9963D2" />
+  <File Id="mercurial.w9xpopen.exe" Guid="E10BB6A7-1325-4AD3-B6A1-3F8869125D8F" />
+</InstallerMetadata>

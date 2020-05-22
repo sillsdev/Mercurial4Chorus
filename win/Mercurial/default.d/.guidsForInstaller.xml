@@ -1,0 +1,7 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<!--This file is generated and then updated by an MSBuild task.  It preserves the automatically-generated GUIDs assigned files that will be installed on user machines. So it should be held in source control.-->
+<InstallerMetadata>
+  <File Id="mercurial.default.d.cacerts.rc" Guid="EBBE1FE8-F005-4582-A41C-24643CDA442C" />
+  <File Id="mercurial.default.d.editor.rc" Guid="5CE11261-3D90-447A-B240-E57394090508" />
+  <File Id="mercurial.default.d.mergetools.rc" Guid="DB7B8034-ABA8-4DB1-A388-94C9C1A4A462" />
+</InstallerMetadata>
