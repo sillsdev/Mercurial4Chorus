@@ -5,7 +5,7 @@
 
 	<!-- Make CopyFiles target actually get executed.-->
 	<PropertyGroup>
-		<BuildDependsOn>$(BuildDependsOn);CopyFiles</BuildDependsOn>
+		<BuildDependsOn>$(BuildDependsOn);CopyFiles;AdjustFixUtf8</BuildDependsOn>
 	</PropertyGroup>
 
 	<Target Name="SetupBitness" Condition="'$(OS)'!='Windows_NT'">
@@ -27,5 +27,11 @@
 			<AllFiles Include="$(RuntimesDirectory)\any\**\*.*" />
 		</ItemGroup>
 		<Copy SourceFiles="@(AllFiles)" DestinationFolder="$(SolutionDir)\%(RecursiveDir)" SkipUnchangedFiles="true"/>
+	</Target>
+
+	<Target Name="AdjustFixUtf8" DependsOnTargets="CopyFiles">
+		<!-- Append fixutf8 line to mercurial.ini with correct path -->
+		<WriteLinesToFile File="$(SolutionDir)/Mercurial/mercurial.ini" Overwrite="false"
+			Lines="fixutf8 = $([System.IO.Path]::Combine($(SolutionDir),'MercurialExtensions','fixutf8','fixutf8.py'))" />
 	</Target>
 </Project>
