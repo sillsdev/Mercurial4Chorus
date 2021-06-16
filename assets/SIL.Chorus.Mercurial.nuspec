@@ -4,7 +4,7 @@
 		<id>SIL.Chorus.Mercurial</id>
 		<version>$version$</version>
 		<authors>SIL International</authors>
-		<copyright>Copyright (c) 2020 SIL International</copyright>
+		<copyright>Copyright (c) 2020-2021 SIL International</copyright>
 		<license type="expression">GPL-2.0-or-later</license>
 		<projectUrl>https://github.com/sillsdev/Mercurial4Chorus</projectUrl>
 		<requireLicenseAcceptance>false</requireLicenseAcceptance>
