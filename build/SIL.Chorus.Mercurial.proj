@@ -6,7 +6,7 @@
 		<BuildCounter Condition="'$(BuildCounter)' == ''">0</BuildCounter>
 		<NuGetBuildDir>$(MSBuildProjectDirectory)/../output/files</NuGetBuildDir>
 		<PreRelease Condition="'$(PreRelease)' == ''">-beta</PreRelease>
-		<PkgVersion Condition="'$(PkgVersion)' == ''">3.0.1$(PreRelease)$(BuildCounter)</PkgVersion>
+		<PkgVersion Condition="'$(PkgVersion)' == ''">3.0.2$(PreRelease)$(BuildCounter)</PkgVersion>
 	</PropertyGroup>
 
 	<Import Project="NuGet.targets"/>
@@ -27,6 +27,7 @@
 			<NuGetRuntimeFolderLinux64>$(NuGetBuildDir)/runtimes/linux-x64/native</NuGetRuntimeFolderLinux64>
 			<NuGetRuntimeFolderLinux32>$(NuGetBuildDir)/runtimes/linux-x86/native</NuGetRuntimeFolderLinux32>
 			<NuGetRuntimeAnyFolder>$(NuGetBuildDir)/runtimes/any</NuGetRuntimeAnyFolder>
+			<NuGetDocsFolder>$(NuGetBuildDir)/docs</NuGetDocsFolder>
 		</PropertyGroup>
 		<ItemGroup>
 			<Linux64Artifacts Include="$(RootDir)\linux-x64\**\*.*" />
@@ -45,6 +46,7 @@
 		<Copy SourceFiles="@(Extensions)" DestinationFolder="$(NuGetRuntimeAnyFolder)\MercurialExtensions\%(RecursiveDir)" />
 		<Copy SourceFiles="@(TargetFile)" DestinationFolder="$(NuGetBuildDir)\build" />
 		<Copy SourceFiles="@(NuSpecFile)" DestinationFolder="$(NuGetBuildDir)" />
+		<Copy SourceFiles="$(RootDir)\README.md" DestinationFolder="$(NuGetDocsFolder)" />
 		<Exec Command="$(NuGetCommand) pack -Version $(PkgVersion) -OutputDirectory $(NuGetPackageDir) SIL.Chorus.Mercurial.nuspec"
 			WorkingDirectory="$(NuGetBuildDir)"/>
 	</Target>

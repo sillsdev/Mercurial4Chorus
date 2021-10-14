@@ -14,6 +14,8 @@
 
 This package provides the Mercurial implementation that Chorus uses.
 		</description>
+		<releaseNotes>v3.0.2: explicitly request Python 2 on Linux</releaseNotes>
+		<readme>docs\README.md</readme>
 		<language>en-US</language>
 		<references/>
 	</metadata>
