@@ -1,10 +1,9 @@
 <Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
 	<PropertyGroup>
 		<RuntimesDirectory>$(MSBuildThisFileDirectory)\..\runtimes</RuntimesDirectory>
-	</PropertyGroup>
-
-	<!-- Make CopyFiles target actually get executed.-->
-	<PropertyGroup>
+		<!-- Allow extraction to a custom location -->
+		<Mercurial4ChorusDestDir Condition="'$(Mercurial4ChorusDestDir)'==''">$(SolutionDir)</Mercurial4ChorusDestDir>
+		<!-- Make CopyFiles target actually get executed.-->
 		<BuildDependsOn>$(BuildDependsOn);CopyFiles;AdjustFixUtf8</BuildDependsOn>
 	</PropertyGroup>
 
@@ -26,18 +25,18 @@
 			<AllFiles Include="$(RuntimesDirectory)\$(Platform)\native\**\*.*" />
 			<AllFiles Include="$(RuntimesDirectory)\any\**\*.*" />
 		</ItemGroup>
-		<Copy SourceFiles="@(AllFiles)" DestinationFolder="$(SolutionDir)\%(RecursiveDir)" SkipUnchangedFiles="true"/>
+		<Copy SourceFiles="@(AllFiles)" DestinationFolder="$(Mercurial4ChorusDestDir)\%(RecursiveDir)" SkipUnchangedFiles="true"/>
 	</Target>
 
 	<Target Name="AdjustFixUtf8" DependsOnTargets="CopyFiles">
 		<!-- Append fixutf8 line to mercurial.ini with correct path -->
-		<WriteLinesToFile File="$(SolutionDir)/Mercurial/mercurial.ini" Overwrite="false"
-			Lines="fixutf8 = $([System.IO.Path]::Combine($(SolutionDir),'MercurialExtensions','fixutf8','fixutf8.py'))" />
+		<WriteLinesToFile File="$(Mercurial4ChorusDestDir)/Mercurial/mercurial.ini" Overwrite="false"
+			Lines="fixutf8 = $([System.IO.Path]::Combine($(Mercurial4ChorusDestDir),'MercurialExtensions','fixutf8','fixutf8.py'))" />
 	</Target>
 
 	<Target Name="AdjustCacerts" DependsOnTargets="CopyFiles" Condition="'$(OS)'=='Windows_NT'">
 		<!-- Append cacerts line to cacerts.rc with the correct path -->
-		<WriteLinesToFile File="$(SolutionDir)/Mercurial/default.d/cacerts.rc" Overwrite="false"
-			Lines="cacerts=$([System.IO.Path]::Combine($(SolutionDir),'Mercurial','cacert.pem'))" />
+		<WriteLinesToFile File="$(Mercurial4ChorusDestDir)/Mercurial/default.d/cacerts.rc" Overwrite="false"
+			Lines="cacerts=$([System.IO.Path]::Combine($(Mercurial4ChorusDestDir),'Mercurial','cacert.pem'))" />
 	</Target>
 </Project>
