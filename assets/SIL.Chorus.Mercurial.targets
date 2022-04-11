@@ -2,7 +2,7 @@
 	<PropertyGroup>
 		<RuntimesDirectory>$(MSBuildThisFileDirectory)\..\runtimes</RuntimesDirectory>
 		<!-- Allow extraction to a custom location -->
-		<Mercurial4ChorusParentDir Condition="'$(Mercurial4ChorusParentDir)'==''">$(SolutionDir)</Mercurial4ChorusParentDir>
+		<Mercurial4ChorusExctractionDir Condition="'$(Mercurial4ChorusExctractionDir)'==''">$(SolutionDir)</Mercurial4ChorusExctractionDir>
 		<!-- Make CopyFiles target actually get executed.-->
 		<BuildDependsOn>$(BuildDependsOn);CopyFiles;AdjustFixUtf8</BuildDependsOn>
 	</PropertyGroup>
@@ -25,18 +25,18 @@
 			<AllFiles Include="$(RuntimesDirectory)\$(Platform)\native\**\*.*" />
 			<AllFiles Include="$(RuntimesDirectory)\any\**\*.*" />
 		</ItemGroup>
-		<Copy SourceFiles="@(AllFiles)" DestinationFolder="$(Mercurial4ChorusParentDir)\%(RecursiveDir)" SkipUnchangedFiles="true"/>
+		<Copy SourceFiles="@(AllFiles)" DestinationFolder="$(Mercurial4ChorusExctractionDir)\%(RecursiveDir)" SkipUnchangedFiles="true"/>
 	</Target>
 
 	<Target Name="AdjustFixUtf8" DependsOnTargets="CopyFiles">
 		<!-- Append fixutf8 line to mercurial.ini with correct path -->
-		<WriteLinesToFile File="$(Mercurial4ChorusParentDir)/Mercurial/mercurial.ini" Overwrite="false"
-			Lines="fixutf8 = $([System.IO.Path]::Combine($(Mercurial4ChorusParentDir),'MercurialExtensions','fixutf8','fixutf8.py'))" />
+		<WriteLinesToFile File="$(Mercurial4ChorusExctractionDir)/Mercurial/mercurial.ini" Overwrite="false"
+			Lines="fixutf8 = $([System.IO.Path]::Combine($(Mercurial4ChorusExctractionDir),'MercurialExtensions','fixutf8','fixutf8.py'))" />
 	</Target>
 
 	<Target Name="AdjustCacerts" DependsOnTargets="CopyFiles" Condition="'$(OS)'=='Windows_NT'">
 		<!-- Append cacerts line to cacerts.rc with the correct path -->
-		<WriteLinesToFile File="$(Mercurial4ChorusParentDir)/Mercurial/default.d/cacerts.rc" Overwrite="false"
-			Lines="cacerts=$([System.IO.Path]::Combine($(Mercurial4ChorusParentDir),'Mercurial','cacert.pem'))" />
+		<WriteLinesToFile File="$(Mercurial4ChorusExctractionDir)/Mercurial/default.d/cacerts.rc" Overwrite="false"
+			Lines="cacerts=$([System.IO.Path]::Combine($(Mercurial4ChorusExctractionDir),'Mercurial','cacert.pem'))" />
 	</Target>
 </Project>
