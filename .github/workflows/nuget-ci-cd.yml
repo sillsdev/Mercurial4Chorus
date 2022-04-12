@@ -1,0 +1,45 @@
+# This is a basic workflow to help you get started with Actions
+
+name: Nuget-CI-CD
+
+# Controls when the workflow will run
+on:
+  # Triggers the workflow on push or pull request events but only for the master branch
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+# Cancel any workflow jobs running if the PR is re-triggered
+concurrency:
+  group: ci-${{ github.head_ref }}-group
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v2.3.4
+      with:
+        fetch-depth: 0
+    - name: Set Beta Version
+      if: github.event_name != 'push'
+      run: echo "release-suffix=-beta" >> $GITHUB_ENV 
+    - name: Set Release Version
+      if: github.event_name == 'push'
+      run: echo "release-suffix=." >> $GITHUB_ENV 
+
+    - name: Nuget pack
+      run: dotnet msbuild -target:Build build/SIL.Chorus.Mercurial.proj -property:PreRelease=${{ env.release-suffix }} -property:BuildCounter=${{ github.run_number }}
+
+    - name: Upload Artifacts
+      uses: actions/upload-artifact@v2
+      with:
+        name: packages
+        path: ./**/*.nupkg
+        if-no-files-found: error
+
+    - name: Publish nuget packages
+      if: github.event_name == 'push'
+      run: nuget push **/*.nupkg -Source 'https://api.nuget.org/v3/index.json' -ApiKey ${{ secrets.CHORUS_MERCURIAL_API_KEY }}
