@@ -14,7 +14,10 @@
 
 This package provides the Mercurial implementation that Chorus uses.
 		</description>
-		<releaseNotes>v3.0.2: explicitly request Python 2 on Linux</releaseNotes>
+		<releaseNotes>v3.0.2: explicitly request Python 2 on Linux
+
+v3.0.3: Allow specifying an alternate destination directory using `Mercurial4ChorusDestDir`
+		</releaseNotes>
 		<readme>docs\README.md</readme>
 		<language>en-US</language>
 		<references/>
