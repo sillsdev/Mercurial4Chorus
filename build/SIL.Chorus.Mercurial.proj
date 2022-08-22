@@ -45,6 +45,7 @@
 		<Copy SourceFiles="@(WinArtifacts)" DestinationFolder="$(NuGetRuntimeFolderWin)\%(RecursiveDir)" />
 		<Copy SourceFiles="@(Extensions)" DestinationFolder="$(NuGetRuntimeAnyFolder)\MercurialExtensions\%(RecursiveDir)" />
 		<Copy SourceFiles="@(TargetFile)" DestinationFolder="$(NuGetBuildDir)\build" />
+		<Copy SourceFiles="@(TargetFile)" DestinationFolder="$(NuGetBuildDir)\buildMultiTargeting" />
 		<Copy SourceFiles="@(NuSpecFile)" DestinationFolder="$(NuGetBuildDir)" />
 		<Copy SourceFiles="$(RootDir)\README.md" DestinationFolder="$(NuGetDocsFolder)" />
 		<Exec Command="$(NuGetCommand) pack -Version $(PkgVersion) -OutputDirectory $(NuGetPackageDir) SIL.Chorus.Mercurial.nuspec"
