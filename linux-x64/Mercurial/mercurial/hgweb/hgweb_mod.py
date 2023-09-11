@@ -61,6 +61,7 @@ class hgweb(object):
                 u = ui.ui()
             r = hg.repository(u, repo)
         else:
+            # we trust caller to give us a private copy
             r = repo
 
         r = self._getview(r)
@@ -70,8 +71,8 @@ class hgweb(object):
         r.baseui.setconfig('ui', 'nontty', 'true', 'hgweb')
         self.repo = r
         hook.redirect(True)
+        self.repostate = ((-1, -1), (-1, -1))
         self.mtime = -1
-        self.size = -1
         self.reponame = name
         self.archives = 'zip', 'gz', 'bz2'
         self.stripecount = 1
@@ -106,12 +107,13 @@ class hgweb(object):
 
     def refresh(self, request=None):
         st = get_stat(self.repo.spath)
-        # compare changelog size in addition to mtime to catch
-        # rollbacks made less than a second ago
-        if st.st_mtime != self.mtime or st.st_size != self.size:
-            self.mtime = st.st_mtime
-            self.size = st.st_size
-            r = hg.repository(self.repo.baseui, self.repo.root)
+        pst = get_stat(self.repo.spath, 'phaseroots')
+        # changelog mtime and size, phaseroots mtime and size
+        repostate = ((st.st_mtime, st.st_size), (pst.st_mtime, pst.st_size))
+        # we need to compare file size in addition to mtime to catch
+        # changes made less than a second ago
+        if repostate != self.repostate:
+            r = hg.repository(self.repo.baseui, self.repo.url())
             self.repo = self._getview(r)
             self.maxchanges = int(self.config("web", "maxchanges", 10))
             self.stripecount = int(self.config("web", "stripes", 1))
@@ -121,6 +123,10 @@ class hgweb(object):
             self.allowpull = self.configbool("web", "allowpull", True)
             encoding.encoding = self.config("web", "encoding",
                                             encoding.encoding)
+            # update these last to avoid threads seeing empty settings
+            self.repostate = repostate
+            # mtime is needed for ETag
+            self.mtime = st.st_mtime
         if request:
             self.repo.ui.environ = request.env
 
@@ -198,8 +204,6 @@ class hgweb(object):
             # avoid accepting e.g. style parameter as command
             if util.safehasattr(webcommands, cmd):
                 req.form['cmd'] = [cmd]
-            else:
-                cmd = ''
 
             if cmd == 'static':
                 req.form['file'] = ['/'.join(args)]
@@ -390,5 +394,5 @@ class hgweb(object):
         }
 
     def check_perm(self, req, op):
-        for hook in permhooks:
-            hook(self, req, op)
+        for permhook in permhooks:
+            permhook(self, req, op)

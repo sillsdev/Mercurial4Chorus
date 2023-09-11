@@ -8,6 +8,7 @@
 from i18n import _
 import encoding
 import os, sys, errno, stat, getpass, pwd, grp, socket, tempfile, unicodedata
+import fcntl, re
 
 posixfile = open
 normpath = os.path.normpath
@@ -155,9 +156,12 @@ def checklink(path):
     name = tempfile.mktemp(dir=path, prefix='hg-checklink-')
     try:
         fd = tempfile.NamedTemporaryFile(dir=path, prefix='hg-checklink-')
-        os.symlink(os.path.basename(fd.name), name)
-        os.unlink(name)
-        return True
+        try:
+            os.symlink(os.path.basename(fd.name), name)
+            os.unlink(name)
+            return True
+        finally:
+            fd.close()
     except AttributeError:
         return False
     except OSError, inst:
@@ -204,6 +208,7 @@ if sys.platform == 'darwin':
         - escape-encode invalid characters
         - decompose to NFD
         - lowercase
+        - omit ignored characters [200c-200f, 202a-202e, 206a-206f,feff]
 
         >>> normcase('UPPER')
         'upper'
@@ -216,8 +221,7 @@ if sys.platform == 'darwin':
         '''
 
         try:
-            path.decode('ascii') # throw exception for non-ASCII character
-            return path.lower()
+            return encoding.asciilower(path)  # exception for non-ASCII
         except UnicodeDecodeError:
             pass
         try:
@@ -262,7 +266,9 @@ if sys.platform == 'darwin':
             u = s.decode('utf-8')
 
         # Decompose then lowercase (HFS+ technote specifies lower)
-        return unicodedata.normalize('NFD', u).lower().encode('utf-8')
+        enc = unicodedata.normalize('NFD', u).lower().encode('utf-8')
+        # drop HFS+ ignored characters
+        return encoding.hfsignoreclean(enc)
 
 if sys.platform == 'cygwin':
     # workaround for cygwin, in which mount point part of path is
@@ -309,9 +315,16 @@ if sys.platform == 'cygwin':
     def checklink(path):
         return False
 
+_needsshellquote = None
 def shellquote(s):
     if os.sys.platform == 'OpenVMS':
         return '"%s"' % s
+    global _needsshellquote
+    if _needsshellquote is None:
+        _needsshellquote = re.compile(r'[^a-zA-Z0-9._/-]').search
+    if not _needsshellquote(s):
+        # "s" shouldn't have to be quoted
+        return s
     else:
         return "'%s'" % s.replace("'", "'\\''")
 
@@ -432,7 +445,7 @@ def gethgcmd():
 
 def termwidth():
     try:
-        import termios, array, fcntl
+        import termios, array
         for dev in (sys.stderr, sys.stdout, sys.stdin):
             try:
                 try:
@@ -567,3 +580,27 @@ def statislink(st):
 def statisexec(st):
     '''check whether a stat result is an executable file'''
     return st and (st.st_mode & 0100 != 0)
+
+def readpipe(pipe):
+    """Read all available data from a pipe."""
+    # We can't fstat() a pipe because Linux will always report 0.
+    # So, we set the pipe to non-blocking mode and read everything
+    # that's available.
+    flags = fcntl.fcntl(pipe, fcntl.F_GETFL)
+    flags |= os.O_NONBLOCK
+    oldflags = fcntl.fcntl(pipe, fcntl.F_SETFL, flags)
+
+    try:
+        chunks = []
+        while True:
+            try:
+                s = pipe.read()
+                if not s:
+                    break
+                chunks.append(s)
+            except IOError:
+                break
+
+        return ''.join(chunks)
+    finally:
+        fcntl.fcntl(pipe, fcntl.F_SETFL, oldflags)

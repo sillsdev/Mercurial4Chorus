@@ -328,10 +328,9 @@ the hunk is left unchanged.
                     f.close()
                     # Start the editor and wait for it to complete
                     editor = ui.geteditor()
-                    util.system("%s \"%s\"" % (editor, patchfn),
-                            environ={'HGUSER': ui.username()},
-                            onerr=util.Abort, errprefix=_("edit failed"),
-                            out=ui.fout)
+                    ui.system("%s \"%s\"" % (editor, patchfn),
+                              environ={'HGUSER': ui.username()},
+                              onerr=util.Abort, errprefix=_("edit failed"))
                     # Remove comment lines
                     patchfp = open(patchfn)
                     ncpatchfp = cStringIO.StringIO()
@@ -459,6 +458,11 @@ def qrefresh(origfn, ui, repo, *pats, **opts):
     # backup all changed files
     dorecord(ui, repo, committomq, 'qrefresh', True, *pats, **opts)
 
+# This command registration is replaced during uisetup().
+@command('qrecord',
+    [],
+    _('hg qrecord [OPTION]... PATCH [FILE]...'),
+    inferrepo=True)
 def qrecord(ui, repo, patch, *pats, **opts):
     '''interactively record a new patch
 
@@ -514,12 +518,11 @@ def dorecord(ui, repo, commitfunc, cmdsuggest, backupall, *pats, **opts):
             raise util.Abort(_('cannot partially commit a merge '
                                '(use "hg commit" instead)'))
 
-        changes = repo.status(match=match)[:3]
-        diffopts = opts.copy()
-        diffopts['nodates'] = True
-        diffopts['git'] = True
-        diffopts = patch.diffopts(ui, opts=diffopts)
-        chunks = patch.diff(repo, changes=changes, opts=diffopts)
+        status = repo.status(match=match)
+        diffopts = patch.difffeatureopts(ui, opts=opts, whitespace=True)
+        diffopts.nodates = True
+        diffopts.git = True
+        chunks = patch.diff(repo, changes=status, opts=diffopts)
         fp = cStringIO.StringIO()
         fp.write(''.join(chunks))
         fp.seek(0)
@@ -539,13 +542,13 @@ def dorecord(ui, repo, commitfunc, cmdsuggest, backupall, *pats, **opts):
             except AttributeError:
                 pass
 
-        changed = changes[0] + changes[1] + changes[2]
+        changed = status.modified + status.added + status.removed
         newfiles = [f for f in changed if f in contenders]
         if not newfiles:
             ui.status(_('no changes to record\n'))
             return 0
 
-        modified = set(changes[0])
+        modified = set(status.modified)
 
         # 2. backup changed files, so we can restore them in the end
         if backupall:
@@ -598,9 +601,7 @@ def dorecord(ui, repo, commitfunc, cmdsuggest, backupall, *pats, **opts):
             #    patch. Now is the time to delegate the job to
             #    commit/qrefresh or the like!
 
-            # it is important to first chdir to repo root -- we'll call
-            # a highlevel command with list of pathnames relative to
-            # repo root
+            # Make all of the pathnames absolute.
             newfiles = [repo.wjoin(nf) for nf in newfiles]
             commitfunc(ui, repo, *newfiles, **opts)
 
@@ -637,10 +638,6 @@ def dorecord(ui, repo, commitfunc, cmdsuggest, backupall, *pats, **opts):
     finally:
         ui.write = oldwrite
 
-cmdtable["qrecord"] = \
-    (qrecord, [], # placeholder until mq is available
-     _('hg qrecord [OPTION]... PATCH [FILE]...'))
-
 def uisetup(ui):
     try:
         mq = extensions.find('mq')
@@ -661,5 +658,3 @@ def uisetup(ui):
 def _wrapcmd(cmd, table, wrapfn, msg):
     entry = extensions.wrapcommand(table, cmd, wrapfn)
     entry[1].append(('i', 'interactive', None, msg))
-
-commands.inferrepo += " record qrecord"

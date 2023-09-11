@@ -20,6 +20,8 @@ class remotelock(object):
             self.release()
 
 def _serverquote(s):
+    if not s:
+        return s
     '''quote a string for the remote shell ... which we assume is sh'''
     if re.match('[a-zA-Z0-9@%_+=:,./-]*$', s):
         return s
@@ -45,14 +47,17 @@ class sshpeer(wireproto.wirepeer):
         sshcmd = self.ui.config("ui", "ssh", "ssh")
         remotecmd = self.ui.config("ui", "remotecmd", "hg")
 
-        args = util.sshargs(sshcmd, self.host, self.user, self.port)
+        args = util.sshargs(sshcmd,
+                            _serverquote(self.host),
+                            _serverquote(self.user),
+                            _serverquote(self.port))
 
         if create:
             cmd = '%s %s %s' % (sshcmd, args,
                 util.shellquote("%s init %s" %
                     (_serverquote(remotecmd), _serverquote(self.path))))
             ui.debug('running %s\n' % cmd)
-            res = util.system(cmd)
+            res = ui.system(cmd)
             if res != 0:
                 self._abort(error.RepoError(_("could not create remote repo")))
 
@@ -103,13 +108,8 @@ class sshpeer(wireproto.wirepeer):
         return self._caps
 
     def readerr(self):
-        while True:
-            size = util.fstat(self.pipee).st_size
-            if size == 0:
-                break
-            s = self.pipee.read(size)
-            if not s:
-                break
+        s = util.readpipe(self.pipee)
+        if s:
             for l in s.splitlines():
                 self.ui.status(_("remote: "), l, '\n')
 

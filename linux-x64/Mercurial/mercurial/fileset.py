@@ -124,7 +124,7 @@ def modified(mctx, x):
     """
     # i18n: "modified" is a keyword
     getargs(x, 0, 0, _("modified takes no arguments"))
-    s = mctx.status()[0]
+    s = mctx.status().modified
     return [f for f in mctx.subset if f in s]
 
 def added(mctx, x):
@@ -133,7 +133,7 @@ def added(mctx, x):
     """
     # i18n: "added" is a keyword
     getargs(x, 0, 0, _("added takes no arguments"))
-    s = mctx.status()[1]
+    s = mctx.status().added
     return [f for f in mctx.subset if f in s]
 
 def removed(mctx, x):
@@ -142,7 +142,7 @@ def removed(mctx, x):
     """
     # i18n: "removed" is a keyword
     getargs(x, 0, 0, _("removed takes no arguments"))
-    s = mctx.status()[2]
+    s = mctx.status().removed
     return [f for f in mctx.subset if f in s]
 
 def deleted(mctx, x):
@@ -151,7 +151,7 @@ def deleted(mctx, x):
     """
     # i18n: "deleted" is a keyword
     getargs(x, 0, 0, _("deleted takes no arguments"))
-    s = mctx.status()[3]
+    s = mctx.status().deleted
     return [f for f in mctx.subset if f in s]
 
 def unknown(mctx, x):
@@ -161,7 +161,7 @@ def unknown(mctx, x):
     """
     # i18n: "unknown" is a keyword
     getargs(x, 0, 0, _("unknown takes no arguments"))
-    s = mctx.status()[4]
+    s = mctx.status().unknown
     return [f for f in mctx.subset if f in s]
 
 def ignored(mctx, x):
@@ -171,7 +171,7 @@ def ignored(mctx, x):
     """
     # i18n: "ignored" is a keyword
     getargs(x, 0, 0, _("ignored takes no arguments"))
-    s = mctx.status()[5]
+    s = mctx.status().ignored
     return [f for f in mctx.subset if f in s]
 
 def clean(mctx, x):
@@ -180,7 +180,7 @@ def clean(mctx, x):
     """
     # i18n: "clean" is a keyword
     getargs(x, 0, 0, _("clean takes no arguments"))
-    s = mctx.status()[6]
+    s = mctx.status().clean
     return [f for f in mctx.subset if f in s]
 
 def func(mctx, a, b):
@@ -251,6 +251,7 @@ def hgignore(mctx, x):
     """``hgignore()``
     File that matches the active .hgignore pattern.
     """
+    # i18n: "hgignore" is a keyword
     getargs(x, 0, 0, _("hgignore takes no arguments"))
     ignore = mctx.ctx._repo.dirstate._ignore
     return [f for f in mctx.subset if ignore(f)]
@@ -388,6 +389,7 @@ def subrepo(mctx, x):
     ctx = mctx.ctx
     sstate = sorted(ctx.substate)
     if x:
+        # i18n: "subrepo" is a keyword
         pat = getstring(x, _("subrepo requires a pattern or no arguments"))
 
         import match as matchmod # avoid circular import issues

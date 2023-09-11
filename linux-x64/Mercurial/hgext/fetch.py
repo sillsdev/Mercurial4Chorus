@@ -8,12 +8,23 @@
 '''pull, update and merge in one command (DEPRECATED)'''
 
 from mercurial.i18n import _
-from mercurial.node import nullid, short
+from mercurial.node import short
 from mercurial import commands, cmdutil, hg, util, error
 from mercurial.lock import release
+from mercurial import exchange
 
+cmdtable = {}
+command = cmdutil.command(cmdtable)
 testedwith = 'internal'
 
+@command('fetch',
+    [('r', 'rev', [],
+     _('a specific revision you would like to pull'), _('REV')),
+    ('e', 'edit', None, _('invoke editor on commit messages')),
+    ('', 'force-editor', None, _('edit commit message (DEPRECATED)')),
+    ('', 'switch-parent', None, _('switch parents when merging')),
+    ] + commands.commitopts + commands.commitopts2 + commands.remoteopts,
+    _('hg fetch [SOURCE]'))
 def fetch(ui, repo, source='default', **opts):
     '''pull changes from a remote repository, merge new changes if needed.
 
@@ -38,7 +49,7 @@ def fetch(ui, repo, source='default', **opts):
     if date:
         opts['date'] = util.parsedate(date)
 
-    parent, p2 = repo.dirstate.parents()
+    parent, _p2 = repo.dirstate.parents()
     branch = repo.dirstate.branch()
     try:
         branchnode = repo.branchtip(branch)
@@ -48,19 +59,13 @@ def fetch(ui, repo, source='default', **opts):
         raise util.Abort(_('working dir not at branch tip '
                            '(use "hg update" to check out branch tip)'))
 
-    if p2 != nullid:
-        raise util.Abort(_('outstanding uncommitted merge'))
-
     wlock = lock = None
     try:
         wlock = repo.wlock()
         lock = repo.lock()
-        mod, add, rem, del_ = repo.status()[:4]
 
-        if mod or add or rem:
-            raise util.Abort(_('outstanding uncommitted changes'))
-        if del_:
-            raise util.Abort(_('working directory is missing some files'))
+        cmdutil.bailifchanged(repo)
+
         bheads = repo.branchheads(branch)
         bheads = [head for head in bheads if len(repo[head].children()) == 0]
         if len(bheads) > 1:
@@ -80,7 +85,7 @@ def fetch(ui, repo, source='default', **opts):
                 raise util.Abort(err)
 
         # Are there any changes at all?
-        modheads = repo.pull(other, heads=revs)
+        modheads = exchange.pull(repo, other, heads=revs).cgresult
         if modheads == 0:
             return 0
 
@@ -132,9 +137,8 @@ def fetch(ui, repo, source='default', **opts):
             message = (cmdutil.logmessage(ui, opts) or
                        ('Automated merge with %s' %
                         util.removeauth(other.url())))
-            editor = cmdutil.commiteditor
-            if opts.get('force_editor') or opts.get('edit'):
-                editor = cmdutil.commitforceeditor
+            editopt = opts.get('edit') or opts.get('force_editor')
+            editor = cmdutil.getcommiteditor(edit=editopt, editform='fetch')
             n = repo.commit(message, opts['user'], opts['date'], editor=editor)
             ui.status(_('new changeset %d:%s merges remote changes '
                         'with local\n') % (repo.changelog.rev(n),
@@ -144,15 +148,3 @@ def fetch(ui, repo, source='default', **opts):
 
     finally:
         release(lock, wlock)
-
-cmdtable = {
-    'fetch':
-        (fetch,
-        [('r', 'rev', [],
-          _('a specific revision you would like to pull'), _('REV')),
-         ('e', 'edit', None, _('edit commit message')),
-         ('', 'force-editor', None, _('edit commit message (DEPRECATED)')),
-         ('', 'switch-parent', None, _('switch parents when merging')),
-        ] + commands.commitopts + commands.commitopts2 + commands.remoteopts,
-        _('hg fetch [SOURCE]')),
-}

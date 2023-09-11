@@ -20,6 +20,59 @@ else:
 systemrcpath = scmplatform.systemrcpath
 userrcpath = scmplatform.userrcpath
 
+class status(tuple):
+    '''Named tuple with a list of files per status. The 'deleted', 'unknown'
+       and 'ignored' properties are only relevant to the working copy.
+    '''
+
+    __slots__ = ()
+
+    def __new__(cls, modified, added, removed, deleted, unknown, ignored,
+                clean):
+        return tuple.__new__(cls, (modified, added, removed, deleted, unknown,
+                                   ignored, clean))
+
+    @property
+    def modified(self):
+        '''files that have been modified'''
+        return self[0]
+
+    @property
+    def added(self):
+        '''files that have been added'''
+        return self[1]
+
+    @property
+    def removed(self):
+        '''files that have been removed'''
+        return self[2]
+
+    @property
+    def deleted(self):
+        '''files that are in the dirstate, but have been deleted from the
+           working copy (aka "missing")
+        '''
+        return self[3]
+
+    @property
+    def unknown(self):
+        '''files not in the dirstate that are not ignored'''
+        return self[4]
+
+    @property
+    def ignored(self):
+        '''files not in the dirstate that are ignored (by _dirignore())'''
+        return self[5]
+
+    @property
+    def clean(self):
+        '''files that have not been modified'''
+        return self[6]
+
+    def __repr__(self, *args, **kwargs):
+        return (('<status modified=%r, added=%r, removed=%r, deleted=%r, '
+                 'unknown=%r, ignored=%r, clean=%r>') % self)
+
 def itersubrepos(ctx1, ctx2):
     """find subrepos in ctx1 or ctx2"""
     # Create a (subpath, ctx) mapping where we prefer subpaths from
@@ -135,9 +188,25 @@ class abstractvfs(object):
                 raise
         return ""
 
-    def open(self, path, mode="r", text=False, atomictemp=False):
+    def tryreadlines(self, path, mode='rb'):
+        '''gracefully return an empty array for missing files'''
+        try:
+            return self.readlines(path, mode=mode)
+        except IOError, inst:
+            if inst.errno != errno.ENOENT:
+                raise
+        return []
+
+    def open(self, path, mode="r", text=False, atomictemp=False,
+             notindexed=False):
+        '''Open ``path`` file, which is relative to vfs root.
+
+        Newly created directories are marked as "not to be indexed by
+        the content indexing service", if ``notindexed`` is specified
+        for "write" mode access.
+        '''
         self.open = self.__call__
-        return self.__call__(path, mode, text, atomictemp)
+        return self.__call__(path, mode, text, atomictemp, notindexed)
 
     def read(self, path):
         fp = self(path, 'rb')
@@ -146,10 +215,24 @@ class abstractvfs(object):
         finally:
             fp.close()
 
+    def readlines(self, path, mode='rb'):
+        fp = self(path, mode=mode)
+        try:
+            return fp.readlines()
+        finally:
+            fp.close()
+
     def write(self, path, data):
         fp = self(path, 'wb')
         try:
             return fp.write(data)
+        finally:
+            fp.close()
+
+    def writelines(self, path, data, mode='wb', notindexed=False):
+        fp = self(path, mode=mode, notindexed=notindexed)
+        try:
+            return fp.writelines(data)
         finally:
             fp.close()
 
@@ -178,8 +261,27 @@ class abstractvfs(object):
     def islink(self, path=None):
         return os.path.islink(self.join(path))
 
+    def reljoin(self, *paths):
+        """join various elements of a path together (as os.path.join would do)
+
+        The vfs base is not injected so that path stay relative. This exists
+        to allow handling of strange encoding if needed."""
+        return os.path.join(*paths)
+
+    def split(self, path):
+        """split top-most element of a path (as os.path.split would do)
+
+        This exists to allow handling of strange encoding if needed."""
+        return os.path.split(path)
+
+    def lexists(self, path=None):
+        return os.path.lexists(self.join(path))
+
     def lstat(self, path=None):
         return os.lstat(self.join(path))
+
+    def listdir(self, path=None):
+        return os.listdir(self.join(path))
 
     def makedir(self, path=None, notindexed=True):
         return util.makedir(self.join(path), notindexed)
@@ -222,6 +324,9 @@ class abstractvfs(object):
 
     def unlink(self, path=None):
         return util.unlink(self.join(path))
+
+    def unlinkpath(self, path=None, ignoremissing=False):
+        return util.unlinkpath(self.join(path), ignoremissing)
 
     def utime(self, path=None, t=None):
         return os.utime(self.join(path), t)
@@ -267,7 +372,14 @@ class vfs(abstractvfs):
             return
         os.chmod(name, self.createmode & 0666)
 
-    def __call__(self, path, mode="r", text=False, atomictemp=False):
+    def __call__(self, path, mode="r", text=False, atomictemp=False,
+                 notindexed=False):
+        '''Open ``path`` file, which is relative to vfs root.
+
+        Newly created directories are marked as "not to be indexed by
+        the content indexing service", if ``notindexed`` is specified
+        for "write" mode access.
+        '''
         if self._audit:
             r = util.checkosfilename(path)
             if r:
@@ -285,7 +397,7 @@ class vfs(abstractvfs):
             # to a directory. Let the posixfile() call below raise IOError.
             if basename:
                 if atomictemp:
-                    util.ensuredirs(dirname, self.createmode)
+                    util.ensuredirs(dirname, self.createmode, notindexed)
                     return util.atomictempfile(f, mode, self.createmode)
                 try:
                     if 'w' in mode:
@@ -303,7 +415,7 @@ class vfs(abstractvfs):
                     if e.errno != errno.ENOENT:
                         raise
                     nlink = 0
-                    util.ensuredirs(dirname, self.createmode)
+                    util.ensuredirs(dirname, self.createmode, notindexed)
                 if nlink > 0:
                     if self._trustnlink is None:
                         self._trustnlink = nlink > 1 or util.checknlink(f)
@@ -433,7 +545,13 @@ def walkrepos(path, followsym=False, seen_dirs=None, recurse=False):
 
 def osrcpath():
     '''return default os-specific hgrc search path'''
-    path = systemrcpath()
+    path = []
+    defaultpath = os.path.join(util.datapath, 'default.d')
+    if os.path.isdir(defaultpath):
+        for f, kind in osutil.listdir(defaultpath):
+            if f.endswith('.rc'):
+                path.append(os.path.join(defaultpath, f))
+    path.extend(systemrcpath())
     path.extend(userrcpath())
     path = [os.path.normpath(f) for f in path]
     return path
@@ -469,9 +587,9 @@ def revsingle(repo, revspec, default='.'):
         return repo[default]
 
     l = revrange(repo, [revspec])
-    if len(l) < 1:
+    if not l:
         raise util.Abort(_('empty revision set'))
-    return repo[l[-1]]
+    return repo[l.last()]
 
 def revpair(repo, revs):
     if not revs:
@@ -488,9 +606,8 @@ def revpair(repo, revs):
         first = l.max()
         second = l.min()
     else:
-        l = list(l)
-        first = l[0]
-        second = l[-1]
+        first = l.first()
+        second = l.last()
 
     if first is None:
         raise util.Abort(_('empty revision range'))
@@ -609,40 +726,68 @@ def matchfiles(repo, files):
     '''Return a matcher that will efficiently match exactly these files.'''
     return matchmod.exact(repo.root, repo.getcwd(), files)
 
-def addremove(repo, pats=[], opts={}, dry_run=None, similarity=None):
+def addremove(repo, matcher, prefix, opts={}, dry_run=None, similarity=None):
+    m = matcher
     if dry_run is None:
         dry_run = opts.get('dry_run')
     if similarity is None:
         similarity = float(opts.get('similarity') or 0)
-    # we'd use status here, except handling of symlinks and ignore is tricky
-    m = match(repo[None], pats, opts)
+
+    ret = 0
+    join = lambda f: os.path.join(prefix, f)
+
+    def matchessubrepo(matcher, subpath):
+        if matcher.exact(subpath):
+            return True
+        for f in matcher.files():
+            if f.startswith(subpath):
+                return True
+        return False
+
+    wctx = repo[None]
+    for subpath in sorted(wctx.substate):
+        if opts.get('subrepos') or matchessubrepo(m, subpath):
+            sub = wctx.sub(subpath)
+            try:
+                submatch = matchmod.narrowmatcher(subpath, m)
+                if sub.addremove(submatch, prefix, opts, dry_run, similarity):
+                    ret = 1
+            except error.LookupError:
+                repo.ui.status(_("skipping missing subrepository: %s\n")
+                                 % join(subpath))
+
     rejected = []
-    m.bad = lambda x, y: rejected.append(x)
+    origbad = m.bad
+    def badfn(f, msg):
+        if f in m.files():
+            origbad(f, msg)
+        rejected.append(f)
 
-    added, unknown, deleted, removed = _interestingfiles(repo, m)
+    m.bad = badfn
+    added, unknown, deleted, removed, forgotten = _interestingfiles(repo, m)
+    m.bad = origbad
 
-    unknownset = set(unknown)
+    unknownset = set(unknown + forgotten)
     toprint = unknownset.copy()
     toprint.update(deleted)
     for abs in sorted(toprint):
         if repo.ui.verbose or not m.exact(abs):
-            rel = m.rel(abs)
             if abs in unknownset:
-                status = _('adding %s\n') % ((pats and rel) or abs)
+                status = _('adding %s\n') % m.uipath(abs)
             else:
-                status = _('removing %s\n') % ((pats and rel) or abs)
+                status = _('removing %s\n') % m.uipath(abs)
             repo.ui.status(status)
 
     renames = _findrenames(repo, m, added + unknown, removed + deleted,
                            similarity)
 
     if not dry_run:
-        _markchanges(repo, unknown, deleted, renames)
+        _markchanges(repo, unknown + forgotten, deleted, renames)
 
     for f in rejected:
         if f in m.files():
             return 1
-    return 0
+    return ret
 
 def marktouched(repo, files, similarity=0.0):
     '''Assert that files have somehow been operated upon. files are relative to
@@ -651,10 +796,10 @@ def marktouched(repo, files, similarity=0.0):
     rejected = []
     m.bad = lambda x, y: rejected.append(x)
 
-    added, unknown, deleted, removed = _interestingfiles(repo, m)
+    added, unknown, deleted, removed, forgotten = _interestingfiles(repo, m)
 
     if repo.ui.verbose:
-        unknownset = set(unknown)
+        unknownset = set(unknown + forgotten)
         toprint = unknownset.copy()
         toprint.update(deleted)
         for abs in sorted(toprint):
@@ -667,7 +812,7 @@ def marktouched(repo, files, similarity=0.0):
     renames = _findrenames(repo, m, added + unknown, removed + deleted,
                            similarity)
 
-    _markchanges(repo, unknown, deleted, renames)
+    _markchanges(repo, unknown + forgotten, deleted, renames)
 
     for f in rejected:
         if f in m.files():
@@ -680,7 +825,7 @@ def _interestingfiles(repo, matcher):
 
     This is different from dirstate.status because it doesn't care about
     whether files are modified or clean.'''
-    added, unknown, deleted, removed = [], [], [], []
+    added, unknown, deleted, removed, forgotten = [], [], [], [], []
     audit_path = pathutil.pathauditor(repo.root)
 
     ctx = repo[None]
@@ -693,13 +838,15 @@ def _interestingfiles(repo, matcher):
             unknown.append(abs)
         elif dstate != 'r' and not st:
             deleted.append(abs)
+        elif dstate == 'r' and st:
+            forgotten.append(abs)
         # for finding renames
-        elif dstate == 'r':
+        elif dstate == 'r' and not st:
             removed.append(abs)
         elif dstate == 'a':
             added.append(abs)
 
-    return added, unknown, deleted, removed
+    return added, unknown, deleted, removed, forgotten
 
 def _findrenames(repo, matcher, added, removed, similarity):
     '''Find renames from removed files to added ones.'''

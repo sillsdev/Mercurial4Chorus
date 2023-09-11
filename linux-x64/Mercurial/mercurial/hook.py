@@ -7,7 +7,7 @@
 
 from i18n import _
 import os, sys, time
-import extensions, util, demandimport
+import extensions, util, demandimport, error
 
 def _pythonhook(ui, repo, name, hname, funcname, args, throw):
     '''call python hook. hook is callable object, looked up as
@@ -19,7 +19,7 @@ def _pythonhook(ui, repo, name, hname, funcname, args, throw):
     unmodified commands (e.g. mercurial.commands.update) can
     be run as hooks without wrappers to convert return values.'''
 
-    if util.safehasattr(funcname, '__call__'):
+    if callable(funcname):
         obj = funcname
         funcname = obj.__module__ + "." + obj.__name__
     else:
@@ -70,7 +70,7 @@ def _pythonhook(ui, repo, name, hname, funcname, args, throw):
             raise util.Abort(_('%s hook is invalid '
                                '("%s" is not defined)') %
                              (hname, funcname))
-        if not util.safehasattr(obj, '__call__'):
+        if not callable(obj):
             raise util.Abort(_('%s hook is invalid '
                                '("%s" is not callable)') %
                              (hname, funcname))
@@ -107,7 +107,7 @@ def _pythonhook(ui, repo, name, hname, funcname, args, throw):
                name, funcname, duration)
     if r:
         if throw:
-            raise util.Abort(_('%s hook failed') % hname)
+            raise error.HookAbort(_('%s hook failed') % hname)
         ui.warn(_('warning: %s hook failed\n') % hname)
     return r
 
@@ -117,7 +117,7 @@ def _exthook(ui, repo, name, cmd, args, throw):
     starttime = time.time()
     env = {}
     for k, v in args.iteritems():
-        if util.safehasattr(v, '__call__'):
+        if callable(v):
             v = v()
         if isinstance(v, dict):
             # make the dictionary element order stable across Python
@@ -131,10 +131,7 @@ def _exthook(ui, repo, name, cmd, args, throw):
         cwd = repo.root
     else:
         cwd = os.getcwd()
-    if 'HG_URL' in env and env['HG_URL'].startswith('remote:http'):
-        r = util.system(cmd, environ=env, cwd=cwd, out=ui)
-    else:
-        r = util.system(cmd, environ=env, cwd=cwd, out=ui.fout)
+    r = ui.system(cmd, environ=env, cwd=cwd)
 
     duration = time.time() - starttime
     ui.log('exthook', 'exthook-%s: %s finished in %0.2f seconds\n',
@@ -142,7 +139,7 @@ def _exthook(ui, repo, name, cmd, args, throw):
     if r:
         desc, r = util.explainexit(r)
         if throw:
-            raise util.Abort(_('%s hook %s') % (name, desc))
+            raise error.HookAbort(_('%s hook %s') % (name, desc))
         ui.warn(_('warning: %s hook %s\n') % (name, desc))
     return r
 
@@ -184,7 +181,7 @@ def hook(ui, repo, name, throw=False, **args):
                     # files seem to be bogus, give up on redirecting (WSGI, etc)
                     pass
 
-            if util.safehasattr(cmd, '__call__'):
+            if callable(cmd):
                 r = _pythonhook(ui, repo, name, hname, cmd, args, throw) or r
             elif cmd.startswith('python:'):
                 if cmd.count(':') >= 2:

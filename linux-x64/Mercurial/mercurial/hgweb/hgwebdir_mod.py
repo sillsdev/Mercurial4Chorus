@@ -193,7 +193,7 @@ class hgwebdir(object):
                     static = self.ui.config("web", "static", None,
                                             untrusted=False)
                     if not static:
-                        tp = self.templatepath or templater.templatepath()
+                        tp = self.templatepath or templater.templatepaths()
                         if isinstance(tp, str):
                             tp = [tp]
                         static = [os.path.join(p, 'static') for p in tp]
@@ -214,7 +214,8 @@ class hgwebdir(object):
                     if real:
                         req.env['REPO_NAME'] = virtualrepo
                         try:
-                            repo = hg.repository(self.ui, real)
+                            # ensure caller gets private copy of ui
+                            repo = hg.repository(self.ui.copy(), real)
                             return hgweb(repo).run_wsgi(req)
                         except IOError, inst:
                             msg = inst.strerror

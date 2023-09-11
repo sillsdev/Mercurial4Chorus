@@ -18,6 +18,7 @@ from node import hex, short
 import base85, mdiff, scmutil, util, diffhelpers, copies, encoding, error
 
 gitre = re.compile('diff --git a/(.*) b/(.*)')
+tabsplitter = re.compile(r'(\t+|[^\t]+)')
 
 class PatchError(Exception):
     pass
@@ -382,7 +383,7 @@ class abstractbackend(object):
 
     def getfile(self, fname):
         """Return target file data and flags as a (data, (islink,
-        isexec)) tuple.
+        isexec)) tuple. Data is None if file is missing/deleted.
         """
         raise NotImplementedError
 
@@ -417,31 +418,36 @@ class fsbackend(abstractbackend):
         return os.path.join(self.opener.base, f)
 
     def getfile(self, fname):
-        path = self._join(fname)
-        if os.path.islink(path):
-            return (os.readlink(path), (True, False))
+        if self.opener.islink(fname):
+            return (self.opener.readlink(fname), (True, False))
+
         isexec = False
         try:
-            isexec = os.lstat(path).st_mode & 0100 != 0
+            isexec = self.opener.lstat(fname).st_mode & 0100 != 0
         except OSError, e:
             if e.errno != errno.ENOENT:
                 raise
-        return (self.opener.read(fname), (False, isexec))
+        try:
+            return (self.opener.read(fname), (False, isexec))
+        except IOError, e:
+            if e.errno != errno.ENOENT:
+                raise
+            return None, None
 
     def setfile(self, fname, data, mode, copysource):
         islink, isexec = mode
         if data is None:
-            util.setflags(self._join(fname), islink, isexec)
+            self.opener.setflags(fname, islink, isexec)
             return
         if islink:
             self.opener.symlink(data, fname)
         else:
             self.opener.write(fname, data)
             if isexec:
-                util.setflags(self._join(fname), False, True)
+                self.opener.setflags(fname, False, True)
 
     def unlink(self, fname):
-        util.unlinkpath(self._join(fname), ignoremissing=True)
+        self.opener.unlinkpath(fname, ignoremissing=True)
 
     def writerej(self, fname, failed, total, lines):
         fname = fname + ".rej"
@@ -453,7 +459,7 @@ class fsbackend(abstractbackend):
         fp.close()
 
     def exists(self, fname):
-        return os.path.lexists(self._join(fname))
+        return self.opener.lexists(fname)
 
 class workingbackend(fsbackend):
     def __init__(self, ui, repo, similarity):
@@ -528,7 +534,7 @@ class filestore(object):
         if fname in self.data:
             return self.data[fname]
         if not self.opener or fname not in self.files:
-            raise IOError
+            return None, None, None
         fn, mode, copied = self.files[fname]
         return self.opener.read(fn), mode, copied
 
@@ -554,7 +560,7 @@ class repobackend(abstractbackend):
         try:
             fctx = self.ctx[fname]
         except error.LookupError:
-            raise IOError
+            return None, None
         flags = fctx.flags()
         return fctx.data(), ('l' in flags, 'x' in flags)
 
@@ -597,13 +603,12 @@ class patchfile(object):
         self.copysource = gp.oldpath
         self.create = gp.op in ('ADD', 'COPY', 'RENAME')
         self.remove = gp.op == 'DELETE'
-        try:
-            if self.copysource is None:
-                data, mode = backend.getfile(self.fname)
-                self.exists = True
-            else:
-                data, mode = store.getfile(self.copysource)[:2]
-                self.exists = backend.exists(self.fname)
+        if self.copysource is None:
+            data, mode = backend.getfile(self.fname)
+        else:
+            data, mode = store.getfile(self.copysource)[:2]
+        if data is not None:
+            self.exists = self.copysource is None or backend.exists(self.fname)
             self.missing = False
             if data:
                 self.lines = mdiff.splitnewlines(data)
@@ -622,7 +627,7 @@ class patchfile(object):
                             l = l[:-2] + '\n'
                         nlines.append(l)
                     self.lines = nlines
-        except IOError:
+        else:
             if self.create:
                 self.missing = False
             if self.mode is None:
@@ -1380,6 +1385,8 @@ def _applydiff(ui, fp, patcher, backend, store, strip=1,
                 data, mode = None, None
                 if gp.op in ('RENAME', 'COPY'):
                     data, mode = store.getfile(gp.oldpath)[:2]
+                    # FIXME: failing getfile has never been handled here
+                    assert data is not None
                 if gp.mode:
                     mode = gp.mode
                     if gp.op == 'ADD':
@@ -1404,15 +1411,13 @@ def _applydiff(ui, fp, patcher, backend, store, strip=1,
         elif state == 'git':
             for gp in values:
                 path = pstrip(gp.oldpath)
-                try:
-                    data, mode = backend.getfile(path)
-                except IOError, e:
-                    if e.errno != errno.ENOENT:
-                        raise
+                data, mode = backend.getfile(path)
+                if data is None:
                     # The error ignored here will trigger a getfile()
                     # error in a place more appropriate for error
                     # handling, and will not interrupt the patching
                     # process.
+                    pass
                 else:
                     store.setfile(path, data, mode)
         else:
@@ -1521,14 +1526,11 @@ def patch(ui, repo, patchname, strip=1, files=None, eolmode='strict',
     patcher = ui.config('ui', 'patch')
     if files is None:
         files = set()
-    try:
-        if patcher:
-            return _externalpatch(ui, repo, patcher, patchname, strip,
-                                  files, similarity)
-        return internalpatch(ui, repo, patchname, strip, files, eolmode,
-                             similarity)
-    except PatchError, err:
-        raise util.Abort(str(err))
+    if patcher:
+        return _externalpatch(ui, repo, patcher, patchname, strip,
+                              files, similarity)
+    return internalpatch(ui, repo, patchname, strip, files, eolmode,
+                         similarity)
 
 def changedfiles(ui, repo, patchpath, strip=1):
     backend = fsbackend(ui, repo.root)
@@ -1556,19 +1558,53 @@ def changedfiles(ui, repo, patchpath, strip=1):
 class GitDiffRequired(Exception):
     pass
 
-def diffopts(ui, opts=None, untrusted=False, section='diff'):
-    def get(key, name=None, getter=ui.configbool):
-        return ((opts and opts.get(key)) or
-                getter(section, name or key, None, untrusted=untrusted))
-    return mdiff.diffopts(
-        text=opts and opts.get('text'),
-        git=get('git'),
-        nodates=get('nodates'),
-        showfunc=get('show_function', 'showfunc'),
-        ignorews=get('ignore_all_space', 'ignorews'),
-        ignorewsamount=get('ignore_space_change', 'ignorewsamount'),
-        ignoreblanklines=get('ignore_blank_lines', 'ignoreblanklines'),
-        context=get('unified', getter=ui.config))
+def diffallopts(ui, opts=None, untrusted=False, section='diff'):
+    '''return diffopts with all features supported and parsed'''
+    return difffeatureopts(ui, opts=opts, untrusted=untrusted, section=section,
+                           git=True, whitespace=True, formatchanging=True)
+
+diffopts = diffallopts
+
+def difffeatureopts(ui, opts=None, untrusted=False, section='diff', git=False,
+                    whitespace=False, formatchanging=False):
+    '''return diffopts with only opted-in features parsed
+
+    Features:
+    - git: git-style diffs
+    - whitespace: whitespace options like ignoreblanklines and ignorews
+    - formatchanging: options that will likely break or cause correctness issues
+      with most diff parsers
+    '''
+    def get(key, name=None, getter=ui.configbool, forceplain=None):
+        if opts:
+            v = opts.get(key)
+            if v:
+                return v
+        if forceplain is not None and ui.plain():
+            return forceplain
+        return getter(section, name or key, None, untrusted=untrusted)
+
+    # core options, expected to be understood by every diff parser
+    buildopts = {
+        'nodates': get('nodates'),
+        'showfunc': get('show_function', 'showfunc'),
+        'context': get('unified', getter=ui.config),
+    }
+
+    if git:
+        buildopts['git'] = get('git')
+    if whitespace:
+        buildopts['ignorews'] = get('ignore_all_space', 'ignorews')
+        buildopts['ignorewsamount'] = get('ignore_space_change',
+                                          'ignorewsamount')
+        buildopts['ignoreblanklines'] = get('ignore_blank_lines',
+                                            'ignoreblanklines')
+    if formatchanging:
+        buildopts['text'] = opts and opts.get('text')
+        buildopts['nobinary'] = get('nobinary')
+        buildopts['noprefix'] = get('noprefix', forceplain=False)
+
+    return mdiff.diffopts(**buildopts)
 
 def diff(repo, node1=None, node2=None, match=None, changes=None, opts=None,
          losedatafn=None, prefix=''):
@@ -1622,9 +1658,8 @@ def diff(repo, node1=None, node2=None, match=None, changes=None, opts=None,
     if not modified and not added and not removed:
         return []
 
-    revs = None
     hexfunc = repo.ui.debugflag and hex or short
-    revs = [hexfunc(node) for node in [node1, node2] if node]
+    revs = [hexfunc(node) for node in [ctx1.node(), ctx2.node()] if node]
 
     copy = {}
     if opts.git or opts.upgrade:
@@ -1671,15 +1706,26 @@ def difflabel(func, *args, **kw):
                 if line and line[0] not in ' +-@\\':
                     head = True
             stripline = line
+            diffline = False
             if not head and line and line[0] in '+-':
-                # highlight trailing whitespace, but only in changed lines
+                # highlight tabs and trailing whitespace, but only in
+                # changed lines
                 stripline = line.rstrip()
+                diffline = True
+
             prefixes = textprefixes
             if head:
                 prefixes = headprefixes
             for prefix, label in prefixes:
                 if stripline.startswith(prefix):
-                    yield (stripline, label)
+                    if diffline:
+                        for token in tabsplitter.findall(stripline):
+                            if '\t' == token[0]:
+                                yield (token, 'diff.tab')
+                            else:
+                                yield (token, label)
+                    else:
+                        yield (stripline, label)
                     break
             else:
                 yield (line, '')
@@ -1701,13 +1747,8 @@ def trydiff(repo, revs, ctx1, ctx2, modified, added, removed,
             header.append('old mode %s\n' % omode)
             header.append('new mode %s\n' % nmode)
 
-    def addindexmeta(meta, revs):
-        if opts.git:
-            i = len(revs)
-            if i==2:
-                meta.append('index %s..%s\n' % tuple(revs))
-            elif i==3:
-                meta.append('index %s,%s..%s\n' % tuple(revs))
+    def addindexmeta(meta, oindex, nindex):
+        meta.append('index %s..%s\n' % (oindex, nindex))
 
     def gitindex(text):
         if not text:
@@ -1717,9 +1758,15 @@ def trydiff(repo, revs, ctx1, ctx2, modified, added, removed,
         s.update(text)
         return s.hexdigest()
 
+    if opts.noprefix:
+        aprefix = bprefix = ''
+    else:
+        aprefix = 'a/'
+        bprefix = 'b/'
+
     def diffline(a, b, revs):
         if opts.git:
-            line = 'diff --git a/%s b/%s\n' % (a, b)
+            line = 'diff --git %s%s %s%s\n' % (aprefix, a, bprefix, b)
         elif not repo.ui.quiet:
             if revs:
                 revinfo = ' '.join(["-r %s" % rev for rev in revs])
@@ -1731,7 +1778,7 @@ def trydiff(repo, revs, ctx1, ctx2, modified, added, removed,
         return line
 
     date1 = util.datestr(ctx1.date())
-    man1 = ctx1.manifest()
+    date2 = util.datestr(ctx2.date())
 
     gone = set()
     gitmode = {'l': '120000', 'x': '100755', '': '100644'}
@@ -1741,18 +1788,25 @@ def trydiff(repo, revs, ctx1, ctx2, modified, added, removed,
     if opts.git:
         revs = None
 
+    modifiedset, addedset, removedset = set(modified), set(added), set(removed)
+    # Fix up modified and added, since merged-in additions appear as
+    # modifications during merges
+    for f in modifiedset.copy():
+        if f not in ctx1:
+            addedset.add(f)
+            modifiedset.remove(f)
     for f in sorted(modified + added + removed):
         to = None
         tn = None
-        dodiff = True
+        binarydiff = False
         header = []
-        if f in man1:
+        if f not in addedset:
             to = getfilectx(f, ctx1).data()
-        if f not in removed:
+        if f not in removedset:
             tn = getfilectx(f, ctx2).data()
         a, b = f, f
         if opts.git or losedatafn:
-            if f in added or (f in modified and to is None):
+            if f in addedset:
                 mode = gitmode[ctx2.flags(f)]
                 if f in copy or f in copyto:
                     if opts.git:
@@ -1760,9 +1814,9 @@ def trydiff(repo, revs, ctx1, ctx2, modified, added, removed,
                             a = copy[f]
                         else:
                             a = copyto[f]
-                        omode = gitmode[man1.flags(a)]
+                        omode = gitmode[ctx1.flags(a)]
                         addmodehdr(header, omode, mode)
-                        if a in removed and a not in gone:
+                        if a in removedset and a not in gone:
                             op = 'rename'
                             gone.add(a)
                         else:
@@ -1777,60 +1831,55 @@ def trydiff(repo, revs, ctx1, ctx2, modified, added, removed,
                         header.append('new file mode %s\n' % mode)
                     elif ctx2.flags(f):
                         losedatafn(f)
-                # In theory, if tn was copied or renamed we should check
-                # if the source is binary too but the copy record already
-                # forces git mode.
-                if util.binary(tn):
+                if util.binary(to) or util.binary(tn):
                     if opts.git:
-                        dodiff = 'binary'
+                        binarydiff = True
                     else:
                         losedatafn(f)
                 if not opts.git and not tn:
                     # regular diffs cannot represent new empty file
                     losedatafn(f)
-            elif f in removed or (f in modified and tn is None):
+            elif f in removedset:
                 if opts.git:
                     # have we already reported a copy above?
-                    if ((f in copy and copy[f] in added
+                    if ((f in copy and copy[f] in addedset
                          and copyto[copy[f]] == f) or
-                        (f in copyto and copyto[f] in added
+                        (f in copyto and copyto[f] in addedset
                          and copy[copyto[f]] == f)):
-                        dodiff = False
+                        continue
                     else:
                         header.append('deleted file mode %s\n' %
-                                      gitmode[man1.flags(f)])
+                                      gitmode[ctx1.flags(f)])
                         if util.binary(to):
-                            dodiff = 'binary'
+                            binarydiff = True
                 elif not to or util.binary(to):
                     # regular diffs cannot represent empty file deletion
                     losedatafn(f)
             else:
-                oflag = man1.flags(f)
+                oflag = ctx1.flags(f)
                 nflag = ctx2.flags(f)
                 binary = util.binary(to) or util.binary(tn)
                 if opts.git:
                     addmodehdr(header, gitmode[oflag], gitmode[nflag])
                     if binary:
-                        dodiff = 'binary'
+                        binarydiff = True
                 elif binary or nflag != oflag:
                     losedatafn(f)
 
-        if dodiff:
-            if opts.git or revs:
-                header.insert(0, diffline(join(a), join(b), revs))
-            if dodiff == 'binary':
-                text = mdiff.b85diff(to, tn)
-                if text:
-                    addindexmeta(header, [gitindex(to), gitindex(tn)])
-            else:
-                text = mdiff.unidiff(to, date1,
-                                    # ctx2 date may be dynamic
-                                    tn, util.datestr(ctx2.date()),
-                                    join(a), join(b), opts=opts)
-            if header and (text or len(header) > 1):
-                yield ''.join(header)
-            if text:
-                yield text
+        if opts.git or revs:
+            header.insert(0, diffline(join(a), join(b), revs))
+        if binarydiff and not opts.nobinary:
+            text = mdiff.b85diff(to, tn)
+            if text and opts.git:
+                addindexmeta(header, gitindex(to), gitindex(tn))
+        else:
+            text = mdiff.unidiff(to, date1,
+                                 tn, date2,
+                                 join(a), join(b), opts=opts)
+        if header and (text or len(header) > 1):
+            yield ''.join(header)
+        if text:
+            yield text
 
 def diffstatsum(stats):
     maxfile, maxtotal, addtotal, removetotal, binary = 0, 0, 0, 0, False

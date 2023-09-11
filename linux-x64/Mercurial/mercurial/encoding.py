@@ -8,6 +8,28 @@
 import error
 import unicodedata, locale, os
 
+# These unicode characters are ignored by HFS+ (Apple Technote 1150,
+# "Unicode Subtleties"), so we need to ignore them in some places for
+# sanity.
+_ignore = [unichr(int(x, 16)).encode("utf-8") for x in
+           "200c 200d 200e 200f 202a 202b 202c 202d 202e "
+           "206a 206b 206c 206d 206e 206f feff".split()]
+# verify the next function will work
+assert set([i[0] for i in _ignore]) == set(["\xe2", "\xef"])
+
+def hfsignoreclean(s):
+    """Remove codepoints ignored by HFS+ from s.
+
+    >>> hfsignoreclean(u'.h\u200cg'.encode('utf-8'))
+    '.hg'
+    >>> hfsignoreclean(u'.h\ufeffg'.encode('utf-8'))
+    '.hg'
+    """
+    if "\xe2" in s or "\xef" in s:
+        for c in _ignore:
+            s = s.replace(c, '')
+    return s
+
 def _getpreferredencoding():
     '''
     On darwin, getpreferredencoding ignores the locale environment and
@@ -165,11 +187,119 @@ def getcols(s, start, c):
         if colwidth(t) == c:
             return t
 
+def trim(s, width, ellipsis='', leftside=False):
+    """Trim string 's' to at most 'width' columns (including 'ellipsis').
+
+    If 'leftside' is True, left side of string 's' is trimmed.
+    'ellipsis' is always placed at trimmed side.
+
+    >>> ellipsis = '+++'
+    >>> from mercurial import encoding
+    >>> encoding.encoding = 'utf-8'
+    >>> t= '1234567890'
+    >>> print trim(t, 12, ellipsis=ellipsis)
+    1234567890
+    >>> print trim(t, 10, ellipsis=ellipsis)
+    1234567890
+    >>> print trim(t, 8, ellipsis=ellipsis)
+    12345+++
+    >>> print trim(t, 8, ellipsis=ellipsis, leftside=True)
+    +++67890
+    >>> print trim(t, 8)
+    12345678
+    >>> print trim(t, 8, leftside=True)
+    34567890
+    >>> print trim(t, 3, ellipsis=ellipsis)
+    +++
+    >>> print trim(t, 1, ellipsis=ellipsis)
+    +
+    >>> u = u'\u3042\u3044\u3046\u3048\u304a' # 2 x 5 = 10 columns
+    >>> t = u.encode(encoding.encoding)
+    >>> print trim(t, 12, ellipsis=ellipsis)
+    \xe3\x81\x82\xe3\x81\x84\xe3\x81\x86\xe3\x81\x88\xe3\x81\x8a
+    >>> print trim(t, 10, ellipsis=ellipsis)
+    \xe3\x81\x82\xe3\x81\x84\xe3\x81\x86\xe3\x81\x88\xe3\x81\x8a
+    >>> print trim(t, 8, ellipsis=ellipsis)
+    \xe3\x81\x82\xe3\x81\x84+++
+    >>> print trim(t, 8, ellipsis=ellipsis, leftside=True)
+    +++\xe3\x81\x88\xe3\x81\x8a
+    >>> print trim(t, 5)
+    \xe3\x81\x82\xe3\x81\x84
+    >>> print trim(t, 5, leftside=True)
+    \xe3\x81\x88\xe3\x81\x8a
+    >>> print trim(t, 4, ellipsis=ellipsis)
+    +++
+    >>> print trim(t, 4, ellipsis=ellipsis, leftside=True)
+    +++
+    >>> t = '\x11\x22\x33\x44\x55\x66\x77\x88\x99\xaa' # invalid byte sequence
+    >>> print trim(t, 12, ellipsis=ellipsis)
+    \x11\x22\x33\x44\x55\x66\x77\x88\x99\xaa
+    >>> print trim(t, 10, ellipsis=ellipsis)
+    \x11\x22\x33\x44\x55\x66\x77\x88\x99\xaa
+    >>> print trim(t, 8, ellipsis=ellipsis)
+    \x11\x22\x33\x44\x55+++
+    >>> print trim(t, 8, ellipsis=ellipsis, leftside=True)
+    +++\x66\x77\x88\x99\xaa
+    >>> print trim(t, 8)
+    \x11\x22\x33\x44\x55\x66\x77\x88
+    >>> print trim(t, 8, leftside=True)
+    \x33\x44\x55\x66\x77\x88\x99\xaa
+    >>> print trim(t, 3, ellipsis=ellipsis)
+    +++
+    >>> print trim(t, 1, ellipsis=ellipsis)
+    +
+    """
+    try:
+        u = s.decode(encoding)
+    except UnicodeDecodeError:
+        if len(s) <= width: # trimming is not needed
+            return s
+        width -= len(ellipsis)
+        if width <= 0: # no enough room even for ellipsis
+            return ellipsis[:width + len(ellipsis)]
+        if leftside:
+            return ellipsis + s[-width:]
+        return s[:width] + ellipsis
+
+    if ucolwidth(u) <= width: # trimming is not needed
+        return s
+
+    width -= len(ellipsis)
+    if width <= 0: # no enough room even for ellipsis
+        return ellipsis[:width + len(ellipsis)]
+
+    if leftside:
+        uslice = lambda i: u[i:]
+        concat = lambda s: ellipsis + s
+    else:
+        uslice = lambda i: u[:-i]
+        concat = lambda s: s + ellipsis
+    for i in xrange(1, len(u)):
+        usub = uslice(i)
+        if ucolwidth(usub) <= width:
+            return concat(usub.encode(encoding))
+    return ellipsis # no enough room for multi-column characters
+
+def _asciilower(s):
+    '''convert a string to lowercase if ASCII
+
+    Raises UnicodeDecodeError if non-ASCII characters are found.'''
+    s.decode('ascii')
+    return s.lower()
+
+def asciilower(s):
+    # delay importing avoids cyclic dependency around "parsers" in
+    # pure Python build (util => i18n => encoding => parsers => util)
+    import parsers
+    impl = getattr(parsers, 'asciilower', _asciilower)
+    global asciilower
+    asciilower = impl
+    return impl(s)
+
 def lower(s):
     "best-effort encoding-aware case-folding of local string s"
     try:
-        s.decode('ascii') # throw exception for non-ASCII character
-        return s.lower()
+        return asciilower(s)
     except UnicodeDecodeError:
         pass
     try:
@@ -209,6 +339,49 @@ def upper(s):
     except LookupError, k:
         raise error.Abort(k, hint="please check your locale settings")
 
+_jsonmap = {}
+
+def jsonescape(s):
+    '''returns a string suitable for JSON
+
+    JSON is problematic for us because it doesn't support non-Unicode
+    bytes. To deal with this, we take the following approach:
+
+    - localstr objects are converted back to UTF-8
+    - valid UTF-8/ASCII strings are passed as-is
+    - other strings are converted to UTF-8b surrogate encoding
+    - apply JSON-specified string escaping
+
+    (escapes are doubled in these tests)
+
+    >>> jsonescape('this is a test')
+    'this is a test'
+    >>> jsonescape('escape characters: \\0 \\x0b \\t \\n \\r \\" \\\\')
+    'escape characters: \\\\u0000 \\\\u000b \\\\t \\\\n \\\\r \\\\" \\\\\\\\'
+    >>> jsonescape('a weird byte: \\xdd')
+    'a weird byte: \\xed\\xb3\\x9d'
+    >>> jsonescape('utf-8: caf\\xc3\\xa9')
+    'utf-8: caf\\xc3\\xa9'
+    >>> jsonescape('')
+    ''
+    '''
+
+    if not _jsonmap:
+        for x in xrange(32):
+            _jsonmap[chr(x)] = "\u%04x" %x
+        for x in xrange(32, 256):
+            c = chr(x)
+            _jsonmap[c] = c
+        _jsonmap['\t'] = '\\t'
+        _jsonmap['\n'] = '\\n'
+        _jsonmap['\"'] = '\\"'
+        _jsonmap['\\'] = '\\\\'
+        _jsonmap['\b'] = '\\b'
+        _jsonmap['\f'] = '\\f'
+        _jsonmap['\r'] = '\\r'
+
+    return ''.join(_jsonmap[c] for c in toutf8b(s))
+
 def toutf8b(s):
     '''convert a local, possibly-binary string into UTF-8b
 
@@ -243,8 +416,8 @@ def toutf8b(s):
         return s._utf8
 
     try:
-        if s.decode('utf-8'):
-            return s
+        s.decode('utf-8')
+        return s
     except UnicodeDecodeError:
         # surrogate-encode any characters that don't round-trip
         s2 = s.decode('utf-8', 'ignore').encode('utf-8')

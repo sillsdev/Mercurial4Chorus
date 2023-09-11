@@ -31,7 +31,7 @@ testedwith = 'internal'
     ('C', 'copies', None, _('show copied files')),
     ('k', 'keyword', [],
      _('do case-insensitive search for a given text'), _('TEXT')),
-    ('r', 'rev', [], _('show the specified revision or range'), _('REV')),
+    ('r', 'rev', [], _('show the specified revision or revset'), _('REV')),
     ('', 'removed', None, _('include revisions where files were removed')),
     ('m', 'only-merges', None, _('show only merges (DEPRECATED)')),
     ('u', 'user', [], _('revisions committed by user'), _('USER')),
@@ -43,7 +43,8 @@ testedwith = 'internal'
     ('P', 'prune', [],
      _('do not display revision or any of its ancestors'), _('REV')),
     ] + commands.logopts + commands.walkopts,
-    _('[OPTION]... [FILE]'))
+    _('[OPTION]... [FILE]'),
+    inferrepo=True)
 def graphlog(ui, repo, *pats, **opts):
     """show revision history alongside an ASCII revision graph
 
@@ -54,5 +55,3 @@ def graphlog(ui, repo, *pats, **opts):
     directory.
     """
     return cmdutil.graphlog(ui, repo, *pats, **opts)
-
-commands.inferrepo += " glog"

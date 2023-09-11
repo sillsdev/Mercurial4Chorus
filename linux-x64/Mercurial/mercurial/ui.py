@@ -10,6 +10,68 @@ import errno, getpass, os, socket, sys, tempfile, traceback
 import config, scmutil, util, error, formatter
 from node import hex
 
+samplehgrcs = {
+    'user':
+"""# example user config (see "hg help config" for more info)
+[ui]
+# name and email, e.g.
+# username = Jane Doe <jdoe@example.com>
+username =
+
+[extensions]
+# uncomment these lines to enable some popular extensions
+# (see "hg help extensions" for more info)
+#
+# pager =
+# progress =
+# color =""",
+
+    'cloned':
+"""# example repository config (see "hg help config" for more info)
+[paths]
+default = %s
+
+# path aliases to other clones of this repo in URLs or filesystem paths
+# (see "hg help config.paths" for more info)
+#
+# default-push = ssh://jdoe@example.net/hg/jdoes-fork
+# my-fork      = ssh://jdoe@example.net/hg/jdoes-fork
+# my-clone     = /home/jdoe/jdoes-clone
+
+[ui]
+# name and email (local to this repository, optional), e.g.
+# username = Jane Doe <jdoe@example.com>
+""",
+
+    'local':
+"""# example repository config (see "hg help config" for more info)
+[paths]
+# path aliases to other clones of this repo in URLs or filesystem paths
+# (see "hg help config.paths" for more info)
+#
+# default      = http://example.com/hg/example-repo
+# default-push = ssh://jdoe@example.net/hg/jdoes-fork
+# my-fork      = ssh://jdoe@example.net/hg/jdoes-fork
+# my-clone     = /home/jdoe/jdoes-clone
+
+[ui]
+# name and email (local to this repository, optional), e.g.
+# username = Jane Doe <jdoe@example.com>
+""",
+
+    'global':
+"""# example system-wide hg config (see "hg help config" for more info)
+
+[extensions]
+# uncomment these lines to enable some popular extensions
+# (see "hg help extensions" for more info)
+#
+# blackbox =
+# progress =
+# color =
+# pager =""",
+}
+
 class ui(object):
     def __init__(self, src=None):
         # _buffers: used for temporary capture of output
@@ -437,7 +499,7 @@ class ui(object):
         """
         user = os.environ.get("HGUSER")
         if user is None:
-            user = self.config("ui", "username")
+            user = self.config("ui", ["username", "user"])
             if user is not None:
                 user = os.path.expandvars(user)
         if user is None:
@@ -475,7 +537,7 @@ class ui(object):
         return path or loc
 
     def pushbuffer(self, error=False):
-        """install a buffer to capture standar output of the ui object
+        """install a buffer to capture standard output of the ui object
 
         If error is True, the error output will be captured too."""
         self._buffers.append([])
@@ -626,6 +688,8 @@ class ui(object):
         oldout = sys.stdout
         sys.stdin = self.fin
         sys.stdout = self.fout
+        # prompt ' ' must exist; otherwise readline may delete entire line
+        # - http://bugs.python.org/issue12833
         line = raw_input(' ')
         sys.stdin = oldin
         sys.stdout = oldout
@@ -646,7 +710,9 @@ class ui(object):
         try:
             r = self._readline(self.label(msg, 'ui.prompt'))
             if not r:
-                return default
+                r = default
+            if self.configbool('ui', 'promptecho'):
+                self.write(r, "\n")
             return r
         except EOFError:
             raise util.Abort(_('response expected'))
@@ -728,7 +794,7 @@ class ui(object):
         if self.debugflag:
             opts['label'] = opts.get('label', '') + ' ui.debug'
             self.write(*msg, **opts)
-    def edit(self, text, user, extra={}):
+    def edit(self, text, user, extra={}, editform=None):
         (fd, name) = tempfile.mkstemp(prefix="hg-editor-", suffix=".txt",
                                       text=True)
         try:
@@ -743,13 +809,14 @@ class ui(object):
                 if label in extra:
                     environ.update({'HGREVISION': extra[label]})
                     break
+            if editform:
+                environ.update({'HGEDITFORM': editform})
 
             editor = self.geteditor()
 
-            util.system("%s \"%s\"" % (editor, name),
+            self.system("%s \"%s\"" % (editor, name),
                         environ=environ,
-                        onerr=util.Abort, errprefix=_("edit failed"),
-                        out=self.fout)
+                        onerr=util.Abort, errprefix=_("edit failed"))
 
             f = open(name)
             t = f.read()
@@ -758,6 +825,13 @@ class ui(object):
             os.unlink(name)
 
         return t
+
+    def system(self, cmd, environ={}, cwd=None, onerr=None, errprefix=None):
+        '''execute shell command with appropriate output stream. command
+        output will be redirected if fout is not stdout.
+        '''
+        return util.system(cmd, environ=environ, cwd=cwd, onerr=onerr,
+                           errprefix=errprefix, out=self.fout)
 
     def traceback(self, exc=None, force=False):
         '''print exception traceback if traceback printing enabled or forced.
@@ -791,7 +865,7 @@ class ui(object):
             # avoid confusion.
             editor = 'E'
         else:
-            editor = 'sensible-editor'
+            editor = 'vi'
         return (os.environ.get("HGEDITOR") or
                 self.config("ui", "editor") or
                 os.environ.get("VISUAL") or

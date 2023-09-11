@@ -7,19 +7,10 @@
 		<BuildDependsOn>$(BuildDependsOn);CopyFiles;AdjustFixUtf8</BuildDependsOn>
 	</PropertyGroup>
 
-	<Target Name="SetupBitness" Condition="'$(OS)'!='Windows_NT'">
-		<!-- Remember, Unix/Linux commands return 0 for success ("true") -->
-		<Exec Command="/usr/bin/test `arch` = x86_64" ContinueOnError="true" IgnoreExitCode="true">
-			<Output TaskParameter="ExitCode" PropertyName="ZeroIf64BitCpu"/>
-		</Exec>
-	</Target>
-
-	<Target Name="CopyFiles" DependsOnTargets="SetupBitness">
+	<Target Name="CopyFiles">
 		<PropertyGroup>
-			<Bitness Condition="'$(ZeroIf64BitCpu)'=='0'">x64</Bitness>
-			<Bitness Condition="'$(ZeroIf64BitCpu)'=='1'">x86</Bitness>
 			<Platform Condition="'$(OS)'=='Windows_NT'">win</Platform>
-			<Platform Condition="'$(OS)'!='Windows_NT'">linux-$(Bitness)</Platform>
+			<Platform Condition="'$(OS)'!='Windows_NT'">linux-x64</Platform>
 		</PropertyGroup>
 		<ItemGroup>
 			<AllFiles Include="$(RuntimesDirectory)\$(Platform)\native\**\*.*" />

@@ -12,6 +12,7 @@
 
 from node import nullid, bin, hex, short
 from i18n import _
+import util
 import encoding
 import error
 import errno
@@ -61,7 +62,7 @@ def findglobaltags(ui, repo, alltags, tagtypes):
 def readlocaltags(ui, repo, alltags, tagtypes):
     '''Read local tags in repo.  Update alltags and tagtypes.'''
     try:
-        data = repo.opener.read("localtags")
+        data = repo.vfs.read("localtags")
     except IOError, inst:
         if inst.errno != errno.ENOENT:
             raise
@@ -72,22 +73,40 @@ def readlocaltags(ui, repo, alltags, tagtypes):
     filetags = _readtags(
         ui, repo, data.splitlines(), "localtags",
         recode=encoding.fromlocal)
+
+    # remove tags pointing to invalid nodes
+    cl = repo.changelog
+    for t in filetags.keys():
+        try:
+            cl.rev(filetags[t][0])
+        except (LookupError, ValueError):
+            del filetags[t]
+
     _updatetags(filetags, "local", alltags, tagtypes)
 
-def _readtags(ui, repo, lines, fn, recode=None):
+def _readtaghist(ui, repo, lines, fn, recode=None, calcnodelines=False):
     '''Read tag definitions from a file (or any source of lines).
-    Return a mapping from tag name to (node, hist): node is the node id
-    from the last line read for that name, and hist is the list of node
-    ids previously associated with it (in file order).  All node ids are
-    binary, not hex.'''
+    This function returns two sortdicts with similar information:
+    - the first dict, bintaghist, contains the tag information as expected by
+      the _readtags function, i.e. a mapping from tag name to (node, hist):
+        - node is the node id from the last line read for that name,
+        - hist is the list of node ids previously associated with it (in file
+          order).  All node ids are binary, not hex.
+    - the second dict, hextaglines, is a mapping from tag name to a list of
+      [hexnode, line number] pairs, ordered from the oldest to the newest node.
+    When calcnodelines is False the hextaglines dict is not calculated (an
+    empty dict is returned). This is done to improve this function's
+    performance in cases where the line numbers are not needed.
+    '''
 
-    filetags = {}               # map tag name to (node, hist)
+    bintaghist = util.sortdict()
+    hextaglines = util.sortdict()
     count = 0
 
     def warn(msg):
         ui.warn(_("%s, line %s: %s\n") % (fn, count, msg))
 
-    for line in lines:
+    for nline, line in enumerate(lines):
         count += 1
         if not line:
             continue
@@ -106,11 +125,28 @@ def _readtags(ui, repo, lines, fn, recode=None):
             continue
 
         # update filetags
-        hist = []
-        if name in filetags:
-            n, hist = filetags[name]
-            hist.append(n)
-        filetags[name] = (nodebin, hist)
+        if calcnodelines:
+            # map tag name to a list of line numbers
+            if name not in hextaglines:
+                hextaglines[name] = []
+            hextaglines[name].append([nodehex, nline])
+            continue
+        # map tag name to (node, hist)
+        if name not in bintaghist:
+            bintaghist[name] = []
+        bintaghist[name].append(nodebin)
+    return bintaghist, hextaglines
+
+def _readtags(ui, repo, lines, fn, recode=None, calcnodelines=False):
+    '''Read tag definitions from a file (or any source of lines).
+    Return a mapping from tag name to (node, hist): node is the node id
+    from the last line read for that name, and hist is the list of node
+    ids previously associated with it (in file order).  All node ids are
+    binary, not hex.'''
+    filetags, nodelines = _readtaghist(ui, repo, lines, fn, recode=recode,
+                                       calcnodelines=calcnodelines)
+    for tag, taghist in filetags.items():
+        filetags[tag] = (taghist[-1], taghist[:-1])
     return filetags
 
 def _updatetags(filetags, tagtype, alltags, tagtypes):
@@ -157,7 +193,7 @@ def _readtagcache(ui, repo):
     set, caller is responsible for reading tag info from each head.'''
 
     try:
-        cachefile = repo.opener('cache/tags', 'r')
+        cachefile = repo.vfs('cache/tags', 'r')
         # force reading the file for static-http
         cachelines = iter(cachefile)
     except IOError:
@@ -267,7 +303,7 @@ def _readtagcache(ui, repo):
 def _writetagcache(ui, repo, heads, tagfnode, cachetags):
 
     try:
-        cachefile = repo.opener('cache/tags', 'w', atomictemp=True)
+        cachefile = repo.vfs('cache/tags', 'w', atomictemp=True)
     except (OSError, IOError):
         return
 
