@@ -232,7 +232,7 @@ are sent to the Bugzilla email address
     bzurl=http://my-project.org/bugzilla
     user=bugmail@my-project.org
     password=plugh
-    version=xmlrpc
+    version=xmlrpc+email
     bzemail=bugzilla@my-project.org
     template=Changeset {node|short} in {root|basename}.
              {hgweb}/{webroot}/rev/{node|short}\\n
@@ -354,8 +354,7 @@ class bzmysql(bzaccess):
             import MySQLdb as mysql
             bzmysql._MySQLdb = mysql
         except ImportError, err:
-            raise util.Abort(_('python mysql support not available: %s') % err +
-                             _(' (try installing the %s package)') % 'python-mysqldb')
+            raise util.Abort(_('python mysql support not available: %s') % err)
 
         bzaccess.__init__(self, ui)
 
@@ -778,32 +777,25 @@ class bugzilla(object):
                        r'(?P<ids>(?:#?\d+\s*(?:,?\s*(?:and)?)?\s*)+)'
                        r'\.?\s*(?:h(?:ours?)?\s*(?P<hours>\d*(?:\.\d+)?))?')
 
-    _bz = None
-
     def __init__(self, ui, repo):
         self.ui = ui
         self.repo = repo
 
-    def bz(self):
-        '''return object that knows how to talk to bugzilla version in
-        use.'''
+        bzversion = self.ui.config('bugzilla', 'version')
+        try:
+            bzclass = bugzilla._versions[bzversion]
+        except KeyError:
+            raise util.Abort(_('bugzilla version %s not supported') %
+                             bzversion)
+        self.bzdriver = bzclass(self.ui)
 
-        if bugzilla._bz is None:
-            bzversion = self.ui.config('bugzilla', 'version')
-            try:
-                bzclass = bugzilla._versions[bzversion]
-            except KeyError:
-                raise util.Abort(_('bugzilla version %s not supported') %
-                                 bzversion)
-            bugzilla._bz = bzclass(self.ui)
-        return bugzilla._bz
-
-    def __getattr__(self, key):
-        return getattr(self.bz(), key)
-
-    _bug_re = None
-    _fix_re = None
-    _split_re = None
+        self.bug_re = re.compile(
+            self.ui.config('bugzilla', 'regexp',
+                           bugzilla._default_bug_re), re.IGNORECASE)
+        self.fix_re = re.compile(
+            self.ui.config('bugzilla', 'fixregexp',
+                           bugzilla._default_fix_re), re.IGNORECASE)
+        self.split_re = re.compile(r'\D+')
 
     def find_bugs(self, ctx):
         '''return bugs dictionary created from commit comment.
@@ -812,19 +804,11 @@ class bugzilla(object):
         not known to Bugzilla, and any that already have a reference to
         the given changeset in their comments.
         '''
-        if bugzilla._bug_re is None:
-            bugzilla._bug_re = re.compile(
-                self.ui.config('bugzilla', 'regexp',
-                               bugzilla._default_bug_re), re.IGNORECASE)
-            bugzilla._fix_re = re.compile(
-                self.ui.config('bugzilla', 'fixregexp',
-                               bugzilla._default_fix_re), re.IGNORECASE)
-            bugzilla._split_re = re.compile(r'\D+')
         start = 0
         hours = 0.0
         bugs = {}
-        bugmatch = bugzilla._bug_re.search(ctx.description(), start)
-        fixmatch = bugzilla._fix_re.search(ctx.description(), start)
+        bugmatch = self.bug_re.search(ctx.description(), start)
+        fixmatch = self.fix_re.search(ctx.description(), start)
         while True:
             bugattribs = {}
             if not bugmatch and not fixmatch:
@@ -840,11 +824,11 @@ class bugzilla(object):
                     m = fixmatch
             start = m.end()
             if m is bugmatch:
-                bugmatch = bugzilla._bug_re.search(ctx.description(), start)
+                bugmatch = self.bug_re.search(ctx.description(), start)
                 if 'fix' in bugattribs:
                     del bugattribs['fix']
             else:
-                fixmatch = bugzilla._fix_re.search(ctx.description(), start)
+                fixmatch = self.fix_re.search(ctx.description(), start)
                 bugattribs['fix'] = None
 
             try:
@@ -861,14 +845,14 @@ class bugzilla(object):
             except ValueError:
                 self.ui.status(_("%s: invalid hours\n") % m.group('hours'))
 
-            for id in bugzilla._split_re.split(ids):
+            for id in self.split_re.split(ids):
                 if not id:
                     continue
                 bugs[int(id)] = bugattribs
         if bugs:
-            self.filter_real_bug_ids(bugs)
+            self.bzdriver.filter_real_bug_ids(bugs)
         if bugs:
-            self.filter_cset_known_bug_ids(ctx.node(), bugs)
+            self.bzdriver.filter_cset_known_bug_ids(ctx.node(), bugs)
         return bugs
 
     def update(self, bugid, newstate, ctx):
@@ -903,7 +887,11 @@ class bugzilla(object):
                root=self.repo.root,
                webroot=webroot(self.repo.root))
         data = self.ui.popbuffer()
-        self.updatebug(bugid, newstate, data, util.email(ctx.user()))
+        self.bzdriver.updatebug(bugid, newstate, data, util.email(ctx.user()))
+
+    def notify(self, bugs, committer):
+        '''ensure Bugzilla users are notified of bug change.'''
+        self.bzdriver.notify(bugs, committer)
 
 def hook(ui, repo, hooktype, node=None, **kwargs):
     '''add comment to bugzilla for each changeset that refers to a

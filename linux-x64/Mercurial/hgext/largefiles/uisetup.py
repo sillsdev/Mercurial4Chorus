@@ -33,10 +33,9 @@ def uisetup(ui):
     # and in the process of handling commit -A (issue3542)
     entry = extensions.wrapfunction(scmutil, 'addremove',
                                     overrides.scmutiladdremove)
-    entry = extensions.wrapcommand(commands.table, 'remove',
-                                   overrides.overrideremove)
-    entry = extensions.wrapcommand(commands.table, 'forget',
-                                   overrides.overrideforget)
+    extensions.wrapfunction(cmdutil, 'add', overrides.cmdutiladd)
+    extensions.wrapfunction(cmdutil, 'remove', overrides.cmdutilremove)
+    extensions.wrapfunction(cmdutil, 'forget', overrides.cmdutilforget)
 
     # Subrepos call status function
     entry = extensions.wrapcommand(commands.table, 'status',
@@ -99,6 +98,10 @@ def uisetup(ui):
                                     overrides.overridecheckunknownfile)
     entry = extensions.wrapfunction(merge, 'calculateupdates',
                                     overrides.overridecalculateupdates)
+    entry = extensions.wrapfunction(merge, 'recordupdates',
+                                    overrides.mergerecordupdates)
+    entry = extensions.wrapfunction(merge, 'update',
+                                    overrides.mergeupdate)
     entry = extensions.wrapfunction(filemerge, 'filemerge',
                                     overrides.overridefilemerge)
     entry = extensions.wrapfunction(cmdutil, 'copy',
@@ -115,14 +118,14 @@ def uisetup(ui):
     entry = extensions.wrapfunction(commands, 'revert',
                                     overrides.overriderevert)
 
-    extensions.wrapfunction(hg, 'updaterepo', overrides.hgupdaterepo)
-    extensions.wrapfunction(hg, 'merge', overrides.hgmerge)
-
     extensions.wrapfunction(archival, 'archive', overrides.overridearchive)
     extensions.wrapfunction(subrepo.hgsubrepo, 'archive',
                             overrides.hgsubrepoarchive)
     extensions.wrapfunction(cmdutil, 'bailifchanged',
                             overrides.overridebailifchanged)
+
+    extensions.wrapfunction(scmutil, 'marktouched',
+                            overrides.scmutilmarktouched)
 
     # create the new wireproto commands ...
     wireproto.commands['putlfile'] = (proto.putlfile, 'sha')
@@ -156,22 +159,14 @@ def uisetup(ui):
 
     # override some extensions' stuff as well
     for name, module in extensions.extensions():
-        if name == 'fetch':
-            extensions.wrapcommand(getattr(module, 'cmdtable'), 'fetch',
-                overrides.overridefetch)
         if name == 'purge':
             extensions.wrapcommand(getattr(module, 'cmdtable'), 'purge',
                 overrides.overridepurge)
         if name == 'rebase':
             extensions.wrapcommand(getattr(module, 'cmdtable'), 'rebase',
                 overrides.overriderebase)
+            extensions.wrapfunction(module, 'rebase',
+                                    overrides.overriderebase)
         if name == 'transplant':
             extensions.wrapcommand(getattr(module, 'cmdtable'), 'transplant',
                 overrides.overridetransplant)
-        if name == 'convert':
-            convcmd = getattr(module, 'convcmd')
-            hgsink = getattr(convcmd, 'mercurial_sink')
-            extensions.wrapfunction(hgsink, 'before',
-                                    overrides.mercurialsinkbefore)
-            extensions.wrapfunction(hgsink, 'after',
-                                    overrides.mercurialsinkafter)

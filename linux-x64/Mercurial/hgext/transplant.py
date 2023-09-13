@@ -19,7 +19,7 @@ import os, tempfile
 from mercurial.node import short
 from mercurial import bundlerepo, hg, merge, match
 from mercurial import patch, revlog, scmutil, util, error, cmdutil
-from mercurial import revset, templatekw
+from mercurial import revset, templatekw, exchange
 
 class TransplantError(error.Abort):
     pass
@@ -80,13 +80,16 @@ class transplants(object):
             self.dirty = True
 
 class transplanter(object):
-    def __init__(self, ui, repo):
+    def __init__(self, ui, repo, opts):
         self.ui = ui
         self.path = repo.join('transplant')
         self.opener = scmutil.opener(self.path)
         self.transplants = transplants(self.path, 'transplants',
                                        opener=self.opener)
-        self.editor = None
+        def getcommiteditor():
+            editform = cmdutil.mergeeditform(repo[None], 'transplant')
+            return cmdutil.getcommiteditor(editform=editform, **opts)
+        self.getcommiteditor = getcommiteditor
 
     def applied(self, repo, node, parent):
         '''returns True if a node is already an ancestor of parent
@@ -115,7 +118,7 @@ class transplanter(object):
         revs = sorted(revmap)
         p1, p2 = repo.dirstate.parents()
         pulls = []
-        diffopts = patch.diffopts(self.ui, opts)
+        diffopts = patch.difffeatureopts(self.ui, opts)
         diffopts.git = True
 
         lock = wlock = tr = None
@@ -142,7 +145,7 @@ class transplanter(object):
                         continue
                     if pulls:
                         if source != repo:
-                            repo.pull(source.peer(), heads=pulls)
+                            exchange.pull(repo, source.peer(), heads=pulls)
                         merge.update(repo, pulls[-1], False, False, None)
                         p1, p2 = repo.dirstate.parents()
                         pulls = []
@@ -154,7 +157,7 @@ class transplanter(object):
                     # transplants before them fail.
                     domerge = True
                     if not hasnode(repo, node):
-                        repo.pull(source.peer(), heads=[node])
+                        exchange.pull(repo, source.peer(), heads=[node])
 
                 skipmerge = False
                 if parents[1] != revlog.nullid:
@@ -206,7 +209,7 @@ class transplanter(object):
                             os.unlink(patchfile)
             tr.close()
             if pulls:
-                repo.pull(source.peer(), heads=pulls)
+                exchange.pull(repo, source.peer(), heads=pulls)
                 merge.update(repo, pulls[-1], False, False, None)
         finally:
             self.saveseries(revmap, merges)
@@ -230,13 +233,12 @@ class transplanter(object):
         fp.close()
 
         try:
-            util.system('%s %s %s' % (filter, util.shellquote(headerfile),
-                                   util.shellquote(patchfile)),
-                        environ={'HGUSER': changelog[1],
-                                 'HGREVISION': revlog.hex(node),
-                                 },
-                        onerr=util.Abort, errprefix=_('filter failed'),
-                        out=self.ui.fout)
+            self.ui.system('%s %s %s' % (filter, util.shellquote(headerfile),
+                                         util.shellquote(patchfile)),
+                           environ={'HGUSER': changelog[1],
+                                    'HGREVISION': revlog.hex(node),
+                                    },
+                           onerr=util.Abort, errprefix=_('filter failed'))
             user, date, msg = self.parselog(file(headerfile))[1:4]
         finally:
             os.unlink(headerfile)
@@ -286,7 +288,7 @@ class transplanter(object):
             m = match.exact(repo.root, '', files)
 
         n = repo.commit(message, user, date, extra=extra, match=m,
-                        editor=self.editor)
+                        editor=self.getcommiteditor())
         if not n:
             self.ui.warn(_('skipping emptied changeset %s\n') % short(node))
             return None
@@ -299,8 +301,12 @@ class transplanter(object):
         '''recover last transaction and apply remaining changesets'''
         if os.path.exists(os.path.join(self.path, 'journal')):
             n, node = self.recover(repo, source, opts)
-            self.ui.status(_('%s transplanted as %s\n') % (short(node),
-                                                           short(n)))
+            if n:
+                self.ui.status(_('%s transplanted as %s\n') % (short(node),
+                                                               short(n)))
+            else:
+                self.ui.status(_('%s skipped due to empty diff\n')
+                               % (short(node),))
         seriespath = os.path.join(self.path, 'series')
         if not os.path.exists(seriespath):
             self.transplants.write()
@@ -341,12 +347,16 @@ class transplanter(object):
                                  revlog.hex(parent))
             if merge:
                 repo.setparents(p1, parents[1])
-            n = repo.commit(message, user, date, extra=extra,
-                            editor=self.editor)
-            if not n:
-                raise util.Abort(_('commit failed'))
-            if not merge:
-                self.transplants.set(n, node)
+            modified, added, removed, deleted = repo.status()[:4]
+            if merge or modified or added or removed or deleted:
+                n = repo.commit(message, user, date, extra=extra,
+                                editor=self.getcommiteditor())
+                if not n:
+                    raise util.Abort(_('commit failed'))
+                if not merge:
+                    self.transplants.set(n, node)
+            else:
+                n = None
             self.unlog()
 
             return n, node
@@ -599,9 +609,7 @@ def transplant(ui, repo, *revs, **opts):
     if not opts.get('filter'):
         opts['filter'] = ui.config('transplant', 'filter')
 
-    tp = transplanter(ui, repo)
-    if opts.get('edit'):
-        tp.editor = cmdutil.commitforceeditor
+    tp = transplanter(ui, repo, opts)
 
     cmdutil.checkunfinished(repo)
     p1, p2 = repo.dirstate.parents()

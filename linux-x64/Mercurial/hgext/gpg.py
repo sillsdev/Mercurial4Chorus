@@ -103,7 +103,7 @@ def sigwalk(repo):
     try:
         # read local signatures
         fn = "localsigs"
-        for item in parsefile(repo.opener(fn), fn):
+        for item in parsefile(repo.vfs(fn), fn):
             yield item
     except IOError:
         pass
@@ -203,7 +203,8 @@ def keystr(ui, key):
           ('k', 'key', '',
            _('the key id to sign with'), _('ID')),
           ('m', 'message', '',
-           _('commit message'), _('TEXT')),
+           _('use text as commit message'), _('TEXT')),
+          ('e', 'edit', False, _('invoke editor on commit messages')),
          ] + commands.commitopts2,
          _('hg sign [OPTION]... [REV]...'))
 def sign(ui, repo, *revs, **opts):
@@ -249,15 +250,14 @@ def sign(ui, repo, *revs, **opts):
 
     # write it
     if opts['local']:
-        repo.opener.append("localsigs", sigmessage)
+        repo.vfs.append("localsigs", sigmessage)
         return
 
-    msigs = match.exact(repo.root, '', ['.hgsigs'])
-    s = repo.status(match=msigs, unknown=True, ignored=True)[:6]
-    if util.any(s) and not opts["force"]:
-        raise util.Abort(_("working copy of .hgsigs is changed "
-                           "(please commit .hgsigs manually "
-                           "or use --force)"))
+    if not opts["force"]:
+        msigs = match.exact(repo.root, '', ['.hgsigs'])
+        if util.any(repo.status(match=msigs, unknown=True, ignored=True)):
+            raise util.Abort(_("working copy of .hgsigs is changed "),
+                             hint=_("please commit .hgsigs manually"))
 
     sigsfile = repo.wfile(".hgsigs", "ab")
     sigsfile.write(sigmessage)
@@ -276,7 +276,9 @@ def sign(ui, repo, *revs, **opts):
                              % hgnode.short(n)
                              for n in nodes])
     try:
-        repo.commit(message, opts['user'], opts['date'], match=msigs)
+        editor = cmdutil.getcommiteditor(editform='gpg.sign', **opts)
+        repo.commit(message, opts['user'], opts['date'], match=msigs,
+                    editor=editor)
     except ValueError, inst:
         raise util.Abort(str(inst))
 

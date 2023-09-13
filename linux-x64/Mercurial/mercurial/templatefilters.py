@@ -8,6 +8,7 @@
 import cgi, re, os, time, urllib
 import encoding, node, util
 import hbisect
+import templatekw
 
 def addbreaks(text):
     """:addbreaks: Any text. Add an XHTML "<br />" tag before the end of
@@ -64,6 +65,10 @@ def basename(path):
     "baz" and "foo/bar//" becomes "bar".
     """
     return os.path.basename(path)
+
+def count(i):
+    """:count: List or text. Returns the length as an integer."""
+    return len(i)
 
 def datefilter(text):
     """:date: Date. Returns a date in a Unix date format, including the
@@ -194,7 +199,7 @@ def json(obj):
         return '"%s"' % jsonescape(obj)
     elif util.safehasattr(obj, 'keys'):
         out = []
-        for k, v in obj.iteritems():
+        for k, v in sorted(obj.iteritems()):
             s = '%s: %s' % (json(k), json(v))
             out.append(s)
         return '{' + ', '.join(out) + '}'
@@ -203,6 +208,8 @@ def json(obj):
         for i in obj:
             out.append(json(i))
         return '[' + ', '.join(out) + ']'
+    elif util.safehasattr(obj, '__call__'):
+        return json(obj())
     else:
         raise TypeError('cannot encode type %s' % obj.__class__.__name__)
 
@@ -215,7 +222,7 @@ def _uescape(c):
 _escapes = [
     ('\\', '\\\\'), ('"', '\\"'), ('\t', '\\t'), ('\n', '\\n'),
     ('\r', '\\r'), ('\f', '\\f'), ('\b', '\\b'),
-    ('<', '\\u003c'), ('>', '\\u003e')
+    ('<', '\\u003c'), ('>', '\\u003e'), ('\0', '\\u0000')
 ]
 
 def jsonescape(s):
@@ -302,6 +309,10 @@ def shortdate(text):
     """:shortdate: Date. Returns a date like "2006-09-18"."""
     return util.shortdate(text)
 
+def splitlines(text):
+    """:splitlines: Any text. Split text into a list of lines."""
+    return templatekw.showlist('line', text.splitlines(), 'lines')
+
 def stringescape(text):
     return text.encode('string_escape')
 
@@ -361,6 +372,7 @@ filters = {
     "addbreaks": addbreaks,
     "age": age,
     "basename": basename,
+    "count": count,
     "date": datefilter,
     "domain": domain,
     "email": email,
@@ -384,6 +396,7 @@ filters = {
     "short": short,
     "shortbisect": shortbisect,
     "shortdate": shortdate,
+    "splitlines": splitlines,
     "stringescape": stringescape,
     "stringify": stringify,
     "strip": strip,

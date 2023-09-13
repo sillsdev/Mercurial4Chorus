@@ -34,7 +34,9 @@ REVLOG_DEFAULT_VERSION = REVLOG_DEFAULT_FORMAT | REVLOG_DEFAULT_FLAGS
 REVLOGNG_FLAGS = REVLOGNGINLINEDATA | REVLOGGENERALDELTA
 
 # revlog index flags
-REVIDX_KNOWN_FLAGS = 0
+REVIDX_ISCENSORED = (1 << 15) # revision has censor metadata, must be verified
+REVIDX_DEFAULT_FLAGS = 0
+REVIDX_KNOWN_FLAGS = REVIDX_ISCENSORED
 
 # max size of revlog with inline data
 _maxinline = 131072
@@ -42,6 +44,7 @@ _chunksize = 1048576
 
 RevlogError = error.RevlogError
 LookupError = error.LookupError
+CensoredNodeError = error.CensoredNodeError
 
 def getoffset(q):
     return int(q >> 16)
@@ -52,7 +55,7 @@ def gettype(q):
 def offset_type(offset, type):
     return long(long(offset) << 16 | type)
 
-nullhash = _sha(nullid)
+_nullhash = _sha(nullid)
 
 def hash(text, p1, p2):
     """generate a hash from the given text and its parent hashes
@@ -64,7 +67,7 @@ def hash(text, p1, p2):
     # As of now, if one of the parent node is null, p2 is null
     if p2 == nullid:
         # deep copy of a hash is faster than creating one
-        s = nullhash.copy()
+        s = _nullhash.copy()
         s.update(p1)
     else:
         # none of the parent nodes are nullid
@@ -203,6 +206,7 @@ class revlog(object):
         self._basecache = None
         self._chunkcache = (0, '')
         self._chunkcachesize = 65536
+        self._maxchainlen = None
         self.index = []
         self._pcache = {}
         self._nodecache = {nullid: nullrev}
@@ -218,6 +222,8 @@ class revlog(object):
                 v = 0
             if 'chunkcachesize' in opts:
                 self._chunkcachesize = opts['chunkcachesize']
+            if 'maxchainlen' in opts:
+                self._maxchainlen = opts['maxchainlen']
 
         if self._chunkcachesize <= 0:
             raise RevlogError(_('revlog chunk cache size %r is not greater '
@@ -266,6 +272,8 @@ class revlog(object):
             self.nodemap = self._nodecache = nodemap
         if not self._chunkcache:
             self._chunkclear()
+        # revnum -> (chain-length, sum-delta-length)
+        self._chaininfocache = {}
 
     def tip(self):
         return self.node(len(self.index) - 2)
@@ -306,6 +314,8 @@ class revlog(object):
     def rev(self, node):
         try:
             return self._nodecache[node]
+        except TypeError:
+            raise
         except RevlogError:
             # parsers.c radix tree lookup failed
             raise LookupError(node, self.indexfile, _('no node'))
@@ -347,6 +357,40 @@ class revlog(object):
             rev = base
             base = index[rev][3]
         return base
+    def chainlen(self, rev):
+        return self._chaininfo(rev)[0]
+
+    def _chaininfo(self, rev):
+        chaininfocache = self._chaininfocache
+        if rev in chaininfocache:
+            return chaininfocache[rev]
+        index = self.index
+        generaldelta = self._generaldelta
+        iterrev = rev
+        e = index[iterrev]
+        clen = 0
+        compresseddeltalen = 0
+        while iterrev != e[3]:
+            clen += 1
+            compresseddeltalen += e[1]
+            if generaldelta:
+                iterrev = e[3]
+            else:
+                iterrev -= 1
+            if iterrev in chaininfocache:
+                t = chaininfocache[iterrev]
+                clen += t[0]
+                compresseddeltalen += t[1]
+                break
+            e = index[iterrev]
+        else:
+            # Add text length of base since decompressing that also takes
+            # work. For cache hits the length is already included.
+            compresseddeltalen += e[1]
+        r = (clen, compresseddeltalen)
+        chaininfocache[rev] = r
+        return r
+
     def flags(self, rev):
         return self.index[rev][0] & 0xFFFF
     def rawsize(self, rev):
@@ -365,7 +409,7 @@ class revlog(object):
 
         See the documentation for ancestor.lazyancestors for more details."""
 
-        return ancestor.lazyancestors(self, revs, stoprev=stoprev,
+        return ancestor.lazyancestors(self.parentrevs, revs, stoprev=stoprev,
                                       inclusive=inclusive)
 
     def descendants(self, revs):
@@ -453,6 +497,20 @@ class revlog(object):
         missing.sort()
         return has, [self.node(r) for r in missing]
 
+    def incrementalmissingrevs(self, common=None):
+        """Return an object that can be used to incrementally compute the
+        revision numbers of the ancestors of arbitrary sets that are not
+        ancestors of common. This is an ancestor.incrementalmissingancestors
+        object.
+
+        'common' is a list of revision numbers. If common is not supplied, uses
+        nullrev.
+        """
+        if common is None:
+            common = [nullrev]
+
+        return ancestor.incrementalmissingancestors(self.parentrevs, common)
+
     def findmissingrevs(self, common=None, heads=None):
         """Return the revision numbers of the ancestors of heads that
         are not ancestors of common.
@@ -474,7 +532,8 @@ class revlog(object):
         if heads is None:
             heads = self.headrevs()
 
-        return ancestor.missingancestors(heads, common, self.parentrevs)
+        inc = self.incrementalmissingrevs(common=common)
+        return inc.missingancestors(heads)
 
     def findmissing(self, common=None, heads=None):
         """Return the ancestors of heads that are not ancestors of common.
@@ -499,8 +558,8 @@ class revlog(object):
         common = [self.rev(n) for n in common]
         heads = [self.rev(n) for n in heads]
 
-        return [self.node(r) for r in
-                ancestor.missingancestors(heads, common, self.parentrevs)]
+        inc = self.incrementalmissingrevs(common=common)
+        return [self.node(r) for r in inc.missingancestors(heads)]
 
     def nodesbetween(self, roots=None, heads=None):
         """Return a topological path from 'roots' to 'heads'.
@@ -743,8 +802,15 @@ class revlog(object):
             ancs = ancestor.commonancestorsheads(self.parentrevs, a, b)
         return map(self.node, ancs)
 
+    def isancestor(self, a, b):
+        """return True if node a is an ancestor of node b
+
+        The implementation of this is trivial but the use of
+        commonancestorsheads is not."""
+        return a in self.commonancestorsheads(a, b)
+
     def ancestor(self, a, b):
-        """calculate the least common ancestor of nodes a and b"""
+        """calculate the "best" common ancestor of nodes a and b"""
 
         a, b = self.rev(a), self.rev(b)
         try:
@@ -919,8 +985,13 @@ class revlog(object):
 
         # preload the cache
         try:
-            self._chunkraw(revs[0], revs[-1])
-            offset, data = self._chunkcache
+            while True:
+                # ensure that the cache doesn't change out from under us
+                _cache = self._chunkcache
+                self._chunkraw(revs[0], revs[-1])
+                if _cache == self._chunkcache:
+                    break
+            offset, data = _cache
         except OverflowError:
             # issue4215 - we can't cache a run of chunks greater than
             # 2G on Windows
@@ -967,13 +1038,14 @@ class revlog(object):
             node = nodeorrev
             rev = None
 
+        _cache = self._cache # grab local copy of cache to avoid thread race
         cachedrev = None
         if node == nullid:
             return ""
-        if self._cache:
-            if self._cache[0] == node:
-                return self._cache[2]
-            cachedrev = self._cache[1]
+        if _cache:
+            if _cache[0] == node:
+                return _cache[2]
+            cachedrev = _cache[1]
 
         # look up what we need to read
         text = None
@@ -1001,7 +1073,7 @@ class revlog(object):
 
         if iterrev == cachedrev:
             # cache hit
-            text = self._cache[2]
+            text = _cache[2]
         else:
             chain.append(iterrev)
         chain.reverse()
@@ -1021,13 +1093,21 @@ class revlog(object):
         self._cache = (node, rev, text)
         return text
 
+    def hash(self, text, p1, p2):
+        """Compute a node hash.
+
+        Available as a function so that subclasses can replace the hash
+        as needed.
+        """
+        return hash(text, p1, p2)
+
     def _checkhash(self, text, node, rev):
         p1, p2 = self.parents(node)
         self.checkhash(text, p1, p2, node, rev)
         return text
 
     def checkhash(self, text, p1, p2, node, rev=None):
-        if node != hash(text, p1, p2):
+        if node != self.hash(text, p1, p2):
             revornode = rev
             if revornode is None:
                 revornode = templatefilters.short(hex(node))
@@ -1089,7 +1169,7 @@ class revlog(object):
         if link == nullrev:
             raise RevlogError(_("attempted to add linkrev -1 to %s")
                               % self.indexfile)
-        node = node or hash(text, p1, p2)
+        node = node or self.hash(text, p1, p2)
         if node in self.nodemap:
             return node
 
@@ -1099,7 +1179,7 @@ class revlog(object):
         ifh = self.opener(self.indexfile, "a+")
         try:
             return self._addrevision(node, text, transaction, link, p1, p2,
-                                     cachedelta, ifh, dfh)
+                                     REVIDX_DEFAULT_FLAGS, cachedelta, ifh, dfh)
         finally:
             if dfh:
                 dfh.close()
@@ -1134,7 +1214,7 @@ class revlog(object):
             return ('u', text)
         return ("", bin)
 
-    def _addrevision(self, node, text, transaction, link, p1, p2,
+    def _addrevision(self, node, text, transaction, link, p1, p2, flags,
                      cachedelta, ifh, dfh):
         """internal function to add revisions to the log
 
@@ -1153,7 +1233,14 @@ class revlog(object):
             ifh.flush()
             basetext = self.revision(self.node(cachedelta[0]))
             btext[0] = mdiff.patch(basetext, cachedelta[1])
-            self.checkhash(btext[0], p1, p2, node)
+            try:
+                self.checkhash(btext[0], p1, p2, node)
+                if flags & REVIDX_ISCENSORED:
+                    raise RevlogError(_('node %s is not censored') % node)
+            except CensoredNodeError:
+                # must pass the censored index flag to add censored revisions
+                if not flags & REVIDX_ISCENSORED:
+                    raise
             return btext[0]
 
         def builddelta(rev):
@@ -1175,13 +1262,16 @@ class revlog(object):
                 base = rev
             else:
                 base = chainbase
-            return dist, l, data, base, chainbase
+            chainlen, compresseddeltalen = self._chaininfo(rev)
+            chainlen += 1
+            compresseddeltalen += l
+            return dist, l, data, base, chainbase, chainlen, compresseddeltalen
 
         curr = len(self)
         prev = curr - 1
         base = chainbase = curr
+        chainlen = None
         offset = self.end(prev)
-        flags = 0
         d = None
         if self._basecache is None:
             self._basecache = (prev, self.chainbase(prev))
@@ -1199,7 +1289,7 @@ class revlog(object):
                     d = builddelta(prev)
             else:
                 d = builddelta(prev)
-            dist, l, data, base, chainbase = d
+            dist, l, data, base, chainbase, chainlen, compresseddeltalen = d
 
         # full versions are inserted when the needed deltas
         # become comparable to the uncompressed text
@@ -1208,7 +1298,14 @@ class revlog(object):
                                         cachedelta[1])
         else:
             textlen = len(text)
-        if d is None or dist > textlen * 2:
+
+        # - 'dist' is the distance from the base revision -- bounding it limits
+        #   the amount of I/O we need to do.
+        # - 'compresseddeltalen' is the sum of the total size of deltas we need
+        #   to apply -- bounding it limits the amount of CPU we consume.
+        if (d is None or dist > textlen * 4 or l > textlen or
+            compresseddeltalen > textlen * 2 or
+            (self._maxchainlen and chainlen > self._maxchainlen)):
             text = buildtext()
             data = self.compress(text)
             l = len(data[1]) + len(data[0])
@@ -1305,7 +1402,8 @@ class revlog(object):
 
                 baserev = self.rev(deltabase)
                 chain = self._addrevision(node, None, transaction, link,
-                                          p1, p2, (baserev, delta), ifh, dfh)
+                                          p1, p2, REVIDX_DEFAULT_FLAGS,
+                                          (baserev, delta), ifh, dfh)
                 if not dfh and not self._inline:
                     # addrevision switched from inline to conventional
                     # reopen the index
@@ -1392,6 +1490,7 @@ class revlog(object):
 
         # then reset internal state in memory to forget those revisions
         self._cache = None
+        self._chaininfocache = {}
         self._chunkclear()
         for x in xrange(rev, len(self)):
             del self.nodemap[self.node(x)]

@@ -19,9 +19,15 @@ def _dirname(f):
     return f[:s]
 
 def _findlimit(repo, a, b):
-    """Find the earliest revision that's an ancestor of a or b but not both,
+    """
+    Find the last revision that needs to be checked to ensure that a full
+    transitive closure for file copies can be properly calculated.
+    Generally, this means finding the earliest revision number that's an
+    ancestor of a or b but not both, except when a or b is a direct descendent
+    of the other, in which case we can return the minimum revnum of a and b.
     None if no such revision exists.
     """
+
     # basic idea:
     # - mark a and b with different sides
     # - if a parent's children are all on the same side, the parent is
@@ -73,7 +79,29 @@ def _findlimit(repo, a, b):
 
     if not hascommonancestor:
         return None
-    return limit
+
+    # Consider the following flow (see test-commit-amend.t under issue4405):
+    # 1/ File 'a0' committed
+    # 2/ File renamed from 'a0' to 'a1' in a new commit (call it 'a1')
+    # 3/ Move back to first commit
+    # 4/ Create a new commit via revert to contents of 'a1' (call it 'a1-amend')
+    # 5/ Rename file from 'a1' to 'a2' and commit --amend 'a1-msg'
+    #
+    # During the amend in step five, we will be in this state:
+    #
+    # @  3 temporary amend commit for a1-amend
+    # |
+    # o  2 a1-amend
+    # |
+    # | o  1 a1
+    # |/
+    # o  0 a0
+    #
+    # When _findlimit is called, a and b are revs 3 and 0, so limit will be 2,
+    # yet the filelog has the copy information in rev 1 and we will not look
+    # back far enough unless we also look at the a and b as candidates.
+    # This only occurs when a is a descendent of b or visa-versa.
+    return min(limit, a, b)
 
 def _chain(src, dst, a, b):
     '''chain two sets of copies a->b'''
@@ -105,7 +133,7 @@ def _tracefile(fctx, am, limit=-1):
     for f in fctx.ancestors():
         if am.get(f.path(), None) == f.filenode():
             return f
-        if f.rev() < limit:
+        if limit >= 0 and f.linkrev() < limit and f.rev() < limit:
             return None
 
 def _dirstatecopies(d):
@@ -142,8 +170,11 @@ def _forwardcopies(a, b):
     missing = set(b.manifest().iterkeys())
     missing.difference_update(a.manifest().iterkeys())
 
+    ancestrycontext = a._repo.changelog.ancestors([b.rev()], inclusive=True)
     for f in missing:
-        ofctx = _tracefile(b[f], am, limit)
+        fctx = b[f]
+        fctx._ancestrycontext = ancestrycontext
+        ofctx = _tracefile(fctx, am, limit)
         if ofctx:
             cm[f] = ofctx.path()
 
@@ -420,3 +451,22 @@ def checkcopies(ctx, f, m1, m2, ca, limit, diverge, copy, fullcopy):
 
     if of in ma:
         diverge.setdefault(of, []).append(f)
+
+def duplicatecopies(repo, rev, fromrev, skiprev=None):
+    '''reproduce copies from fromrev to rev in the dirstate
+
+    If skiprev is specified, it's a revision that should be used to
+    filter copy records. Any copies that occur between fromrev and
+    skiprev will not be duplicated, even if they appear in the set of
+    copies between fromrev and rev.
+    '''
+    exclude = {}
+    if skiprev is not None:
+        exclude = pathcopies(repo[fromrev], repo[skiprev])
+    for dst, src in pathcopies(repo[fromrev], repo[rev]).iteritems():
+        # copies.pathcopies returns backward renames, so dst might not
+        # actually be in the dirstate
+        if dst in exclude:
+            continue
+        if repo.dirstate[dst] in "nma":
+            repo.dirstate.copy(src, dst)

@@ -8,7 +8,7 @@
 import urllib, tempfile, os, sys
 from i18n import _
 from node import bin, hex
-import changegroup as changegroupmod, bundle2
+import changegroup as changegroupmod, bundle2, pushkey as pushkeymod
 import peer, error, encoding, util, store, exchange
 
 
@@ -172,7 +172,11 @@ def decodelist(l, sep=' '):
     return []
 
 def encodelist(l, sep=' '):
-    return sep.join(map(hex, l))
+    try:
+        return sep.join(map(hex, l))
+    except TypeError:
+        print l
+        raise
 
 # batched call argument encoding
 
@@ -189,6 +193,23 @@ def unescapearg(escaped):
             .replace(':;', ';')
             .replace(':,', ',')
             .replace('::', ':'))
+
+# mapping of options accepted by getbundle and their types
+#
+# Meant to be extended by extensions. It is extensions responsibility to ensure
+# such options are properly processed in exchange.getbundle.
+#
+# supported types are:
+#
+# :nodes: list of binary nodes
+# :csv:   list of comma-separated values
+# :plain: string with no transformation needed.
+gboptsmap = {'heads':  'nodes',
+             'common': 'nodes',
+             'obsmarkers': 'boolean',
+             'bundlecaps': 'csv',
+             'listkeys': 'csv',
+             'cg': 'boolean'}
 
 # client side
 
@@ -233,7 +254,7 @@ class wirepeer(peer.peerrepository):
         yield {'nodes': encodelist(nodes)}, f
         d = f.value
         try:
-            yield [bool(int(f)) for f in d]
+            yield [bool(int(b)) for b in d]
         except ValueError:
             self._abort(error.ResponseError(_("unexpected response:"), d))
 
@@ -303,11 +324,7 @@ class wirepeer(peer.peerrepository):
         self.ui.debug('preparing listkeys for "%s"\n' % namespace)
         yield {'namespace': encoding.fromlocal(namespace)}, f
         d = f.value
-        r = {}
-        for l in d.splitlines():
-            k, v = l.split('\t')
-            r[encoding.tolocal(k)] = encoding.tolocal(v)
-        yield r
+        yield pushkeymod.decodekeys(d)
 
     def stream_out(self):
         return self._callstream('stream_out')
@@ -315,7 +332,7 @@ class wirepeer(peer.peerrepository):
     def changegroup(self, nodes, kind):
         n = encodelist(nodes)
         f = self._callcompressable("changegroup", roots=n)
-        return changegroupmod.unbundle10(f, 'UN')
+        return changegroupmod.cg1unpacker(f, 'UN')
 
     def changegroupsubset(self, bases, heads, kind):
         self.requirecap('changegroupsubset', _('look up remote changes'))
@@ -323,24 +340,33 @@ class wirepeer(peer.peerrepository):
         heads = encodelist(heads)
         f = self._callcompressable("changegroupsubset",
                                    bases=bases, heads=heads)
-        return changegroupmod.unbundle10(f, 'UN')
+        return changegroupmod.cg1unpacker(f, 'UN')
 
-    def getbundle(self, source, heads=None, common=None, bundlecaps=None,
-                  **kwargs):
+    def getbundle(self, source, **kwargs):
         self.requirecap('getbundle', _('look up remote changes'))
         opts = {}
-        if heads is not None:
-            opts['heads'] = encodelist(heads)
-        if common is not None:
-            opts['common'] = encodelist(common)
-        if bundlecaps is not None:
-            opts['bundlecaps'] = ','.join(bundlecaps)
-        opts.update(kwargs)
+        for key, value in kwargs.iteritems():
+            if value is None:
+                continue
+            keytype = gboptsmap.get(key)
+            if keytype is None:
+                assert False, 'unexpected'
+            elif keytype == 'nodes':
+                value = encodelist(value)
+            elif keytype == 'csv':
+                value = ','.join(value)
+            elif keytype == 'boolean':
+                value = '%i' % bool(value)
+            elif keytype != 'plain':
+                raise KeyError('unknown getbundle option type %s'
+                               % keytype)
+            opts[key] = value
         f = self._callcompressable("getbundle", **opts)
-        if bundlecaps is not None and 'HG2X' in bundlecaps:
+        bundlecaps = kwargs.get('bundlecaps')
+        if bundlecaps is not None and 'HG2Y' in bundlecaps:
             return bundle2.unbundle20(self.ui, f)
         else:
-            return changegroupmod.unbundle10(f, 'UN')
+            return changegroupmod.cg1unpacker(f, 'UN')
 
     def unbundle(self, cg, heads, source):
         '''Send cg (a readable file-like object representing the
@@ -489,7 +515,7 @@ def options(cmd, keys, others):
             opts[k] = others[k]
             del others[k]
     if others:
-        sys.stderr.write("abort: %s got unexpected arguments %s\n"
+        sys.stderr.write("warning: %s ignored unexpected arguments %s\n"
                          % (cmd, ",".join(others)))
     return opts
 
@@ -588,7 +614,7 @@ def _capabilities(repo, proto):
         else:
             caps.append('streamreqs=%s' % ','.join(requiredformats))
     if repo.ui.configbool('experimental', 'bundle2-exp', False):
-        capsblob = bundle2.encodecaps(repo.bundle2caps)
+        capsblob = bundle2.encodecaps(bundle2.getrepocaps(repo))
         caps.append('bundle2-exp=' + urllib.quote(capsblob))
     caps.append('unbundle=%s' % ','.join(changegroupmod.bundlepriority))
     caps.append('httpheader=1024')
@@ -627,12 +653,18 @@ gboptslist = ['heads', 'common', 'bundlecaps']
 
 @wireprotocommand('getbundle', '*')
 def getbundle(repo, proto, others):
-    opts = options('getbundle', gboptslist, others)
+    opts = options('getbundle', gboptsmap.keys(), others)
     for k, v in opts.iteritems():
-        if k in ('heads', 'common'):
+        keytype = gboptsmap[k]
+        if keytype == 'nodes':
             opts[k] = decodelist(v)
-        elif k == 'bundlecaps':
+        elif keytype == 'csv':
             opts[k] = set(v.split(','))
+        elif keytype == 'boolean':
+            opts[k] = bool(v)
+        elif keytype != 'plain':
+            raise KeyError('unknown getbundle option type %s'
+                           % keytype)
     cg = exchange.getbundle(repo, 'serve', **opts)
     return streamres(proto.groupchunks(cg))
 
@@ -655,9 +687,7 @@ def hello(repo, proto):
 @wireprotocommand('listkeys', 'namespace')
 def listkeys(repo, proto, namespace):
     d = repo.listkeys(encoding.tolocal(namespace)).items()
-    t = '\n'.join(['%s\t%s' % (encoding.fromlocal(k), encoding.fromlocal(v))
-                   for k, v in d])
-    return t
+    return pushkeymod.encodekeys(d)
 
 @wireprotocommand('lookup', 'key')
 def lookup(repo, proto, key):
@@ -752,7 +782,7 @@ def stream(repo, proto):
                       (len(entries), total_bytes))
         yield '%d %d\n' % (len(entries), total_bytes)
 
-        sopener = repo.sopener
+        sopener = repo.svfs
         oldaudit = sopener.mustaudit
         debugflag = repo.ui.debugflag
         sopener.mustaudit = False
@@ -801,7 +831,7 @@ def unbundle(repo, proto, heads):
             r = exchange.unbundle(repo, gen, their_heads, 'serve',
                                   proto._client())
             if util.safehasattr(r, 'addpart'):
-                # The return looks streameable, we are in the bundle2 case and
+                # The return looks streamable, we are in the bundle2 case and
                 # should return a stream.
                 return streamres(r.getchunks())
             return pushres(r)
@@ -809,11 +839,13 @@ def unbundle(repo, proto, heads):
         finally:
             fp.close()
             os.unlink(tempname)
-    except bundle2.UnknownPartError, exc:
+    except error.BundleValueError, exc:
             bundler = bundle2.bundle20(repo.ui)
-            part = bundle2.bundlepart('B2X:ERROR:UNKNOWNPART',
-                                      [('parttype', str(exc))])
-            bundler.addpart(part)
+            errpart = bundler.newpart('b2x:error:unsupportedcontent')
+            if exc.parttype is not None:
+                errpart.addparam('parttype', exc.parttype)
+            if exc.params:
+                errpart.addparam('params', '\0'.join(exc.params))
             return streamres(bundler.getchunks())
     except util.Abort, inst:
         # The old code we moved used sys.stderr directly.
@@ -826,7 +858,7 @@ def unbundle(repo, proto, heads):
             advargs = []
             if inst.hint is not None:
                 advargs.append(('hint', inst.hint))
-            bundler.addpart(bundle2.bundlepart('B2X:ERROR:ABORT',
+            bundler.addpart(bundle2.bundlepart('b2x:error:abort',
                                                manargs, advargs))
             return streamres(bundler.getchunks())
         else:
@@ -835,9 +867,7 @@ def unbundle(repo, proto, heads):
     except error.PushRaced, exc:
         if getattr(exc, 'duringunbundle2', False):
             bundler = bundle2.bundle20(repo.ui)
-            part = bundle2.bundlepart('B2X:ERROR:PUSHRACED',
-                                      [('message', str(exc))])
-            bundler.addpart(part)
+            bundler.newpart('b2x:error:pushraced', [('message', str(exc))])
             return streamres(bundler.getchunks())
         else:
             return pusherr(str(exc))

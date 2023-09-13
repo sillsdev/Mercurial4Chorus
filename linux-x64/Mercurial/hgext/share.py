@@ -6,15 +6,24 @@
 '''share a common history between several working directories'''
 
 from mercurial.i18n import _
-from mercurial import hg, commands, util
+from mercurial import cmdutil, hg, util, extensions, bookmarks
+from mercurial.hg import repository, parseurl
+import errno
 
+cmdtable = {}
+command = cmdutil.command(cmdtable)
 testedwith = 'internal'
 
-def share(ui, source, dest=None, noupdate=False):
+@command('share',
+    [('U', 'noupdate', None, _('do not create a working copy')),
+     ('B', 'bookmarks', None, _('also share bookmarks'))],
+    _('[-U] [-B] SOURCE [DEST]'),
+    norepo=True)
+def share(ui, source, dest=None, noupdate=False, bookmarks=False):
     """create a new shared repository
 
     Initialize a new repository and working directory that shares its
-    history with another repository.
+    history (and optionally bookmarks) with another repository.
 
     .. note::
 
@@ -28,15 +37,16 @@ def share(ui, source, dest=None, noupdate=False):
        the broken clone to reset it to a changeset that still exists.
     """
 
-    return hg.share(ui, source, dest, not noupdate)
+    return hg.share(ui, source, dest, not noupdate, bookmarks)
 
+@command('unshare', [], '')
 def unshare(ui, repo):
     """convert a shared repository to a normal one
 
     Copy the store data to the repo and remove the sharedpath data.
     """
 
-    if repo.sharedpath == repo.path:
+    if not repo.shared():
         raise util.Abort(_("this is not a shared repo"))
 
     destlock = lock = None
@@ -61,15 +71,55 @@ def unshare(ui, repo):
     # update store, spath, sopener and sjoin of repo
     repo.unfiltered().__init__(repo.baseui, repo.root)
 
-cmdtable = {
-    "share":
-    (share,
-     [('U', 'noupdate', None, _('do not create a working copy'))],
-     _('[-U] SOURCE [DEST]')),
-    "unshare":
-    (unshare,
-    [],
-    ''),
-}
+def extsetup(ui):
+    extensions.wrapfunction(bookmarks.bmstore, 'getbkfile', getbkfile)
+    extensions.wrapfunction(bookmarks.bmstore, 'recordchange', recordchange)
+    extensions.wrapfunction(bookmarks.bmstore, 'write', write)
 
-commands.norepo += " share"
+def _hassharedbookmarks(repo):
+    """Returns whether this repo has shared bookmarks"""
+    try:
+        shared = repo.vfs.read('shared').splitlines()
+    except IOError, inst:
+        if inst.errno != errno.ENOENT:
+            raise
+        return False
+    return 'bookmarks' in shared
+
+def _getsrcrepo(repo):
+    """
+    Returns the source repository object for a given shared repository.
+    If repo is not a shared repository, return None.
+    """
+    if repo.sharedpath == repo.path:
+        return None
+
+    # the sharedpath always ends in the .hg; we want the path to the repo
+    source = repo.vfs.split(repo.sharedpath)[0]
+    srcurl, branches = parseurl(source)
+    return repository(repo.ui, srcurl)
+
+def getbkfile(orig, self, repo):
+    if _hassharedbookmarks(repo):
+        srcrepo = _getsrcrepo(repo)
+        if srcrepo is not None:
+            repo = srcrepo
+    return orig(self, repo)
+
+def recordchange(orig, self, tr):
+    # Continue with write to local bookmarks file as usual
+    orig(self, tr)
+
+    if _hassharedbookmarks(self._repo):
+        srcrepo = _getsrcrepo(self._repo)
+        if srcrepo is not None:
+            category = 'share-bookmarks'
+            tr.addpostclose(category, lambda tr: self._writerepo(srcrepo))
+
+def write(orig, self):
+    # First write local bookmarks file in case we ever unshare
+    orig(self)
+    if _hassharedbookmarks(self._repo):
+        srcrepo = _getsrcrepo(self._repo)
+        if srcrepo is not None:
+            self._writerepo(srcrepo)
