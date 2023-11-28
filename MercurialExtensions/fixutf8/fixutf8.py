@@ -69,9 +69,9 @@ def checklabelwrapper(orig, repo, lbl, kind):
 		orig(repo, lbl, kind) #let Mercurial test all other branch names
 
 # extsetup is only required on windows
-def extsetup():
+def extsetup(ui):
 	if sys.platform == 'win32':
-		winextsetup()
+		winextsetup(ui)
 
 # uisetup on linux needs only to enable number only branches
 def uisetup(ui):
@@ -85,7 +85,7 @@ if sys.platform == 'win32':
 
 	from mercurial import demandimport
 
-	demandimport.ignore.extend(["win32helper", "osutil"])
+	demandimport.ignores.update(["win32helper", "osutil"])
 
 	try:
 		import win32helper
@@ -199,7 +199,7 @@ def winuisetup(ui):
 	extensions.wrapfunction(_ui.ui, "write", localize(win32helper.hStdOut))
 	extensions.wrapfunction(_ui.ui, "write_err", localize(win32helper.hStdErr))
 
-def winextsetup():
+def winextsetup(ui):
 	oldlistdir = osutil.listdir
 
 	osutil.listdir = pureosutil.listdir # force pure listdir
