@@ -13,6 +13,7 @@
 #  Distributed under the terms of the 3-Clause BSD
 #
 
+from __future__ import print_function
 import sys
 from ctypes import *
 from ctypes.wintypes import *
@@ -420,7 +421,7 @@ if sys.platform == "win32" and windll:
 
 		def _stdout_raw(self, s):
 			"""Writes the string to stdout"""
-			print s
+			print(s)
 			sys.stdout.flush()
 
 		def _stderr_raw(self, s):

@@ -43,6 +43,7 @@ No special configuration is needed.
 # the time, and never explicitly converted to anything
 # else.
 #
+from __future__ import print_function
 import sys
 from mercurial import extensions, scmutil
 import mercurial.ui as _ui
@@ -147,8 +148,8 @@ if sys.platform == 'win32':
 def test():
 	if sys.platform != 'win32':
 		return
-	print win32helper.getargs()
-	print sys.argv
+	print(win32helper.getargs())
+	print(sys.argv)
 
 	uargs = ['P:\\hg-fixutf8\\fixutf8.py', 'thi\xc5\x9b', 'i\xc5\x9b',
 			 '\xc4\x85', 't\xc4\x99\xc5\x9bt']
@@ -161,11 +162,11 @@ def utf8wrapper(orig, *args, **kargs):
 	except UnicodeDecodeError:
 		try:
 			return fromunicode(orig(*tounicode1252(args), **tounicode1252(kargs)))
-		except Exception, e:
-			# print "utf8wrapper 1252 decode error: Exception: ", repr(e)
+		except Exception as e:
+			# print("utf8wrapper 1252 decode error: Exception: ", repr(e))
 			raise
-	except Exception, e:
-		# print "utf8wrapper exception while calling %s" % orig.__name__
+	except Exception as e:
+		# print("utf8wrapper exception while calling %s" % orig.__name__)
 		raise
 
 def winuisetup(ui):
@@ -210,11 +211,11 @@ def winextsetup():
 		except UnicodeDecodeError:
 			try:
 				return fromunicode(tounicode1252(path)).upper()
-			except Exception, e:
-				print "utf8wrapper 1252 decode error: Exception: ", repr(e)
+			except Exception as e:
+				print("utf8wrapper 1252 decode error: Exception: ", repr(e))
 				raise
-		except Exception, e:
-			print "utf8wrapper exception while calling %s" % orig.__name__
+		except Exception as e:
+			print("utf8wrapper exception while calling %s" % orig.__name__)
 			raise
 
 	windows.normcase = normcase_utf8
