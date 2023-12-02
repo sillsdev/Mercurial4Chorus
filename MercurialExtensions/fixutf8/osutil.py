@@ -1,3 +1,4 @@
+from __future__ import print_function
 import os, sys
 import stat as _stat
 
@@ -26,7 +27,7 @@ def listdir(path, stat=False, skip=None):
 	  (name, type)
 	'''
 	result = []
-	prefix = path
+	prefix = (path if type(path) is str else path.decode('utf-8'))
 	if not prefix.endswith(os.sep):
 		prefix += os.sep
 	names = [name.decode('utf-8') for name in os.listdir(path)]
@@ -36,7 +37,7 @@ def listdir(path, stat=False, skip=None):
 		if fn == skip and _stat.S_ISDIR(st.st_mode):
 			return []
 		if stat:
-			result.append((fn, _mode_to_kind(st.st_mode), st))
+			result.append((fn.encode('utf-8'), _mode_to_kind(st.st_mode), st))
 		else:
-			result.append((fn, _mode_to_kind(st.st_mode)))
+			result.append((fn.encode('utf-8'), _mode_to_kind(st.st_mode)))
 	return result
