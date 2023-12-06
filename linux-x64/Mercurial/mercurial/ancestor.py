@@ -1,13 +1,21 @@
 # ancestor.py - generic DAG ancestor algorithm for mercurial
 #
-# Copyright 2006 Matt Mackall <mpm@selenic.com>
+# Copyright 2006 Olivia Mackall <olivia@selenic.com>
 #
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+
 import heapq
-import util
-from node import nullrev
+
+from .node import nullrev
+from . import (
+    dagop,
+    policy,
+)
+
+parsers = policy.importmod('parsers')
+
 
 def commonancestorsheads(pfunc, *nodes):
     """Returns a set with the heads of all common ancestors of all nodes,
@@ -44,7 +52,7 @@ def commonancestorsheads(pfunc, *nodes):
                 sv |= poison
                 if v in nodes:
                     # history is linear
-                    return set([v])
+                    return {v}
         if sv < poison:
             for p in pfunc(v):
                 sp = seen[p]
@@ -65,6 +73,7 @@ def commonancestorsheads(pfunc, *nodes):
                 seen[p] = sv
     return gca
 
+
 def ancestors(pfunc, *orignodes):
     """
     Returns the common ancestors of a and b that are furthest from a
@@ -72,6 +81,7 @@ def ancestors(pfunc, *orignodes):
 
     pfunc must return a list of parent vertices for a given vertex.
     """
+
     def deepest(nodes):
         interesting = {}
         count = max(nodes) + 1
@@ -96,12 +106,12 @@ def ancestors(pfunc, *orignodes):
                 if p == nullrev:
                     continue
                 dp = depth[p]
-                nsp = sp = seen[p]
+                sp = seen[p]
                 if dp <= dv:
                     depth[p] = dv + 1
                     if sp != sv:
                         interesting[sv] += 1
-                        nsp = seen[p] = sv
+                        seen[p] = sv
                         if sp:
                             interesting[sp] -= 1
                             if interesting[sp] == 0:
@@ -126,7 +136,7 @@ def ancestors(pfunc, *orignodes):
         k = 0
         for i in interesting:
             k |= i
-        return set(n for (i, n) in mapping if k & i)
+        return {n for (i, n) in mapping if k & i}
 
     gca = commonancestorsheads(pfunc, *orignodes)
 
@@ -134,12 +144,14 @@ def ancestors(pfunc, *orignodes):
         return gca
     return deepest(gca)
 
-class incrementalmissingancestors(object):
-    '''persistent state used to calculate missing ancestors incrementally
+
+class incrementalmissingancestors:
+    """persistent state used to calculate missing ancestors incrementally
 
     Although similar in spirit to lazyancestors below, this is a separate class
     because trying to support contains and missingancestors operations with the
-    same internal data structures adds needless complexity.'''
+    same internal data structures adds needless complexity."""
+
     def __init__(self, pfunc, bases):
         self.bases = set(bases)
         if not self.bases:
@@ -148,11 +160,14 @@ class incrementalmissingancestors(object):
 
     def hasbases(self):
         '''whether the common set has any non-trivial bases'''
-        return self.bases and self.bases != set([nullrev])
+        return self.bases and self.bases != {nullrev}
 
     def addbases(self, newbases):
         '''grow the ancestor set by adding new bases'''
         self.bases.update(newbases)
+
+    def basesheads(self):
+        return dagop.headrevs(self.bases, self.pfunc)
 
     def removeancestorsfrom(self, revs):
         '''remove all ancestors of bases from the set revs (in place)'''
@@ -171,7 +186,7 @@ class incrementalmissingancestors(object):
             # no revs to consider
             return
 
-        for curr in xrange(start, min(revs) - 1, -1):
+        for curr in range(start, min(revs) - 1, -1):
             if curr not in bases:
                 continue
             revs.discard(curr)
@@ -181,12 +196,12 @@ class incrementalmissingancestors(object):
                 break
 
     def missingancestors(self, revs):
-        '''return all the ancestors of revs that are not ancestors of self.bases
+        """return all the ancestors of revs that are not ancestors of self.bases
 
         This may include elements from revs.
 
         Equivalent to the revset (::revs - ::self.bases). Revs are returned in
-        revision number order, which is a topological order.'''
+        revision number order, which is a topological order."""
         revsvisit = set(revs)
         basesvisit = self.bases
         pfunc = self.pfunc
@@ -212,7 +227,7 @@ class incrementalmissingancestors(object):
         # exit.
 
         missing = []
-        for curr in xrange(start, nullrev, -1):
+        for curr in range(start, nullrev, -1):
             if not revsvisit:
                 break
 
@@ -254,7 +269,53 @@ class incrementalmissingancestors(object):
         missing.reverse()
         return missing
 
-class lazyancestors(object):
+
+# Extracted from lazyancestors.__iter__ to avoid a reference cycle
+def _lazyancestorsiter(parentrevs, initrevs, stoprev, inclusive):
+    seen = {nullrev}
+    heappush = heapq.heappush
+    heappop = heapq.heappop
+    heapreplace = heapq.heapreplace
+    see = seen.add
+
+    if inclusive:
+        visit = [-r for r in initrevs]
+        seen.update(initrevs)
+        heapq.heapify(visit)
+    else:
+        visit = []
+        heapq.heapify(visit)
+        for r in initrevs:
+            p1, p2 = parentrevs(r)
+            if p1 not in seen:
+                heappush(visit, -p1)
+                see(p1)
+            if p2 not in seen:
+                heappush(visit, -p2)
+                see(p2)
+
+    while visit:
+        current = -visit[0]
+        if current < stoprev:
+            break
+        yield current
+        # optimize out heapq operation if p1 is known to be the next highest
+        # revision, which is quite common in linear history.
+        p1, p2 = parentrevs(current)
+        if p1 not in seen:
+            if current - p1 == 1:
+                visit[0] = -p1
+            else:
+                heapreplace(visit, -p1)
+            see(p1)
+        else:
+            heappop(visit)
+        if p2 not in seen:
+            heappush(visit, -p2)
+            see(p2)
+
+
+class lazyancestors:
     def __init__(self, pfunc, revs, stoprev=0, inclusive=False):
         """Create a new object generating ancestors for the given revs. Does
         not generate revs lower than stoprev.
@@ -268,87 +329,65 @@ class lazyancestors(object):
 
         Result does not include the null revision."""
         self._parentrevs = pfunc
-        self._initrevs = revs
+        self._initrevs = [r for r in revs if r >= stoprev]
         self._stoprev = stoprev
         self._inclusive = inclusive
 
-        # Initialize data structures for __contains__.
-        # For __contains__, we use a heap rather than a deque because
-        # (a) it minimizes the number of parentrevs calls made
-        # (b) it makes the loop termination condition obvious
-        # Python's heap is a min-heap. Multiply all values by -1 to convert it
-        # into a max-heap.
-        self._containsvisit = [-rev for rev in revs]
-        heapq.heapify(self._containsvisit)
-        if inclusive:
-            self._containsseen = set(revs)
-        else:
-            self._containsseen = set()
+        self._containsseen = set()
+        self._containsiter = _lazyancestorsiter(
+            self._parentrevs, self._initrevs, self._stoprev, self._inclusive
+        )
 
     def __nonzero__(self):
         """False if the set is empty, True otherwise."""
         try:
-            iter(self).next()
+            next(iter(self))
             return True
         except StopIteration:
             return False
+
+    __bool__ = __nonzero__
 
     def __iter__(self):
         """Generate the ancestors of _initrevs in reverse topological order.
 
         If inclusive is False, yield a sequence of revision numbers starting
-        with the parents of each revision in revs, i.e., each revision is *not*
-        considered an ancestor of itself.  Results are in breadth-first order:
-        parents of each rev in revs, then parents of those, etc.
+        with the parents of each revision in revs, i.e., each revision is
+        *not* considered an ancestor of itself. Results are emitted in reverse
+        revision number order. That order is also topological: a child is
+        always emitted before its parent.
 
-        If inclusive is True, yield all the revs first (ignoring stoprev),
-        then yield all the ancestors of revs as when inclusive is False.
-        If an element in revs is an ancestor of a different rev it is not
-        yielded again."""
-        seen = set()
-        revs = self._initrevs
-        if self._inclusive:
-            for rev in revs:
-                yield rev
-            seen.update(revs)
-
-        parentrevs = self._parentrevs
-        stoprev = self._stoprev
-        visit = util.deque(revs)
-
-        while visit:
-            for parent in parentrevs(visit.popleft()):
-                if parent >= stoprev and parent not in seen:
-                    visit.append(parent)
-                    seen.add(parent)
-                    yield parent
+        If inclusive is True, the source revisions are also yielded. The
+        reverse revision number order is still enforced."""
+        return _lazyancestorsiter(
+            self._parentrevs, self._initrevs, self._stoprev, self._inclusive
+        )
 
     def __contains__(self, target):
         """Test whether target is an ancestor of self._initrevs."""
-        # Trying to do both __iter__ and __contains__ using the same visit
-        # heap and seen set is complex enough that it slows down both. Keep
-        # them separate.
         seen = self._containsseen
         if target in seen:
             return True
+        iter = self._containsiter
+        if iter is None:
+            # Iterator exhausted
+            return False
+        # Only integer target is valid, but some callers expect 'None in self'
+        # to be False. So we explicitly allow it.
+        if target is None:
+            return False
 
-        parentrevs = self._parentrevs
-        visit = self._containsvisit
-        stoprev = self._stoprev
-        heappop = heapq.heappop
-        heappush = heapq.heappush
-
-        targetseen = False
-
-        while visit and -visit[0] > target and not targetseen:
-            for parent in parentrevs(-heappop(visit)):
-                if parent < stoprev or parent in seen:
-                    continue
-                # We need to make sure we push all parents into the heap so
-                # that we leave it in a consistent state for future calls.
-                heappush(visit, -parent)
-                seen.add(parent)
-                if parent == target:
-                    targetseen = True
-
-        return targetseen
+        see = seen.add
+        try:
+            while True:
+                rev = next(iter)
+                see(rev)
+                if rev == target:
+                    return True
+                if rev < target:
+                    return False
+        except StopIteration:
+            # Set to None to indicate fast-path can be used next time, and to
+            # free up memory.
+            self._containsiter = None
+            return False
