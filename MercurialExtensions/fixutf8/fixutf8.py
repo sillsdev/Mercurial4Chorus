@@ -263,16 +263,6 @@ def winextsetup(ui):
 
 	util.posixfile = posixfile_utf8
 
-	# class ObjectWrapper(BaseClass):
-	# 	def __init__(self, baseObject):
-	# 		self.__class__ = type(baseObject.__class__.__name__,
-	# 							(self.__class__, baseObject.__class__),
-	# 							{})
-	# 		self.__dict__ = baseObject.__dict__
-
-	# 	def overriddenMethod(self):
-	# 		...
-
 	if util.atomictempfile:
 		class atomictempfile_utf8(posixfile_utf8):
 			"""file-like object that atomically updates a file
