@@ -112,7 +112,6 @@ if sys.platform == "win32" and windll:
 	hStdErr = GetStdHandle(0xFFFFfff4)
 
 	def getcwdwrapper(orig):
-		# print("getcwdwrapper('%s')" % orig)
 		chars = GetCurrentDirectory(0, None) + 1
 		p = create_unicode_buffer(chars)
 		if 0 == GetCurrentDirectory(chars, p):
@@ -120,9 +119,7 @@ if sys.platform == "win32" and windll:
 			if err < 0:
 				raise pywintypes.error(err, "GetCurrentDirectory",
 						win32api.FormatMessage(err))
-		# print("p.value is a %s with value %s which decodes to %s" % (type(p.value), repr(p.value), tounicode(fromunicode(p.value))))
-		# print("Returning a str obj")
-		return ((p.value))
+		return p.value
 
 	def getcwdbwrapper(orig):
 		return fromunicode(getcwdwrapper(orig))
