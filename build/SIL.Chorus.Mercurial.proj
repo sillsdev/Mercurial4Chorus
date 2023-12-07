@@ -6,7 +6,7 @@
 		<BuildCounter Condition="'$(BuildCounter)' == ''">0</BuildCounter>
 		<NuGetBuildDir>$(MSBuildProjectDirectory)/../output/files</NuGetBuildDir>
 		<PreRelease Condition="'$(PreRelease)' == ''">-beta</PreRelease>
-		<PkgVersion Condition="'$(PkgVersion)' == ''">3.0.3$(PreRelease)$(BuildCounter)</PkgVersion>
+		<PkgVersion Condition="'$(PkgVersion)' == ''">6.5.1$(PreRelease)$(BuildCounter)</PkgVersion>
 	</PropertyGroup>
 
 	<Import Project="NuGet.targets"/>

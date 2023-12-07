@@ -1,0 +1,9 @@
+[merge-tools]
+kdiff3.executable=C:\Program Files\TortoiseHg\lib\kdiff3.exe
+kdiff3-noauto.executable=C:\Program Files\TortoiseHg\lib\kdiff3.exe
+[ui]
+ssh="C:\Program Files\TortoiseHg\lib\TortoisePlink.exe" -ssh -2
+[terminal-tools]
+qt5spawncmd.executable=C:\Program Files\TortoiseHg\lib\spawn.cmd
+qt5spawncmd.args=%(reponame)s
+qt5spawncmd.priority=0
