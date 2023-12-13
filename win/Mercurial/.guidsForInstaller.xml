@@ -19,4 +19,12 @@
   <File Id="mercurial.unins000.dat" Guid="E2B9A683-0CCD-41EA-9F62-5BBA6CCD0A90" />
   <File Id="mercurial.unins000.exe" Guid="E641CBE9-18B6-4BA7-AB9E-B05EDC9963D2" />
   <File Id="mercurial.w9xpopen.exe" Guid="E10BB6A7-1325-4AD3-B6A1-3F8869125D8F" />
+  <File Id="mercurial.concrt140.dll" Guid="4eab95c0-da91-4749-bb7a-015176e63b58" />
+  <File Id="mercurial.libcrypto_1_1_x64.dll" Guid="bd414959-e2b5-43a4-991b-9ce24d6798cc" />
+  <File Id="mercurial.libssl_1_1_x64.dll" Guid="ac0005b7-f031-4868-8d02-3f601e6fede2" />
+  <File Id="mercurial.msvcp140.dll" Guid="c92284e3-b83d-4f86-a21a-ecf9e9ac4f30" />
+  <File Id="mercurial.msvcp140_1.dll" Guid="8e79712e-f9d4-4dee-8a26-d8edfac2e59b" />
+  <File Id="mercurial.python39.dll" Guid="23ee5caf-04ba-438e-8a71-a6b5db737450" />
+  <File Id="mercurial.vcruntime140.dll" Guid="43f601f6-c480-477f-9ad1-a41a042f1bf8" />
+  <File Id="mercurial.vcruntime140_1.dll" Guid="dd1db127-a458-4147-a988-1e0e7a8aaa07" />
 </InstallerMetadata>
