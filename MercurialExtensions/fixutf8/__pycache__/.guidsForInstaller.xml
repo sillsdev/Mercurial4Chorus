@@ -1,0 +1,13 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<!--This file is generated and then updated by an MSBuild task.  It preserves the automatically-generated guids assigned files that will be installed on user machines. So it should be held in source control.-->
+<InstallerMetadata>
+  <File Id="ions.fixutf8.__pycache__.buildcpmap.cpython_39.pyc" Guid="3e292b5e-8eab-4da7-ae01-1d1af7acec0b" />
+  <File Id="xtensions.fixutf8.__pycache__.cpmap.cpython_39.pyc" Guid="7fbf57e0-16b4-4972-b5a6-2ea321824088" />
+  <File Id="ensions.fixutf8.__pycache__.fixutf8.cpython_39.pyc" Guid="de46e069-17c4-4e95-8ffe-73277e56016b" />
+  <File Id="tensions.fixutf8.__pycache__.osutil.cpython_39.pyc" Guid="baa3650e-aa08-4589-826b-31cd51f26780" />
+  <File Id="ons.fixutf8.__pycache__.win32helper.cpython_39.pyc" Guid="9c3e4db0-c7f4-4bab-b793-1c85ddacb13e" />
+  <File Id="ons.fixutf8.__pycache__.cpmap.cpython_39.opt_1.pyc" Guid="48a3dd5b-5649-49a5-8b3e-18f329c10684" />
+  <File Id="s.fixutf8.__pycache__.fixutf8.cpython_39.opt_1.pyc" Guid="9b5ddf51-c490-4280-9a54-c05eac0341d2" />
+  <File Id="ns.fixutf8.__pycache__.osutil.cpython_39.opt_1.pyc" Guid="85c53db1-80a2-4778-b5f1-0ef9340d67a3" />
+  <File Id="xutf8.__pycache__.win32helper.cpython_39.opt_1.pyc" Guid="b9226463-399b-4e2d-aa9f-37759487814e" />
+</InstallerMetadata>

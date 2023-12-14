@@ -1,0 +1,14 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<!--This file is generated and then updated by an MSBuild task.  It preserves the automatically-generated guids assigned files that will be installed on user machines. So it should be held in source control.-->
+<InstallerMetadata>
+  <File Id="mercurial.contrib.bash_completion" Guid="75d38e4b-91fd-4a29-965f-c61405e10728" />
+  <File Id="mercurial.contrib.hgk" Guid="ba507c60-99a0-474a-8577-d468946d159f" />
+  <File Id="mercurial.contrib.hgweb.fcgi" Guid="3cebb764-4a68-4770-9d9e-eecb1814c3ce" />
+  <File Id="mercurial.contrib.hgweb.wsgi" Guid="4742ac50-a367-4116-8398-9f780e059396" />
+  <File Id="mercurial.contrib.logo_droplets.svg" Guid="9266a7e2-c868-42cf-9f9e-f73792a43d4c" />
+  <File Id="mercurial.contrib.mercurial.el" Guid="25f723f8-ff38-4617-8e91-c8938a5882dd" />
+  <File Id="mercurial.contrib.tcsh_completion" Guid="6d4cf914-df69-42de-b860-c89c04c8ebcd" />
+  <File Id="mercurial.contrib.tcsh_completion_build.sh" Guid="3d581884-2ee1-4949-8aac-d592b24abb36" />
+  <File Id="mercurial.contrib.xml.rnc" Guid="d4c8c223-1099-42e4-b83f-e39f4e4ceb76" />
+  <File Id="mercurial.contrib.zsh_completion" Guid="db45b1dc-c9db-4366-b936-d2c7b9d374f5" />
+</InstallerMetadata>
