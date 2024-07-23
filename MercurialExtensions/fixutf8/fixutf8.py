@@ -69,7 +69,8 @@ def checklabelwrapper(orig, repo, lbl, kind):
 
 # extsetup is only required on windows
 def extsetup():
-	if sys.platform == 'win32':
+	# don't setup extension when running under tortoisehg
+	if sys.platform == 'win32' and not sys.argv[0].endswith('thgw.exe'):
 		winextsetup()
 
 # uisetup on linux needs only to enable number only branches
