@@ -1,0 +1,10 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<!--This file is generated and then updated by an MSBuild task.  It preserves the automatically-generated guids assigned files that will be installed on user machines. So it should be held in source control.-->
+<InstallerMetadata>
+  <File Id="mercurial.defaultrc.EditorTools.rc" Guid="bf72d8ce-c95d-49d9-b9e4-9b103cd95110" />
+  <File Id="mercurial.defaultrc.Mercurial.rc" Guid="7dcf60f9-809e-4a3a-9cb1-f7d99d4726c4" />
+  <File Id="mercurial.defaultrc.MergePatterns.rc" Guid="c4b85478-3ecc-4166-b110-4eb6d70fcde6" />
+  <File Id="mercurial.defaultrc.MergeTools.rc" Guid="fa22312d-7a32-4f11-9c98-93f546d592b6" />
+  <File Id="mercurial.defaultrc.Paths.rc" Guid="7d782105-8675-47ac-a775-42f48845ff3d" />
+  <File Id="mercurial.defaultrc.TerminalTools.rc" Guid="61e8255e-a607-4c52-858f-da6cedaf968e" />
+</InstallerMetadata>

@@ -6,7 +6,7 @@
 		<BuildCounter Condition="'$(BuildCounter)' == ''">0</BuildCounter>
 		<NuGetBuildDir>$(MSBuildProjectDirectory)/../output/files</NuGetBuildDir>
 		<PreRelease Condition="'$(PreRelease)' == ''">-beta</PreRelease>
-		<PkgVersion Condition="'$(PkgVersion)' == ''">3.0.3$(PreRelease)$(BuildCounter)</PkgVersion>
+		<PkgVersion Condition="'$(PkgVersion)' == ''">6.5.1$(PreRelease)$(BuildCounter)</PkgVersion>
 	</PropertyGroup>
 
 	<Import Project="NuGet.targets"/>
@@ -24,14 +24,12 @@
 		<PropertyGroup>
 			<NuGetPackageDir>$(MSBuildProjectDirectory)/../output</NuGetPackageDir>
 			<NuGetRuntimeFolderWin>$(NuGetBuildDir)/runtimes/win/native</NuGetRuntimeFolderWin>
-			<NuGetRuntimeFolderLinux64>$(NuGetBuildDir)/runtimes/linux-x64/native</NuGetRuntimeFolderLinux64>
-			<NuGetRuntimeFolderLinux32>$(NuGetBuildDir)/runtimes/linux-x86/native</NuGetRuntimeFolderLinux32>
+			<NuGetRuntimeFolderLinux>$(NuGetBuildDir)/runtimes/linux-x64/native</NuGetRuntimeFolderLinux>
 			<NuGetRuntimeAnyFolder>$(NuGetBuildDir)/runtimes/any</NuGetRuntimeAnyFolder>
 			<NuGetDocsFolder>$(NuGetBuildDir)/docs</NuGetDocsFolder>
 		</PropertyGroup>
 		<ItemGroup>
-			<Linux64Artifacts Include="$(RootDir)\linux-x64\**\*.*" />
-			<Linux32Artifacts Include="$(RootDir)\linux-x86\**\*.*" />
+			<LinuxArtifacts Include="$(RootDir)\linux-x64\**\*.*" />
 			<WinArtifacts Include="$(RootDir)\win\**\*.*" />
 			<Extensions Include="$(RootDir)\MercurialExtensions\**\*.*" />
 			<NuSpecFile Include="$(RootDir)\assets\*.nuspec" />
@@ -40,8 +38,7 @@
 
 		<!-- Libraries -->
 		<MakeDir Directories="$(NuGetBuildDir)"/>
-		<Copy SourceFiles="@(Linux64Artifacts)" DestinationFolder="$(NuGetRuntimeFolderLinux64)\%(RecursiveDir)" />
-		<Copy SourceFiles="@(Linux32Artifacts)" DestinationFolder="$(NuGetRuntimeFolderLinux32)\%(RecursiveDir)" />
+		<Copy SourceFiles="@(LinuxArtifacts)" DestinationFolder="$(NuGetRuntimeFolderLinux)\%(RecursiveDir)" />
 		<Copy SourceFiles="@(WinArtifacts)" DestinationFolder="$(NuGetRuntimeFolderWin)\%(RecursiveDir)" />
 		<Copy SourceFiles="@(Extensions)" DestinationFolder="$(NuGetRuntimeAnyFolder)\MercurialExtensions\%(RecursiveDir)" />
 		<Copy SourceFiles="@(TargetFile)" DestinationFolder="$(NuGetBuildDir)\build" />

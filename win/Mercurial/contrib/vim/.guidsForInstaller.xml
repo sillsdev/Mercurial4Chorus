@@ -1,0 +1,10 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<!--This file is generated and then updated by an MSBuild task.  It preserves the automatically-generated guids assigned files that will be installed on user machines. So it should be held in source control.-->
+<InstallerMetadata>
+  <File Id="mercurial.contrib.vim.hg_menu.vim" Guid="5d544b2d-0df7-43ad-8490-84ca033d1c83" />
+  <File Id="mercurial.contrib.vim.HGAnnotate.vim" Guid="be4bf1fd-0c53-49bd-ad03-e4046d0bc7a1" />
+  <File Id="mercurial.contrib.vim.hgcommand.vim" Guid="902ea048-fdb7-4632-8ee3-278908054390" />
+  <File Id="mercurial.contrib.vim.hgtest.vim" Guid="a9ab9ba6-5351-47d5-8458-3ce9efca41bb" />
+  <File Id="mercurial.contrib.vim.patchreview.txt" Guid="43a0cc4e-fc0c-4b46-aa7b-837e7f632f6c" />
+  <File Id="mercurial.contrib.vim.patchreview.vim" Guid="f0412167-2ffd-4f8b-a552-608243862b2f" />
+</InstallerMetadata>
