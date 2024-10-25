@@ -39,17 +39,26 @@ jobs:
       working-directory: hg
       env:
         VER: ${{ inputs.hg-version }}
+    - name: Build chg
+      run: |
+        make
+        chmod +x chg
+      working-directory: hg/contrib/chg
     - name: Build Mercurial
       run: make local
       working-directory: hg
     - name: Delete .hg folder prior to upload
       run: rm -rf .hg
       working-directory: hg
+    - name: Move chg binary next to hg prior to upload
+      run: mv contrib/chg/chg .
+      working-directory: hg
     - name: Upload Mercurial build results
       uses: actions/upload-artifact@v4
       with:
         name: hg-for-python-${{ matrix.python-version }}
         path: |
+          hg/chg
           hg/contrib
           hg/COPYING
           hg/hg
