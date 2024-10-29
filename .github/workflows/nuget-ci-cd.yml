@@ -97,10 +97,10 @@ jobs:
         merge-multiple: true
 
     - name: See if executable bit was preserved
-      run: ls -l linux-x64/Mercurial/hg/hg linux-x64/Mercurial/hg/chg
+      run: ls -l linux-x64/Mercurial
 
     - name: Set executable bit on hg and chg binaries again to work around download-artifact bug
-      run: chmod +x linux-x64/Mercurial/hg/hg linux-x64/Mercurial/hg/chg
+      run: chmod +x linux-x64/Mercurial/hg linux-x64/Mercurial/chg
 
     - name: Nuget pack
       run: dotnet msbuild -target:Build build/SIL.Chorus.Mercurial.proj -property:PreRelease=${{ env.release-suffix }} -property:BuildCounter=${{ github.run_number }}
