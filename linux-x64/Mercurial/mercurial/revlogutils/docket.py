@@ -15,6 +15,7 @@
 #
 # * a data file, containing variable width data for these revisions,
 
+from __future__ import annotations
 
 import os
 import random
@@ -330,7 +331,9 @@ def default_docket(revlog, version_header):
     rl_version = version_header & 0xFFFF
     if rl_version not in (constants.REVLOGV2, constants.CHANGELOGV2):
         return None
-    comp = util.compengines[revlog._compengine].revlogheader()
+    comp = util.compengines[
+        revlog.feature_config.compression_engine
+    ].revlogheader()
     docket = RevlogDocket(
         revlog,
         version_header=version_header,

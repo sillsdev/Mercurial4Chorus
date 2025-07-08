@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from ..i18n import _
 from .. import error
 

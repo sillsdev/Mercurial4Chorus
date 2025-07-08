@@ -6,6 +6,8 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
+
 import collections
 import string
 
@@ -13,7 +15,6 @@ from .. import (
     mdiff,
     node as nodemod,
     revlogutils,
-    util,
 )
 
 from . import (
@@ -230,11 +231,9 @@ def dump(ui, revlog):
     # XXX seems redundant with debug index ?
     r = revlog
     numrevs = len(r)
-    ui.write(
-        (
-            b"# rev p1rev p2rev start   end deltastart base   p1   p2"
-            b" rawsize totalsize compression heads chainlen\n"
-        )
+    ui.writenoi18n(
+        b"# rev p1rev p2rev start   end deltastart base   p1   p2"
+        b" rawsize totalsize compression heads chainlen\n"
     )
     ts = 0
     heads = set()
@@ -306,9 +305,9 @@ def debug_revlog(ui, revlog):
     # intermediate snapshot against a prior snapshot
     numsemi = 0
     # snapshot count per depth
-    numsnapdepth = collections.defaultdict(lambda: 0)
+    numsnapdepth = collections.defaultdict(int)
     # number of snapshots with a non-ancestor delta
-    numsnapdepth_nad = collections.defaultdict(lambda: 0)
+    numsnapdepth_nad = collections.defaultdict(int)
     # delta against previous revision
     numprev = 0
     # delta against prev, where prev is a non-ancestor
@@ -347,83 +346,86 @@ def debug_revlog(ui, revlog):
             l[1] = size
         l[2] += size
 
-    numrevs = len(r)
-    for rev in range(numrevs):
-        p1, p2 = r.parentrevs(rev)
-        delta = r.deltaparent(rev)
-        if format > 0:
-            s = r.rawsize(rev)
-            full_text_total_size += s
-            addsize(s, datasize)
-        if p2 != nodemod.nullrev:
-            nummerges += 1
-        size = r.length(rev)
-        if delta == nodemod.nullrev:
-            chainlengths.append(0)
-            chainbases.append(r.start(rev))
-            chainspans.append(size)
-            if size == 0:
-                numempty += 1
-                numemptytext += 1
+    with r.reading():
+        numrevs = len(r)
+        for rev in range(numrevs):
+            p1, p2 = r.parentrevs(rev)
+            delta = r.deltaparent(rev)
+            if format > 0:
+                s = r.rawsize(rev)
+                full_text_total_size += s
+                addsize(s, datasize)
+            if p2 != nodemod.nullrev:
+                nummerges += 1
+            size = r.length(rev)
+            if delta == nodemod.nullrev:
+                chainlengths.append(0)
+                chainbases.append(r.start(rev))
+                chainspans.append(size)
+                if size == 0:
+                    numempty += 1
+                    numemptytext += 1
+                else:
+                    numfull += 1
+                    numsnapdepth[0] += 1
+                    addsize(size, fullsize)
+                    addsize(size, snapsizedepth[0])
             else:
-                numfull += 1
-                numsnapdepth[0] += 1
-                addsize(size, fullsize)
-                addsize(size, snapsizedepth[0])
-        else:
-            nad = (
-                delta != p1 and delta != p2 and not r.isancestorrev(delta, rev)
-            )
-            chainlengths.append(chainlengths[delta] + 1)
-            baseaddr = chainbases[delta]
-            revaddr = r.start(rev)
-            chainbases.append(baseaddr)
-            chainspans.append((revaddr - baseaddr) + size)
-            if size == 0:
-                numempty += 1
-                numemptydelta += 1
-            elif r.issnapshot(rev):
-                addsize(size, semisize)
-                numsemi += 1
-                depth = r.snapshotdepth(rev)
-                numsnapdepth[depth] += 1
-                if nad:
-                    numsnapdepth_nad[depth] += 1
-                addsize(size, snapsizedepth[depth])
-            else:
-                addsize(size, deltasize)
-                if delta == rev - 1:
-                    numprev += 1
-                    if delta == p1:
-                        nump1prev += 1
+                nad = (
+                    delta != p1
+                    and delta != p2
+                    and not r.isancestorrev(delta, rev)
+                )
+                chainlengths.append(chainlengths[delta] + 1)
+                baseaddr = chainbases[delta]
+                revaddr = r.start(rev)
+                chainbases.append(baseaddr)
+                chainspans.append((revaddr - baseaddr) + size)
+                if size == 0:
+                    numempty += 1
+                    numemptydelta += 1
+                elif r.issnapshot(rev):
+                    addsize(size, semisize)
+                    numsemi += 1
+                    depth = r.snapshotdepth(rev)
+                    numsnapdepth[depth] += 1
+                    if nad:
+                        numsnapdepth_nad[depth] += 1
+                    addsize(size, snapsizedepth[depth])
+                else:
+                    addsize(size, deltasize)
+                    if delta == rev - 1:
+                        numprev += 1
+                        if delta == p1:
+                            nump1prev += 1
+                        elif delta == p2:
+                            nump2prev += 1
+                        elif nad:
+                            numprev_nad += 1
+                    elif delta == p1:
+                        nump1 += 1
                     elif delta == p2:
-                        nump2prev += 1
-                    elif nad:
-                        numprev_nad += 1
-                elif delta == p1:
-                    nump1 += 1
-                elif delta == p2:
-                    nump2 += 1
-                elif delta != nodemod.nullrev:
-                    numother += 1
-                    numother_nad += 1
+                        nump2 += 1
+                    elif delta != nodemod.nullrev:
+                        numother += 1
+                        numother_nad += 1
 
-        # Obtain data on the raw chunks in the revlog.
-        if util.safehasattr(r, '_getsegmentforrevs'):
-            segment = r._getsegmentforrevs(rev, rev)[1]
-        else:
-            segment = r._revlog._getsegmentforrevs(rev, rev)[1]
-        if segment:
-            chunktype = bytes(segment[0:1])
-        else:
-            chunktype = b'empty'
+            # Obtain data on the raw chunks in the revlog.
+            if hasattr(r, '_inner'):
+                segment = r._inner.get_segment_for_revs(rev, rev)[1]
+            else:
+                segment = r._revlog._getsegmentforrevs(rev, rev)[1]
+            if segment:
+                chunktype = bytes(segment[0:1])
+            else:
+                chunktype = b'empty'
 
-        if chunktype not in chunktypecounts:
-            chunktypecounts[chunktype] = 0
-            chunktypesizes[chunktype] = 0
+            if chunktype not in chunktypecounts:
+                chunktypecounts[chunktype] = 0
+                chunktypesizes[chunktype] = 0
 
-        chunktypecounts[chunktype] += 1
-        chunktypesizes[chunktype] += size
+            chunktypecounts[chunktype] += 1
+            chunktypesizes[chunktype] += size
 
     # Adjust size min value for empty cases
     for size in (datasize, fullsize, semisize, deltasize):
@@ -700,11 +702,242 @@ def debug_revlog_stats(
             revlog_type = b'file'
             revlog_target = target[1]
 
-        fm.write(b'revlog.rev-count', b'%9d', nb_rev)
-        fm.write(b'revlog.data-size', b'%12d', data_size)
+        fm.write(b'revlog_rev_count', b'%9d', nb_rev)
+        fm.write(b'revlog_data_size', b'%12d', data_size)
 
-        fm.write(b'revlog.inline', b' %-3s', b'yes' if inline else b'no')
-        fm.write(b'revlog.type', b' %-9s', revlog_type)
-        fm.write(b'revlog.target', b' %s', revlog_target)
+        fm.write(b'revlog_inline', b' %-3s', b'yes' if inline else b'no')
+        fm.write(b'revlog_type', b' %-9s', revlog_type)
+        fm.write(b'revlog_target', b' %s', revlog_target)
 
         fm.plain(b'\n')
+
+
+class DeltaChainAuditor:
+    def __init__(self, revlog):
+        self._revlog = revlog
+        self._index = self._revlog.index
+        self._generaldelta = revlog.delta_config.general_delta
+        self._chain_size_cache = {}
+        # security to avoid crash on corrupted revlogs
+        self._total_revs = len(self._index)
+
+    def revinfo(self, rev, size_info=True, dist_info=True, sparse_info=True):
+        e = self._index[rev]
+        compsize = e[constants.ENTRY_DATA_COMPRESSED_LENGTH]
+        uncompsize = e[constants.ENTRY_DATA_UNCOMPRESSED_LENGTH]
+
+        base = e[constants.ENTRY_DELTA_BASE]
+        p1 = e[constants.ENTRY_PARENT_1]
+        p2 = e[constants.ENTRY_PARENT_2]
+
+        # If the parents of a revision has an empty delta, we never try to
+        # delta against that parent, but directly against the delta base of
+        # that parent (recursively). It avoids adding a useless entry in the
+        # chain.
+        #
+        # However we need to detect that as a special case for delta-type, that
+        # is not simply "other".
+        p1_base = p1
+        if p1 != nodemod.nullrev and p1 < self._total_revs:
+            e1 = self._index[p1]
+            while e1[constants.ENTRY_DATA_COMPRESSED_LENGTH] == 0:
+                new_base = e1[constants.ENTRY_DELTA_BASE]
+                if (
+                    new_base == p1_base
+                    or new_base == nodemod.nullrev
+                    or new_base >= self._total_revs
+                ):
+                    break
+                p1_base = new_base
+                e1 = self._index[p1_base]
+        p2_base = p2
+        if p2 != nodemod.nullrev and p2 < self._total_revs:
+            e2 = self._index[p2]
+            while e2[constants.ENTRY_DATA_COMPRESSED_LENGTH] == 0:
+                new_base = e2[constants.ENTRY_DELTA_BASE]
+                if (
+                    new_base == p2_base
+                    or new_base == nodemod.nullrev
+                    or new_base >= self._total_revs
+                ):
+                    break
+                p2_base = new_base
+                e2 = self._index[p2_base]
+
+        if self._generaldelta:
+            if base == p1:
+                deltatype = b'p1'
+            elif base == p2:
+                deltatype = b'p2'
+            elif base == rev:
+                deltatype = b'base'
+            elif base == p1_base:
+                deltatype = b'skip1'
+            elif base == p2_base:
+                deltatype = b'skip2'
+            elif self._revlog.issnapshot(rev):
+                deltatype = b'snap'
+            elif base == rev - 1:
+                deltatype = b'prev'
+            else:
+                deltatype = b'other'
+        else:
+            if base == rev:
+                deltatype = b'base'
+            else:
+                deltatype = b'prev'
+
+        chain = self._revlog._deltachain(rev)[0]
+
+        data = {
+            'p1': p1,
+            'p2': p2,
+            'compressed_size': compsize,
+            'uncompressed_size': uncompsize,
+            'deltatype': deltatype,
+            'chain': chain,
+        }
+
+        if size_info or dist_info or sparse_info:
+            chain_size = 0
+            for iter_rev in reversed(chain):
+                cached = self._chain_size_cache.get(iter_rev)
+                if cached is not None:
+                    chain_size += cached
+                    break
+                e = self._index[iter_rev]
+                chain_size += e[constants.ENTRY_DATA_COMPRESSED_LENGTH]
+            self._chain_size_cache[rev] = chain_size
+            data['chain_size'] = chain_size
+
+        return data
+
+
+def debug_delta_chain(
+    revlog,
+    revs=None,
+    size_info=True,
+    dist_info=True,
+    sparse_info=True,
+):
+    auditor = DeltaChainAuditor(revlog)
+    r = revlog
+    start = r.start
+    length = r.length
+    withsparseread = revlog.data_config.with_sparse_read
+
+    header = (
+        b'    rev'
+        b'      p1'
+        b'      p2'
+        b'  chain#'
+        b' chainlen'
+        b'     prev'
+        b'   delta'
+    )
+    if size_info:
+        header += b'       size' b'    rawsize' b'  chainsize' b'     ratio'
+    if dist_info:
+        header += b'   lindist' b' extradist' b' extraratio'
+    if withsparseread and sparse_info:
+        header += b'   readsize' b' largestblk' b' rddensity' b' srchunks'
+    header += b'\n'
+    yield header
+
+    if revs is None:
+        all_revs = iter(r)
+    else:
+        revlog_size = len(r)
+        all_revs = sorted(rev for rev in revs if rev < revlog_size)
+
+    chainbases = {}
+    for rev in all_revs:
+        info = auditor.revinfo(
+            rev,
+            size_info=size_info,
+            dist_info=dist_info,
+            sparse_info=sparse_info,
+        )
+        comp = info['compressed_size']
+        uncomp = info['uncompressed_size']
+        chain = info['chain']
+        chainbase = chain[0]
+        chainid = chainbases.setdefault(chainbase, len(chainbases) + 1)
+        if dist_info:
+            basestart = start(chainbase)
+            revstart = start(rev)
+            lineardist = revstart + comp - basestart
+            extradist = lineardist - info['chain_size']
+        try:
+            prevrev = chain[-2]
+        except IndexError:
+            prevrev = -1
+
+        if size_info:
+            chainsize = info['chain_size']
+            if uncomp != 0:
+                chainratio = float(chainsize) / float(uncomp)
+            else:
+                chainratio = chainsize
+
+        if dist_info:
+            if chainsize != 0:
+                extraratio = float(extradist) / float(chainsize)
+            else:
+                extraratio = extradist
+
+        # label, display-format, data-key, value
+        entry = [
+            (b'rev', b'%7d', 'rev', rev),
+            (b'p1', b'%7d', 'p1', info['p1']),
+            (b'p2', b'%7d', 'p2', info['p2']),
+            (b'chainid', b'%7d', 'chainid', chainid),
+            (b'chainlen', b'%8d', 'chainlen', len(chain)),
+            (b'prevrev', b'%8d', 'prevrev', prevrev),
+            (b'deltatype', b'%7s', 'deltatype', info['deltatype']),
+        ]
+        if size_info:
+            entry.extend(
+                [
+                    (b'compsize', b'%10d', 'compsize', comp),
+                    (b'uncompsize', b'%10d', 'uncompsize', uncomp),
+                    (b'chainsize', b'%10d', 'chainsize', chainsize),
+                    (b'chainratio', b'%9.5f', 'chainratio', chainratio),
+                ]
+            )
+        if dist_info:
+            entry.extend(
+                [
+                    (b'lindist', b'%9d', 'lindist', lineardist),
+                    (b'extradist', b'%9d', 'extradist', extradist),
+                    (b'extraratio', b'%10.5f', 'extraratio', extraratio),
+                ]
+            )
+        if withsparseread and sparse_info:
+            chainsize = info['chain_size']
+            readsize = 0
+            largestblock = 0
+            srchunks = 0
+
+            for revschunk in deltautil.slicechunk(r, chain):
+                srchunks += 1
+                blkend = start(revschunk[-1]) + length(revschunk[-1])
+                blksize = blkend - start(revschunk[0])
+
+                readsize += blksize
+                if largestblock < blksize:
+                    largestblock = blksize
+
+            if readsize:
+                readdensity = float(chainsize) / float(readsize)
+            else:
+                readdensity = 1
+            entry.extend(
+                [
+                    (b'readsize', b'%10d', 'readsize', readsize),
+                    (b'largestblock', b'%10d', 'largestblock', largestblock),
+                    (b'readdensity', b'%9.5f', 'readdensity', readdensity),
+                    (b'srchunks', b'%8d', 'srchunks', srchunks),
+                ]
+            )
+        yield entry

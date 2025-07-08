@@ -19,10 +19,23 @@ deletion is performed on the file, a jump instruction is used to patch
 in a new body of annotate information.
 """
 
+from __future__ import annotations
+
 import abc
 import struct
+import typing
+
+from typing import (
+    List,
+)
 
 from .thirdparty import attr
+
+# Force pytype to use the non-vendored package
+if typing.TYPE_CHECKING:
+    # noinspection PyPackageRequirements
+    import attr
+
 from . import pycompat
 
 _llentry = struct.Struct(b'>II')
@@ -45,7 +58,7 @@ class lineinfo:
 @attr.s
 class annotateresult:
     rev = attr.ib()
-    lines = attr.ib()
+    lines = attr.ib(type=List[lineinfo])
     _eof = attr.ib()
 
     def __iter__(self):
@@ -53,7 +66,6 @@ class annotateresult:
 
 
 class _llinstruction:  # pytype: disable=ignored-metaclass
-
     __metaclass__ = abc.ABCMeta
 
     @abc.abstractmethod
@@ -401,7 +413,7 @@ class linelog:
 
     def annotate(self, rev):
         pc = 1
-        lines = []
+        lines: List[lineinfo] = []
         executed = 0
         # Sanity check: if instructions executed exceeds len(program), we
         # hit an infinite loop in the linelog program somehow and we

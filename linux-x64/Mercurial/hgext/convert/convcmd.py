@@ -5,13 +5,24 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
+
 import collections
 import heapq
 import os
 import shutil
+import typing
+
+from typing import (
+    AnyStr,
+    Dict,
+    List,
+    Mapping,
+    Optional,
+    Union,
+)
 
 from mercurial.i18n import _
-from mercurial.pycompat import open
 from mercurial import (
     encoding,
     error,
@@ -36,6 +47,11 @@ from . import (
     subversion,
 )
 
+if typing.TYPE_CHECKING:
+    from mercurial import (
+        ui as uimod,
+    )
+
 mapfile = common.mapfile
 MissingTool = common.MissingTool
 NoRepo = common.NoRepo
@@ -53,15 +69,14 @@ p4_source = p4.p4_source
 svn_sink = subversion.svn_sink
 svn_source = subversion.svn_source
 
-orig_encoding = b'ascii'
+orig_encoding: bytes = b'ascii'
 
 
-def readauthormap(ui, authorfile, authors=None):
+def readauthormap(ui: uimod.ui, authorfile, authors=None):
     if authors is None:
         authors = {}
-    with open(authorfile, b'rb') as afile:
+    with open(authorfile, 'rb') as afile:
         for line in afile:
-
             line = line.strip()
             if not line or line.startswith(b'#'):
                 continue
@@ -86,7 +101,7 @@ def readauthormap(ui, authorfile, authors=None):
     return authors
 
 
-def recode(s):
+def recode(s: AnyStr) -> bytes:
     if isinstance(s, str):
         return s.encode(pycompat.sysstr(orig_encoding), 'replace')
     else:
@@ -95,7 +110,7 @@ def recode(s):
         )
 
 
-def mapbranch(branch, branchmap):
+def mapbranch(branch: bytes, branchmap: Mapping[bytes, bytes]) -> bytes:
     """
     >>> bmap = {b'default': b'branch1'}
     >>> for i in [b'', None]:
@@ -147,7 +162,7 @@ sink_converters = [
 ]
 
 
-def convertsource(ui, path, type, revs):
+def convertsource(ui: uimod.ui, path: bytes, type: bytes, revs):
     exceptions = []
     if type and type not in [s[0] for s in source_converters]:
         raise error.Abort(_(b'%s: invalid source repository type') % type)
@@ -163,7 +178,9 @@ def convertsource(ui, path, type, revs):
     raise error.Abort(_(b'%s: missing or unsupported repository') % path)
 
 
-def convertsink(ui, path, type):
+def convertsink(
+    ui: uimod.ui, path: bytes, type: bytes
+) -> Union[hgconvert.mercurial_sink, subversion.svn_sink]:
     if type and type not in [s[0] for s in sink_converters]:
         raise error.Abort(_(b'%s: invalid destination repository type') % type)
     for name, sink in sink_converters:
@@ -178,7 +195,7 @@ def convertsink(ui, path, type):
 
 
 class progresssource:
-    def __init__(self, ui, source, filecount):
+    def __init__(self, ui: uimod.ui, source, filecount: Optional[int]) -> None:
         self.ui = ui
         self.source = source
         self.progress = ui.makeprogress(
@@ -253,8 +270,7 @@ class keysorter:
 
 
 class converter:
-    def __init__(self, ui, source, dest, revmapfile, opts):
-
+    def __init__(self, ui: uimod.ui, source, dest, revmapfile, opts) -> None:
         self.source = source
         self.dest = dest
         self.ui = ui
@@ -280,7 +296,7 @@ class converter:
         self.splicemap = self.parsesplicemap(opts.get(b'splicemap'))
         self.branchmap = mapfile(ui, opts.get(b'branchmap'))
 
-    def parsesplicemap(self, path):
+    def parsesplicemap(self, path: bytes) -> Dict[bytes, List[bytes]]:
         """check and validate the splicemap format and
         return a child/parents dictionary.
         Format checking has two parts.
@@ -295,33 +311,33 @@ class converter:
             return {}
         m = {}
         try:
-            fp = open(path, b'rb')
-            for i, line in enumerate(fp):
-                line = line.splitlines()[0].rstrip()
-                if not line:
-                    # Ignore blank lines
-                    continue
-                # split line
-                lex = common.shlexer(data=line, whitespace=b',')
-                line = list(lex)
-                # check number of parents
-                if not (2 <= len(line) <= 3):
-                    raise error.Abort(
-                        _(
-                            b'syntax error in %s(%d): child parent1'
-                            b'[,parent2] expected'
+            with open(path, 'rb') as fp:
+                for i, line in enumerate(fp):
+                    line = line.splitlines()[0].rstrip()
+                    if not line:
+                        # Ignore blank lines
+                        continue
+                    # split line
+                    lex = common.shlexer(data=line, whitespace=b',')
+                    line = list(lex)
+                    # check number of parents
+                    if not (2 <= len(line) <= 3):
+                        raise error.Abort(
+                            _(
+                                b'syntax error in %s(%d): child parent1'
+                                b'[,parent2] expected'
+                            )
+                            % (path, i + 1)
                         )
-                        % (path, i + 1)
-                    )
-                for part in line:
-                    self.source.checkrevformat(part)
-                child, p1, p2 = line[0], line[1:2], line[2:]
-                if p1 == p2:
-                    m[child] = p1
-                else:
-                    m[child] = p1 + p2
+                    for part in line:
+                        self.source.checkrevformat(part)
+                    child, p1, p2 = line[0], line[1:2], line[2:]
+                    if p1 == p2:
+                        m[child] = p1
+                    else:
+                        m[child] = p1 + p2
         # if file does not exist or error reading, exit
-        except IOError:
+        except OSError:
             raise error.Abort(
                 _(b'splicemap file not found or error reading %s:') % path
             )
@@ -356,7 +372,7 @@ class converter:
 
         return parents
 
-    def mergesplicemap(self, parents, splicemap):
+    def mergesplicemap(self, parents, splicemap) -> None:
         """A splicemap redefines child/parent relationships. Check the
         map contains valid revision identifiers and merge the new
         links in the source graph.
@@ -435,7 +451,13 @@ class converter:
             """Sort revisions by date."""
 
             def getdate(n):
-                return dateutil.parsedate(self.commitcache[n].date)
+                commit = self.commitcache[n]
+                # The other entries are here as tie breaker for stability
+                return (
+                    dateutil.parsedate(commit.date),
+                    commit.rev,
+                    commit.branch,
+                )
 
             return keysorter(getdate)
 
@@ -482,20 +504,19 @@ class converter:
 
         return s
 
-    def writeauthormap(self):
+    def writeauthormap(self) -> None:
         authorfile = self.authorfile
         if authorfile:
             self.ui.status(_(b'writing author map file %s\n') % authorfile)
-            ofile = open(authorfile, b'wb+')
-            for author in self.authors:
-                ofile.write(
-                    util.tonativeeol(
-                        b"%s=%s\n" % (author, self.authors[author])
+            with open(authorfile, 'wb+') as ofile:
+                for author in self.authors:
+                    ofile.write(
+                        util.tonativeeol(
+                            b"%s=%s\n" % (author, self.authors[author])
+                        )
                     )
-                )
-            ofile.close()
 
-    def readauthormap(self, authorfile):
+    def readauthormap(self, authorfile) -> None:
         self.authors = readauthormap(self.ui, authorfile, self.authors)
 
     def cachecommit(self, rev):
@@ -505,7 +526,7 @@ class converter:
         self.commitcache[rev] = commit
         return commit
 
-    def copy(self, rev):
+    def copy(self, rev) -> None:
         commit = self.commitcache[rev]
         full = self.opts.get(b'full')
         changes = self.source.getchanges(rev, full)
@@ -557,7 +578,7 @@ class converter:
         self.source.converted(rev, newnode)
         self.map[rev] = newnode
 
-    def convert(self, sortmode):
+    def convert(self, sortmode) -> None:
         try:
             self.source.before()
             self.dest.before()
@@ -622,7 +643,7 @@ class converter:
         finally:
             self.cleanup()
 
-    def cleanup(self):
+    def cleanup(self) -> None:
         try:
             self.dest.after()
         finally:
@@ -630,7 +651,9 @@ class converter:
         self.map.close()
 
 
-def convert(ui, src, dest=None, revmapfile=None, **opts):
+def convert(
+    ui: uimod.ui, src, dest: Optional[bytes] = None, revmapfile=None, **opts
+) -> None:
     opts = pycompat.byteskwargs(opts)
     global orig_encoding
     orig_encoding = encoding.encoding

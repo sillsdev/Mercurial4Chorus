@@ -190,6 +190,7 @@ unexpectedly::
 
 """
 
+from __future__ import annotations
 
 # chistedit dependencies that are not available everywhere
 try:
@@ -206,10 +207,6 @@ import pickle
 import struct
 
 from mercurial.i18n import _
-from mercurial.pycompat import (
-    getattr,
-    open,
-)
 from mercurial.node import (
     bin,
     hex,
@@ -800,7 +797,7 @@ class pick(histeditaction):
             self.repo.ui.debug(b'node %s unchanged\n' % short(self.node))
             return rulectx, []
 
-        return super(pick, self).run()
+        return super().run()
 
 
 @action(
@@ -829,7 +826,7 @@ class edit(histeditaction):
 class fold(histeditaction):
     def verify(self, prev, expected, seen):
         """Verifies semantic correctness of the fold rule"""
-        super(fold, self).verify(prev, expected, seen)
+        super().verify(prev, expected, seen)
         repo = self.repo
         if not prev:
             c = repo[self.node].p1()
@@ -1487,7 +1484,7 @@ pgup/K: move patch up, pgdn/J: move patch down, c: commit, q: abort
             self.selected = oldpos if self.selected is None else None
             self.make_selection(self.selected)
         elif action == b'goto' and int(ch) < len(self.rules) <= 10:
-            newrule = next((r for r in self.rules if r.origpos == int(ch)))
+            newrule = next(r for r in self.rules if r.origpos == int(ch))
             self.move_cursor(oldpos, newrule.pos)
             if self.selected is not None:
                 self.swap(oldpos, newrule.pos)
@@ -1527,7 +1524,8 @@ pgup/K: move patch up, pgdn/J: move patch down, c: commit, q: abort
 
     def move_cursor(self, oldpos, newpos):
         """Change the rule/changeset that the cursor is pointing to, regardless of
-        current mode (you can switch between patches from the view patch window)."""
+        current mode (you can switch between patches from the view patch window).
+        """
         self.pos = newpos
 
         mode, _ = self.mode
@@ -1582,14 +1580,16 @@ pgup/K: move patch up, pgdn/J: move patch down, c: commit, q: abort
 
     def change_action(self, pos, action):
         """Change the action state on the given position to the new action"""
-        assert 0 <= pos < len(self.rules)
-        self.rules[pos].action = action
+        rule_pos = self.display_pos_to_rule_pos(pos)
+        assert 0 <= rule_pos < len(self.rules)
+        self.rules[rule_pos].action = action
 
     def cycle_action(self, pos, next=False):
         """Changes the action state the next or the previous action from
         the action list"""
-        assert 0 <= pos < len(self.rules)
-        current = self.rules[pos].action
+        rule_pos = self.display_pos_to_rule_pos(pos)
+        assert 0 <= rule_pos < len(self.rules)
+        current = self.rules[rule_pos].action
 
         assert current in KEY_LIST
 
@@ -1598,11 +1598,14 @@ pgup/K: move patch up, pgdn/J: move patch down, c: commit, q: abort
             index += 1
         else:
             index -= 1
+        # using pos instead of rule_pos because change_action() also calls
+        # display_pos_to_rule_pos()
         self.change_action(pos, KEY_LIST[index % len(KEY_LIST)])
 
     def change_view(self, delta, unit):
         """Change the region of whatever is being viewed (a patch or the list of
-        changesets). 'delta' is an amount (+/- 1) and 'unit' is 'page' or 'line'."""
+        changesets). 'delta' is an amount (+/- 1) and 'unit' is 'page' or 'line'.
+        """
         mode, _ = self.mode
         if mode != MODE_PATCH:
             return
@@ -1711,7 +1714,7 @@ def _chisteditmain(repo, rules, stdscr):
             ch = encoding.strtolocal(stdscr.getkey())
 
 
-def _chistedit(ui, repo, freeargs, opts):
+def _chistedit(ui, repo, state, freeargs, opts):
     """interactively edit changeset history via a curses interface
 
     Provides a ncurses interface to histedit. Press ? in chistedit mode
@@ -1761,8 +1764,6 @@ def _chistedit(ui, repo, freeargs, opts):
             rules.append(histeditrule(ui, repo[r], i))
         with util.with_lc_ctype():
             rc = curses.wrapper(functools.partial(_chisteditmain, repo, rules))
-        curses.echo()
-        curses.endwin()
         if rc is False:
             ui.write(_(b"histedit aborted\n"))
             return 0
@@ -1773,7 +1774,7 @@ def _chistedit(ui, repo, freeargs, opts):
                 for r in rules:
                     fp.write(r)
                 opts[b'commands'] = fp.name
-            return _texthistedit(ui, repo, freeargs, opts)
+            return _texthistedit(ui, repo, state, freeargs, opts)
     except KeyboardInterrupt:
         pass
     return -1
@@ -1912,20 +1913,20 @@ def histedit(ui, repo, *freeargs, **opts):
     """
     opts = pycompat.byteskwargs(opts)
 
-    # kludge: _chistedit only works for starting an edit, not aborting
-    # or continuing, so fall back to regular _texthistedit for those
-    # operations.
-    if ui.interface(b'histedit') == b'curses' and _getgoal(opts) == goalnew:
-        return _chistedit(ui, repo, freeargs, opts)
-    return _texthistedit(ui, repo, freeargs, opts)
-
-
-def _texthistedit(ui, repo, freeargs, opts):
     state = histeditstate(repo)
     with repo.wlock() as wlock, repo.lock() as lock:
         state.wlock = wlock
         state.lock = lock
-        _histedit(ui, repo, state, freeargs, opts)
+        # kludge: _chistedit only works for starting an edit, not aborting
+        # or continuing, so fall back to regular _texthistedit for those
+        # operations.
+        if ui.interface(b'histedit') == b'curses' and _getgoal(opts) == goalnew:
+            return _chistedit(ui, repo, state, freeargs, opts)
+        return _texthistedit(ui, repo, state, freeargs, opts)
+
+
+def _texthistedit(ui, repo, state, freeargs, opts):
+    _histedit(ui, repo, state, freeargs, opts)
 
 
 goalcontinue = b'continue'
@@ -1949,8 +1950,7 @@ def _readfile(ui, path):
         with ui.timeblockedsection(b'histedit'):
             return ui.fin.read()
     else:
-        with open(path, b'rb') as f:
-            return f.read()
+        return util.readfile(path)
 
 
 def _validateargs(ui, repo, freeargs, opts, goal, rules, revs):
@@ -2344,6 +2344,21 @@ def bootstrapcontinue(ui, state, opts):
     return state
 
 
+def hgcontinuehistedit(ui, repo):
+    fm = ui.formatter(b'continue', {})
+    fm.startitem()
+
+    state = histeditstate(repo)
+    with repo.wlock() as wlock, repo.lock() as lock:
+        state.wlock = wlock
+        state.lock = lock
+        state.read()
+        state = bootstrapcontinue(ui, state, None)
+        _continuehistedit(ui, repo, state)
+        _finishhistedit(ui, repo, state, fm)
+        fm.end()
+
+
 def between(repo, old, new, keep):
     """select and validate the set of revision to edit
 
@@ -2652,7 +2667,7 @@ def stripwrapper(orig, ui, repo, nodelist, *args, **kwargs):
     return orig(ui, repo, nodelist, *args, **kwargs)
 
 
-extensions.wrapfunction(repair, b'strip', stripwrapper)
+extensions.wrapfunction(repair, 'strip', stripwrapper)
 
 
 def summaryhook(ui, repo):
@@ -2679,4 +2694,5 @@ def extsetup(ui):
         allowcommit=True,
         continueflag=True,
         abortfunc=hgaborthistedit,
+        continuefunc=hgcontinuehistedit,
     )

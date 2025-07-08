@@ -8,16 +8,13 @@
 # This code is based on the Mark Edgington's crecord extension.
 # (Itself based on Bryan O'Sullivan's record extension.)
 
+from __future__ import annotations
 
 import os
 import re
 import signal
 
 from .i18n import _
-from .pycompat import (
-    getattr,
-    open,
-)
 from . import (
     diffhelper,
     encoding,
@@ -86,6 +83,10 @@ class patchnode:
     """abstract class for patch graph nodes
     (i.e. patchroot, header, hunk, hunkline)
     """
+
+    @property
+    def content(self):
+        return b''
 
     def firstchild(self):
         raise NotImplementedError(b"method must be implemented by subclass")
@@ -162,7 +163,7 @@ class patchnode:
             except AttributeError:  # parent and/or grandparent was None
                 return None
 
-    def previtem(self):
+    def previtem(self, skipfolded=None):
         """
         Try to return the previous item closest to this item, regardless of
         item's type (header, hunk, or hunkline).
@@ -202,9 +203,8 @@ class patch(patchnode, list):  # todo: rename patchroot
 
 
 class uiheader(patchnode):
-    """patch header
-
-    xxx shouldn't we move this to mercurial/patch.py ?
+    """
+    patchnode class wrapping a patch.header
     """
 
     def __init__(self, header):
@@ -224,6 +224,10 @@ class uiheader(patchnode):
         # flag is False if this header was ever unfolded from initial state
         self.neverunfolded = True
         self.hunks = [uihunk(h, self) for h in self.hunks]
+
+    @property
+    def content(self):
+        return self.filename()
 
     def prettystr(self):
         x = stringio()
@@ -291,6 +295,10 @@ class uihunkline(patchnode):
         # in the previtem method.
         self.folded = False
 
+    @property
+    def content(self):
+        return self.linetext
+
     def prettystr(self):
         return self.linetext
 
@@ -348,6 +356,10 @@ class uihunk(patchnode):
         # flag which only affects the status display indicating if a node's
         # children are partially applied (i.e. some applied, some not).
         self.partial = False
+
+    @property
+    def content(self):
+        return self.proc if self.proc else b''
 
     def nextsibling(self):
         numhunksinheader = len(self.header.hunks)
@@ -573,7 +585,7 @@ def chunkselector(ui, headerlist, operation=None):
     ui.write(_(b'starting interactive selection\n'))
     chunkselector = curseschunkselector(headerlist, ui, operation)
     origsigtstp = sentinel = object()
-    if util.safehasattr(signal, 'SIGTSTP'):
+    if hasattr(signal, 'SIGTSTP'):
         origsigtstp = signal.getsignal(signal.SIGTSTP)
     try:
         with util.with_lc_ctype():
@@ -610,10 +622,10 @@ def testchunkselector(testfn, ui, headerlist, operation=None):
 
     chunkselector.stdscr = dummystdscr()
     if testfn and os.path.exists(testfn):
-        testf = open(testfn, b'r')
-        # TODO: open in binary mode?
-        testcommands = [x.rstrip('\n') for x in testf.readlines()]
-        testf.close()
+        # This file is purposely NOT opened in binary mode
+        with open(testfn) as testf:
+            testcommands = [x.rstrip('\n') for x in testf.readlines()]
+
         while True:
             if chunkselector.handlekeypressed(testcommands.pop(0), test=True):
                 break
@@ -694,6 +706,8 @@ class curseschunkselector:
                 b'unexpected operation: %s' % operation
             )
         self.operation = operation
+
+        self.regex = None
 
     def uparrowevent(self):
         """
@@ -1547,7 +1561,6 @@ class curseschunkselector:
     def sigwinchhandler(self, n, frame):
         """handle window resizing"""
         try:
-            curses.endwin()
             self.xscreensize, self.yscreensize = scmutil.termsize(self.ui)
             self.statuswin.resize(self.numstatuslines, self.xscreensize)
             self.numpadlines = self.getnumlinesdisplayed(ignorefolding=True) + 1
@@ -1649,6 +1662,9 @@ smaller changesets. the following are valid keystrokes:
                       a : toggle all selections
                       c : confirm selected changes
                       r : review/edit and confirm selected changes
+                      / : regex search for code or filename
+                      n : next search result for code or filename
+                      N : previous search result for code or filename
                       q : quit without confirming (no changes will be made)
                       ? : help (what you're currently reading)"""
         )
@@ -1675,7 +1691,6 @@ smaller changesets. the following are valid keystrokes:
 
         curses.raw()
         curses.def_prog_mode()
-        curses.endwin()
         self.commenttext = self.ui.edit(self.commenttext, self.ui.username())
         curses.cbreak()
         self.stdscr.refresh()
@@ -1873,6 +1888,80 @@ are you sure you want to review/edit and confirm the selected changes [yn]?
                 return False
         return True
 
+    def handlesearch(self):
+        win = curses.newwin(1, self.xscreensize, self.yscreensize - 1, 0)
+        win.echochar("/")
+
+        curses.echo()
+        curses.curs_set(1)
+        self.regex = win.getstr() or None
+        curses.noecho()
+        curses.curs_set(0)
+
+        if not self.showsearch(self.regex):
+            self.printstring(
+                win,
+                _(b"Pattern not found (press ENTER)"),
+                pairname=b"legend",
+                align=False,
+            )
+            while win.getkey() not in ["\n", "KEY_ENTER"]:
+                pass
+        del win
+
+        self.stdscr.clear()
+        self.stdscr.refresh()
+
+    def showsearch(self, regex, forward=True):
+        if not regex:
+            return
+
+        moveattr = 'nextitem' if forward else 'previtem'
+        currentitem = getattr(self.currentselecteditem, moveattr)(
+            skipfolded=False
+        )
+
+        matches = None
+        regex = re.compile(regex)
+        while currentitem:
+            matches = regex.search(currentitem.content)
+            if matches:
+                self.currentselecteditem = currentitem
+                break
+            currentitem = getattr(currentitem, moveattr)(skipfolded=False)
+
+        # Whatever is selected should now be visible
+        unfolded = self.currentselecteditem
+        while matches and unfolded:
+            unfolded.folded = False
+            unfolded = unfolded.parentitem()
+
+        return matches
+
+    def searchdirection(self, failuremsg, forward=True):
+        if not self.regex:
+            return
+
+        if not self.showsearch(self.regex, forward=forward):
+            win = curses.newwin(1, self.xscreensize, self.yscreensize - 1, 0)
+            self.printstring(win, failuremsg, pairname=b"legend", align=False)
+            while win.getkey() not in ["\n", "KEY_ENTER"]:
+                pass
+            del win
+
+            self.stdscr.clear()
+            self.stdscr.refresh()
+
+    def handlenextsearch(self):
+        self.searchdirection(
+            _(b"Next pattern not found (press ENTER)"), forward=True
+        )
+
+    def handleprevsearch(self):
+        self.searchdirection(
+            _(b"Previous pattern not found (press ENTER)"), forward=False
+        )
+
     def handlekeypressed(self, keypressed, test=False):
         """
         Perform actions based on pressed keys.
@@ -1923,6 +2012,12 @@ are you sure you want to review/edit and confirm the selected changes [yn]?
             self.togglefolded(foldparent=True)
         elif keypressed in ["m"]:
             self.commitMessageWindow()
+        elif keypressed in ["/"]:
+            self.handlesearch()
+        elif keypressed in ["n"]:
+            self.handlenextsearch()
+        elif keypressed in ["N"]:
+            self.handleprevsearch()
         elif keypressed in ["g", "KEY_HOME"]:
             self.handlefirstlineevent()
         elif keypressed in ["G", "KEY_END"]:
@@ -1944,7 +2039,7 @@ are you sure you want to review/edit and confirm the selected changes [yn]?
         """
 
         origsigwinch = sentinel = object()
-        if util.safehasattr(signal, 'SIGWINCH'):
+        if hasattr(signal, 'SIGWINCH'):
             origsigwinch = signal.signal(signal.SIGWINCH, self.sigwinchhandler)
         try:
             return self._main(stdscr)

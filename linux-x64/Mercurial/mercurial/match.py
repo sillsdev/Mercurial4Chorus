@@ -5,15 +5,28 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
 
 import bisect
 import copy
 import itertools
 import os
 import re
+import typing
+
+from typing import (
+    Any,
+    Callable,
+    List,
+    Tuple,
+    Union,
+    overload,
+)
 
 from .i18n import _
-from .pycompat import open
+from .interfaces.types import (
+    MatcherT,
+)
 from . import (
     encoding,
     error,
@@ -24,7 +37,11 @@ from . import (
 )
 from .utils import stringutil
 
-rustmod = policy.importrust('dirstate')
+from .interfaces import (
+    matcher as int_matcher,
+)
+
+rustmod = policy.importrust('dirstate', pyo3=True)
 
 allpatternkinds = (
     b're',
@@ -358,7 +375,7 @@ def _donormalize(patterns, default, root, cwd, auditor=None, warn=None):
                 else:
                     files = files.splitlines()
                 files = [f for f in files if f]
-            except EnvironmentError:
+            except OSError:
                 raise error.Abort(_(b"unable to read file list (%s)") % pat)
             for k, p, source in _donormalize(
                 files, default, root, cwd, auditor, warn
@@ -381,7 +398,7 @@ def _donormalize(patterns, default, root, cwd, auditor=None, warn=None):
                         inst.message,
                     )
                 )
-            except IOError as inst:
+            except OSError as inst:
                 if warn:
                     warn(
                         _(b"skipping unreadable pattern file '%s': %s\n")
@@ -393,10 +410,19 @@ def _donormalize(patterns, default, root, cwd, auditor=None, warn=None):
     return kindpats
 
 
-class basematcher:
+class basematcher(int_matcher.IMatcher):
     def __init__(self, badfn=None):
+        self._was_tampered_with = False
         if badfn is not None:
             self.bad = badfn
+
+    def was_tampered_with_nonrec(self) -> bool:
+        # [_was_tampered_with] is used to track if when extensions changed the matcher
+        # behavior (crazy stuff!), so we disable the rust fast path.
+        return self._was_tampered_with
+
+    def was_tampered_with(self) -> bool:
+        return self.was_tampered_with_nonrec()
 
     def __call__(self, fn):
         return self.matchfn(fn)
@@ -513,7 +539,7 @@ class alwaysmatcher(basematcher):
     '''Matches everything.'''
 
     def __init__(self, badfn=None):
-        super(alwaysmatcher, self).__init__(badfn)
+        super().__init__(badfn)
 
     def always(self):
         return True
@@ -535,7 +561,7 @@ class nevermatcher(basematcher):
     '''Matches nothing.'''
 
     def __init__(self, badfn=None):
-        super(nevermatcher, self).__init__(badfn)
+        super().__init__(badfn)
 
     # It's a little weird to say that the nevermatcher is an exact matcher
     # or a prefix matcher, but it seems to make sense to let callers take
@@ -562,7 +588,7 @@ class predicatematcher(basematcher):
     """A matcher adapter for a simple boolean function"""
 
     def __init__(self, predfn, predrepr=None, badfn=None):
-        super(predicatematcher, self).__init__(badfn)
+        super().__init__(badfn)
         self.matchfn = predfn
         self._predrepr = predrepr
 
@@ -635,10 +661,18 @@ class patternmatcher(basematcher):
     """
 
     def __init__(self, root, kindpats, badfn=None):
-        super(patternmatcher, self).__init__(badfn)
+        super().__init__(badfn)
         kindpats.sort()
 
+        if rustmod is not None:
+            # We need to pass the patterns to Rust because they can contain
+            # patterns from the user interface
+            self._kindpats = kindpats
+
+        roots, dirs, parents = _rootsdirsandparents(kindpats)
         self._files = _explicitfiles(kindpats)
+        self._dirs_explicit = set(dirs)
+        self._dirs = parents
         self._prefix = _prefix(kindpats)
         self._pats, self._matchfn = _buildmatch(kindpats, b'$', root)
 
@@ -647,14 +681,14 @@ class patternmatcher(basematcher):
             return True
         return self._matchfn(fn)
 
-    @propertycache
-    def _dirs(self):
-        return set(pathutil.dirs(self._fileset))
-
     def visitdir(self, dir):
         if self._prefix and dir in self._fileset:
             return b'all'
-        return dir in self._dirs or path_or_parents_in_set(dir, self._fileset)
+        return (
+            dir in self._dirs
+            or path_or_parents_in_set(dir, self._fileset)
+            or path_or_parents_in_set(dir, self._dirs_explicit)
+        )
 
     def visitchildrenset(self, dir):
         ret = self.visitdir(dir)
@@ -715,7 +749,7 @@ class _dirchildren:
 
 class includematcher(basematcher):
     def __init__(self, root, kindpats, badfn=None):
-        super(includematcher, self).__init__(badfn)
+        super().__init__(badfn)
         if rustmod is not None:
             # We need to pass the patterns to Rust because they can contain
             # patterns from the user interface
@@ -796,7 +830,7 @@ class exactmatcher(basematcher):
     """
 
     def __init__(self, files, badfn=None):
-        super(exactmatcher, self).__init__(badfn)
+        super().__init__(badfn)
 
         if isinstance(files, list):
             self._files = files
@@ -871,11 +905,18 @@ class differencematcher(basematcher):
     """
 
     def __init__(self, m1, m2):
-        super(differencematcher, self).__init__()
+        super().__init__()
         self._m1 = m1
         self._m2 = m2
         self.bad = m1.bad
         self.traversedir = m1.traversedir
+
+    def was_tampered_with(self) -> bool:
+        return (
+            self.was_tampered_with_nonrec()
+            or self._m1.was_tampered_with()
+            or self._m2.was_tampered_with()
+        )
 
     def matchfn(self, f):
         return self._m1(f) and not self._m2(f)
@@ -954,11 +995,18 @@ def intersectmatchers(m1, m2):
 
 class intersectionmatcher(basematcher):
     def __init__(self, m1, m2):
-        super(intersectionmatcher, self).__init__()
+        super().__init__()
         self._m1 = m1
         self._m2 = m2
         self.bad = m1.bad
         self.traversedir = m1.traversedir
+
+    def was_tampered_with(self) -> bool:
+        return (
+            self.was_tampered_with_nonrec()
+            or self._m1.was_tampered_with()
+            or self._m2.was_tampered_with()
+        )
 
     @propertycache
     def _files(self):
@@ -1040,8 +1088,8 @@ class subdirmatcher(basematcher):
     sub/x.txt: No such file
     """
 
-    def __init__(self, path, matcher):
-        super(subdirmatcher, self).__init__()
+    def __init__(self, path: bytes, matcher: MatcherT) -> None:
+        super().__init__()
         self._path = path
         self._matcher = matcher
         self._always = matcher.always()
@@ -1056,6 +1104,11 @@ class subdirmatcher(basematcher):
         # a prefix matcher, this submatcher always matches.
         if matcher.prefix():
             self._always = any(f == path for f in matcher._files)
+
+    def was_tampered_with(self) -> bool:
+        return (
+            self.was_tampered_with_nonrec() or self._matcher.was_tampered_with()
+        )
 
     def bad(self, f, msg):
         self._matcher.bad(self._path + b"/" + f, msg)
@@ -1128,7 +1181,7 @@ class prefixdirmatcher(basematcher):
     """
 
     def __init__(self, path, matcher, badfn=None):
-        super(prefixdirmatcher, self).__init__(badfn)
+        super().__init__(badfn)
         if not path:
             raise error.ProgrammingError(b'prefix path must not be empty')
         self._path = path
@@ -1187,9 +1240,14 @@ class unionmatcher(basematcher):
 
     def __init__(self, matchers):
         m1 = matchers[0]
-        super(unionmatcher, self).__init__()
+        super().__init__()
         self.traversedir = m1.traversedir
         self._matchers = matchers
+
+    def was_tampered_with(self) -> bool:
+        return self.was_tampered_with_nonrec() or any(
+            map(lambda m: m.was_tampered_with(), self._matchers)
+        )
 
     def matchfn(self, f):
         for match in self._matchers:
@@ -1461,7 +1519,7 @@ def _buildregexmatch(kindpats, globsuffix):
         allgroups = []
         regexps = []
         exact = set()
-        for (kind, pattern, _source) in kindpats:
+        for kind, pattern, _source in kindpats:
             if kind == b'filepath':
                 exact.add(pattern)
                 continue
@@ -1622,6 +1680,33 @@ def _prefix(kindpats):
 
 _commentre = None
 
+if typing.TYPE_CHECKING:
+    from typing_extensions import (
+        Literal,
+    )
+
+    @overload
+    def readpatternfile(
+        filepath: bytes, warn: Callable[[bytes], Any], sourceinfo: Literal[True]
+    ) -> List[Tuple[bytes, int, bytes]]:
+        ...
+
+    @overload
+    def readpatternfile(
+        filepath: bytes,
+        warn: Callable[[bytes], Any],
+        sourceinfo: Literal[False],
+    ) -> List[bytes]:
+        ...
+
+    @overload
+    def readpatternfile(
+        filepath: bytes,
+        warn: Callable[[bytes], Any],
+        sourceinfo: bool = False,
+    ) -> List[Union[Tuple[bytes, int, bytes], bytes]]:
+        ...
+
 
 def readpatternfile(filepath, warn, sourceinfo=False):
     """parse a pattern file, returning a list of
@@ -1658,46 +1743,47 @@ def readpatternfile(filepath, warn, sourceinfo=False):
     syntax = b'relre:'
     patterns = []
 
-    fp = open(filepath, b'rb')
-    for lineno, line in enumerate(fp, start=1):
-        if b"#" in line:
-            global _commentre
-            if not _commentre:
-                _commentre = util.re.compile(br'((?:^|[^\\])(?:\\\\)*)#.*')
-            # remove comments prefixed by an even number of escapes
-            m = _commentre.search(line)
-            if m:
-                line = line[: m.end(1)]
-            # fixup properly escaped comments that survived the above
-            line = line.replace(b"\\#", b"#")
-        line = line.rstrip()
-        if not line:
-            continue
+    with open(filepath, 'rb') as fp:
+        for lineno, line in enumerate(fp, start=1):
+            if b"#" in line:
+                global _commentre
+                if not _commentre:
+                    _commentre = util.re.compile(br'((?:^|[^\\])(?:\\\\)*)#.*')
+                # remove comments prefixed by an even number of escapes
+                m = _commentre.search(line)
+                if m:
+                    line = line[: m.end(1)]
+                # fixup properly escaped comments that survived the above
+                line = line.replace(b"\\#", b"#")
+            line = line.rstrip()
+            if not line:
+                continue
 
-        if line.startswith(b'syntax:'):
-            s = line[7:].strip()
-            try:
-                syntax = syntaxes[s]
-            except KeyError:
-                if warn:
-                    warn(
-                        _(b"%s: ignoring invalid syntax '%s'\n") % (filepath, s)
-                    )
-            continue
+            if line.startswith(b'syntax:'):
+                s = line[7:].strip()
+                try:
+                    syntax = syntaxes[s]
+                except KeyError:
+                    if warn:
+                        warn(
+                            _(b"%s: ignoring invalid syntax '%s'\n")
+                            % (filepath, s)
+                        )
+                continue
 
-        linesyntax = syntax
-        for s, rels in syntaxes.items():
-            if line.startswith(rels):
-                linesyntax = rels
-                line = line[len(rels) :]
-                break
-            elif line.startswith(s + b':'):
-                linesyntax = rels
-                line = line[len(s) + 1 :]
-                break
-        if sourceinfo:
-            patterns.append((linesyntax + line, lineno, line))
-        else:
-            patterns.append(linesyntax + line)
-    fp.close()
+            linesyntax = syntax
+            for s, rels in syntaxes.items():
+                if line.startswith(rels):
+                    linesyntax = rels
+                    line = line[len(rels) :]
+                    break
+                elif line.startswith(s + b':'):
+                    linesyntax = rels
+                    line = line[len(s) + 1 :]
+                    break
+            if sourceinfo:
+                patterns.append((linesyntax + line, lineno, line))
+            else:
+                patterns.append(linesyntax + line)
+
     return patterns

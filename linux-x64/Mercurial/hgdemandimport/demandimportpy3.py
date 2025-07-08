@@ -23,6 +23,8 @@ This also has some limitations compared to the Python 2 implementation:
   enabled.
 """
 
+from __future__ import annotations
+
 import contextlib
 import importlib.util
 import sys

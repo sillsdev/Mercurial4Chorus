@@ -5,6 +5,7 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
 
 import os
 import re
@@ -331,22 +332,22 @@ def json(obj, paranoid=True):
         return b'false'
     elif obj is True:
         return b'true'
-    elif isinstance(obj, (int, int, float)):
+    elif isinstance(obj, (int, float)):
         return pycompat.bytestr(obj)
     elif isinstance(obj, bytes):
         return b'"%s"' % encoding.jsonescape(obj, paranoid=paranoid)
-    elif isinstance(obj, type(u'')):
+    elif isinstance(obj, str):
         raise error.ProgrammingError(
             b'Mercurial only does output with bytes: %r' % obj
         )
-    elif util.safehasattr(obj, 'keys'):
+    elif hasattr(obj, 'keys'):
         out = [
             b'"%s": %s'
             % (encoding.jsonescape(k, paranoid=paranoid), json(v, paranoid))
             for k, v in sorted(obj.items())
         ]
         return b'{' + b', '.join(out) + b'}'
-    elif util.safehasattr(obj, '__iter__'):
+    elif hasattr(obj, '__iter__'):
         out = [json(i, paranoid) for i in obj]
         return b'[' + b', '.join(out) + b']'
     raise error.ProgrammingError(b'cannot encode %r' % obj)

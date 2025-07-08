@@ -5,6 +5,7 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
 
 import ctypes
 import ctypes.wintypes as wintypes
@@ -171,6 +172,7 @@ CERT_TRUST_IS_PARTIAL_CHAIN = 0x10000
 # CertCreateCertificateContext encodings
 X509_ASN_ENCODING = 0x00000001
 PKCS_7_ASN_ENCODING = 0x00010000
+
 
 # These structs are only complete enough to achieve what we need.
 class CERT_CHAIN_CONTEXT(ctypes.Structure):
@@ -368,7 +370,7 @@ def _raiseoserror(name: bytes) -> NoReturn:
     # See https://bugs.python.org/issue28474
     code = _kernel32.GetLastError()
     if code > 0x7FFFFFFF:
-        code -= 2 ** 32
+        code -= 2**32
     err = ctypes.WinError(code=code)  # pytype: disable=module-attr
     raise OSError(
         err.errno, '%s: %s' % (encoding.strfromlocal(name), err.strerror)
@@ -459,10 +461,10 @@ def nlinks(name: bytes) -> int:
     return _getfileinfo(name).nNumberOfLinks
 
 
-def samefile(path1: bytes, path2: bytes) -> bool:
-    '''Returns whether path1 and path2 refer to the same file or directory.'''
-    res1 = _getfileinfo(path1)
-    res2 = _getfileinfo(path2)
+def samefile(fpath1: bytes, fpath2: bytes) -> bool:
+    '''Returns whether fpath1 and fpath2 refer to the same file or directory.'''
+    res1 = _getfileinfo(fpath1)
+    res2 = _getfileinfo(fpath2)
     return (
         res1.dwVolumeSerialNumber == res2.dwVolumeSerialNumber
         and res1.nFileIndexHigh == res2.nFileIndexHigh
@@ -470,10 +472,10 @@ def samefile(path1: bytes, path2: bytes) -> bool:
     )
 
 
-def samedevice(path1: bytes, path2: bytes) -> bool:
-    '''Returns whether path1 and path2 are on the same device.'''
-    res1 = _getfileinfo(path1)
-    res2 = _getfileinfo(path2)
+def samedevice(fpath1: bytes, fpath2: bytes) -> bool:
+    '''Returns whether fpath1 and fpath2 are on the same device.'''
+    res1 = _getfileinfo(fpath1)
+    res2 = _getfileinfo(fpath2)
     return res1.dwVolumeSerialNumber == res2.dwVolumeSerialNumber
 
 
@@ -710,16 +712,16 @@ def spawndetached(args: List[bytes]) -> int:
     return pi.dwProcessId
 
 
-def unlink(f: bytes) -> None:
+def unlink(path: bytes) -> None:
     '''try to implement POSIX' unlink semantics on Windows'''
 
-    if os.path.isdir(f):
+    if os.path.isdir(path):
         # use EPERM because it is POSIX prescribed value, even though
         # unlink(2) on directories returns EISDIR on Linux
-        raise IOError(
+        raise OSError(
             errno.EPERM,
             r"Unlinking directory not permitted: '%s'"
-            % encoding.strfromlocal(f),
+            % encoding.strfromlocal(path),
         )
 
     # POSIX allows to unlink and rename open files. Windows has serious
@@ -740,14 +742,14 @@ def unlink(f: bytes) -> None:
     # implicit zombie filename blocking on a temporary name.
 
     for tries in range(10):
-        temp = b'%s-%08x' % (f, random.randint(0, 0xFFFFFFFF))
+        temp = b'%s-%08x' % (path, random.randint(0, 0xFFFFFFFF))
         try:
-            os.rename(f, temp)
+            os.rename(path, temp)
             break
         except FileExistsError:
             pass
     else:
-        raise IOError(errno.EEXIST, "No usable temporary filename found")
+        raise OSError(errno.EEXIST, "No usable temporary filename found")
 
     try:
         os.unlink(temp)

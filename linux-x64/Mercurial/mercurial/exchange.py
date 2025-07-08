@@ -5,6 +5,7 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
 
 import collections
 import weakref
@@ -158,9 +159,8 @@ def getbundlespec(ui, fh):
                     params[b'obsolescence-mandatory'] = b'no'
 
         if not version:
-            raise error.Abort(
-                _(b'could not identify changegroup version in bundle')
-            )
+            params[b'changegroup'] = b'no'
+            version = b'v2'
         spec = b'%s-%s' % (comp, version)
         if params:
             spec += b';'
@@ -345,32 +345,56 @@ class pushoperation:
             # not target to push, all common are relevant
             return self.outgoing.commonheads
         unfi = self.repo.unfiltered()
-        # I want cheads = heads(::ancestorsof and ::commonheads)
-        # (ancestorsof is revs with secret changeset filtered out)
+        # I want cheads = heads(::push_heads and ::commonheads)
         #
-        # This can be expressed as:
-        #     cheads = ( (ancestorsof and ::commonheads)
-        #              + (commonheads and ::ancestorsof))"
-        #              )
-        #
-        # while trying to push we already computed the following:
+        # To push, we already computed
         #     common = (::commonheads)
-        #     missing = ((commonheads::ancestorsof) - commonheads)
+        #     missing = ((commonheads::push_heads) - commonheads)
         #
-        # We can pick:
-        # * ancestorsof part of common (::commonheads)
+        # So we basically search
+        #
+        #     almost_heads = heads((parents(missing) + push_heads) & common)
+        #
+        # We use "almost" here as this can return revision that are ancestors
+        # of other in the set and we need to explicitly turn it into an
+        # antichain later. We can do so using:
+        #
+        #     cheads = heads(almost_heads::almost_heads)
+        #
+        # In pratice the code is a bit more convulted to avoid some extra
+        # computation. It aims at doing the same computation as highlighted
+        # above however.
         common = self.outgoing.common
-        rev = self.repo.changelog.index.rev
-        cheads = [node for node in self.revs if rev(node) in common]
-        # and
-        # * commonheads parents on missing
-        revset = unfi.set(
-            b'%ln and parents(roots(%ln))',
-            self.outgoing.commonheads,
-            self.outgoing.missing,
-        )
-        cheads.extend(c.node() for c in revset)
-        return cheads
+        unfi = self.repo.unfiltered()
+        cl = unfi.changelog
+        to_rev = cl.index.rev
+        to_node = cl.node
+        parent_revs = cl.parentrevs
+        unselected = []
+        cheads = set()
+        # XXX-perf: `self.revs` and `outgoing.missing` could hold revs directly
+        for n in self.revs:
+            r = to_rev(n)
+            if r in common:
+                cheads.add(r)
+            else:
+                unselected.append(r)
+        known_non_heads = cl.ancestors(cheads, inclusive=True)
+        if unselected:
+            missing_revs = {to_rev(n) for n in self.outgoing.missing}
+            missing_revs.add(nullrev)
+            root_points = set()
+            for r in missing_revs:
+                p1, p2 = parent_revs(r)
+                if p1 not in missing_revs and p1 not in known_non_heads:
+                    root_points.add(p1)
+                if p2 not in missing_revs and p2 not in known_non_heads:
+                    root_points.add(p2)
+            if root_points:
+                heads = unfi.revs('heads(%ld::%ld)', root_points, root_points)
+                cheads.update(heads)
+        # XXX-perf: could this be a set of revision?
+        return [to_node(r) for r in sorted(cheads)]
 
     @property
     def commonheads(self):
@@ -426,7 +450,7 @@ def push(
         newbranch,
         bookmarks,
         publish,
-        **pycompat.strkwargs(opargs)
+        **pycompat.strkwargs(opargs),
     )
     if pushop.remote.local():
         missing = (
@@ -467,42 +491,46 @@ def push(
     # get lock as we might write phase data
     wlock = lock = None
     try:
-        # bundle2 push may receive a reply bundle touching bookmarks
-        # requiring the wlock. Take it now to ensure proper ordering.
-        maypushback = pushop.ui.configbool(b'experimental', b'bundle2.pushback')
-        if (
-            (not _forcebundle1(pushop))
-            and maypushback
-            and not bookmod.bookmarksinstore(repo)
-        ):
-            wlock = pushop.repo.wlock()
-        lock = pushop.repo.lock()
-        pushop.trmanager = transactionmanager(
-            pushop.repo, b'push-response', pushop.remote.url()
-        )
-    except error.LockUnavailable as err:
-        # source repo cannot be locked.
-        # We do not abort the push, but just disable the local phase
-        # synchronisation.
-        msg = b'cannot lock source repository: %s\n' % stringutil.forcebytestr(
-            err
-        )
-        pushop.ui.debug(msg)
+        try:
+            # bundle2 push may receive a reply bundle touching bookmarks
+            # requiring the wlock. Take it now to ensure proper ordering.
+            maypushback = pushop.ui.configbool(
+                b'experimental',
+                b'bundle2.pushback',
+            )
+            if (
+                (not _forcebundle1(pushop))
+                and maypushback
+                and not bookmod.bookmarksinstore(repo)
+            ):
+                wlock = pushop.repo.wlock()
+            lock = pushop.repo.lock()
+            pushop.trmanager = transactionmanager(
+                pushop.repo, b'push-response', pushop.remote.url()
+            )
+        except error.LockUnavailable as err:
+            # source repo cannot be locked.
+            # We do not abort the push, but just disable the local phase
+            # synchronisation.
+            msg = b'cannot lock source repository: %s\n'
+            msg %= stringutil.forcebytestr(err)
+            pushop.ui.debug(msg)
 
-    with wlock or util.nullcontextmanager():
-        with lock or util.nullcontextmanager():
-            with pushop.trmanager or util.nullcontextmanager():
-                pushop.repo.checkpush(pushop)
-                _checkpublish(pushop)
-                _pushdiscovery(pushop)
-                if not pushop.force:
-                    _checksubrepostate(pushop)
-                if not _forcebundle1(pushop):
-                    _pushbundle2(pushop)
-                _pushchangeset(pushop)
-                _pushsyncphase(pushop)
-                _pushobsolete(pushop)
-                _pushbookmark(pushop)
+        pushop.repo.checkpush(pushop)
+        _checkpublish(pushop)
+        _pushdiscovery(pushop)
+        if not pushop.force:
+            _checksubrepostate(pushop)
+        if not _forcebundle1(pushop):
+            _pushbundle2(pushop)
+        _pushchangeset(pushop)
+        _pushsyncphase(pushop)
+        _pushobsolete(pushop)
+        _pushbookmark(pushop)
+        if pushop.trmanager is not None:
+            pushop.trmanager.close()
+    finally:
+        lockmod.release(pushop.trmanager, lock, wlock)
 
     if repo.ui.configbool(b'experimental', b'remotenames'):
         logexchange.pullremotenames(repo, remote)
@@ -597,7 +625,10 @@ def _pushdiscoveryphase(pushop):
 
     (computed for both success and failure case for changesets push)"""
     outgoing = pushop.outgoing
-    unfi = pushop.repo.unfiltered()
+    repo = pushop.repo
+    unfi = repo.unfiltered()
+    cl = unfi.changelog
+    to_rev = cl.index.rev
     remotephases = listkeys(pushop.remote, b'phases')
 
     if (
@@ -619,38 +650,43 @@ def _pushdiscoveryphase(pushop):
         pushop.fallbackoutdatedphases = []
         return
 
-    pushop.remotephases = phases.remotephasessummary(
-        pushop.repo, pushop.fallbackheads, remotephases
+    fallbackheads_rev = {to_rev(n) for n in pushop.fallbackheads}
+    pushop.remotephases = phases.RemotePhasesSummary(
+        pushop.repo,
+        fallbackheads_rev,
+        remotephases,
     )
-    droots = pushop.remotephases.draftroots
+    droots = set(pushop.remotephases.draft_roots)
 
-    extracond = b''
-    if not pushop.remotephases.publishing:
-        extracond = b' and public()'
-    revset = b'heads((%%ln::%%ln) %s)' % extracond
-    # Get the list of all revs draft on remote by public here.
-    # XXX Beware that revset break if droots is not strictly
-    # XXX root we may want to ensure it is but it is costly
-    fallback = list(unfi.set(revset, droots, pushop.fallbackheads))
-    if not pushop.remotephases.publishing and pushop.publish:
-        future = list(
-            unfi.set(
-                b'%ln and (not public() or %ln::)', pushop.futureheads, droots
-            )
-        )
-    elif not outgoing.missing:
-        future = fallback
+    fallback_publishing = pushop.remotephases.publishing
+    push_publishing = pushop.remotephases.publishing or pushop.publish
+    missing_revs = {to_rev(n) for n in outgoing.missing}
+    drafts = unfi._phasecache.get_raw_set(unfi, phases.draft)
+
+    if fallback_publishing:
+        fallback_roots = droots - missing_revs
+        revset = b'heads(%ld::%ld)'
     else:
-        # adds changeset we are going to push as draft
-        #
-        # should not be necessary for publishing server, but because of an
-        # issue fixed in xxxxx we have to do it anyway.
-        fdroots = list(
-            unfi.set(b'roots(%ln  + %ln::)', outgoing.missing, droots)
-        )
-        fdroots = [f.node() for f in fdroots]
-        future = list(unfi.set(revset, fdroots, pushop.futureheads))
-    pushop.outdatedphases = future
+        fallback_roots = droots - drafts
+        fallback_roots -= missing_revs
+        # Get the list of all revs draft on remote but public here.
+        revset = b'heads((%ld::%ld) and public())'
+    if not fallback_roots:
+        fallback = fallback_rev = []
+    else:
+        fallback_rev = unfi.revs(revset, fallback_roots, fallbackheads_rev)
+        fallback = [repo[r] for r in fallback_rev]
+
+    if push_publishing:
+        published = missing_revs.copy()
+    else:
+        published = missing_revs - drafts
+    if pushop.publish:
+        published.update(fallbackheads_rev & drafts)
+    elif fallback:
+        published.update(fallback_rev)
+
+    pushop.outdatedphases = [repo[r] for r in cl.headrevs(published)]
     pushop.fallbackoutdatedphases = fallback
 
 
@@ -668,8 +704,8 @@ def _pushdiscoveryobsmarkers(pushop):
     repo = pushop.repo
     # very naive computation, that can be quite expensive on big repo.
     # However: evolution is currently slow on them anyway.
-    nodes = (c.node() for c in repo.set(b'::%ln', pushop.futureheads))
-    pushop.outobsmarkers = pushop.repo.obsstore.relevantmarkers(nodes)
+    revs = repo.revs(b'::%ln', pushop.futureheads)
+    pushop.outobsmarkers = pushop.repo.obsstore.relevantmarkers(revs=revs)
 
 
 @pushdiscovery(b'bookmarks')
@@ -714,13 +750,19 @@ def _processcompared(pushop, pushed, explicit, remotebms, comp):
             if bookmod.isdivergent(b):
                 pushop.ui.warn(_(b'cannot push divergent bookmark %s!\n') % b)
                 pushop.bkresult = 2
+            elif pushed and repo[scid].rev() not in pushed:
+                # in case of race or secret
+                msg = _(b'cannot push bookmark X without its revision: %s!\n')
+                pushop.ui.warn(msg % b)
+                pushop.bkresult = 2
             else:
                 pushop.outbookmarks.append((b, b'', scid))
     # search for overwritten bookmark
     for b, scid, dcid in list(advdst) + list(diverge) + list(differ):
         if b in explicit:
             explicit.remove(b)
-            pushop.outbookmarks.append((b, dcid, scid))
+            if not pushed or repo[scid].rev() in pushed:
+                pushop.outbookmarks.append((b, dcid, scid))
     # search for bookmark to delete
     for b, scid, dcid in adddst:
         if b in explicit:
@@ -879,8 +921,13 @@ def _pushb2checkphases(pushop, bundler):
     if pushop.remotephases is not None and hasphaseheads:
         # check that the remote phase has not changed
         checks = {p: [] for p in phases.allphases}
-        checks[phases.public].extend(pushop.remotephases.publicheads)
-        checks[phases.draft].extend(pushop.remotephases.draftroots)
+        to_node = pushop.repo.unfiltered().changelog.node
+        checks[phases.public].extend(
+            to_node(r) for r in pushop.remotephases.public_heads
+        )
+        checks[phases.draft].extend(
+            to_node(r) for r in pushop.remotephases.draft_roots
+        )
         if any(checks.values()):
             for phase in checks:
                 checks[phase].sort()
@@ -1232,18 +1279,18 @@ def _pushchangeset(pushop):
     ):
         # push everything,
         # use the fast path, no race possible on push
-        cg = changegroup.makechangegroup(
-            pushop.repo,
-            outgoing,
-            b'01',
-            b'push',
-            fastpath=True,
-            bundlecaps=bundlecaps,
-        )
+        fastpath = True
     else:
-        cg = changegroup.makechangegroup(
-            pushop.repo, outgoing, b'01', b'push', bundlecaps=bundlecaps
-        )
+        fastpath = False
+
+    cg = changegroup.makechangegroup(
+        pushop.repo,
+        outgoing,
+        b'01',
+        b'push',
+        fastpath=fastpath,
+        bundlecaps=bundlecaps,
+    )
 
     # apply changegroup to remote
     # local repo finds heads on server, finds out what
@@ -1284,8 +1331,16 @@ def _pushsyncphase(pushop):
         _localphasemove(pushop, cheads)
         # don't push any phase data as there is nothing to push
     else:
-        ana = phases.analyzeremotephases(pushop.repo, cheads, remotephases)
-        pheads, droots = ana
+        unfi = pushop.repo.unfiltered()
+        to_rev = unfi.changelog.index.rev
+        to_node = unfi.changelog.node
+        cheads_revs = [to_rev(n) for n in cheads]
+        pheads_revs, _dr = phases.analyze_remote_phases(
+            pushop.repo,
+            cheads_revs,
+            remotephases,
+        )
+        pheads = [to_node(r) for r in pheads_revs]
         ### Apply remote phase on local
         if remotephases.get(b'publishing', False):
             _localphasemove(pushop, cheads)
@@ -1663,7 +1718,7 @@ def pull(
         includepats=includepats,
         excludepats=excludepats,
         depth=depth,
-        **pycompat.strkwargs(opargs)
+        **pycompat.strkwargs(opargs),
     )
 
     peerlocal = pullop.remote.local()
@@ -1695,10 +1750,10 @@ def pull(
             )
 
     pullop.trmanager = transactionmanager(repo, b'pull', remote.url())
-    wlock = util.nullcontextmanager()
+    wlock = util.nullcontextmanager
     if not bookmod.bookmarksinstore(repo):
-        wlock = repo.wlock()
-    with wlock, repo.lock(), pullop.trmanager:
+        wlock = repo.wlock
+    with wlock(), repo.lock(), pullop.trmanager:
         if confirm or (
             repo.ui.configbool(b"pull", b"confirm") and not repo.ui.plain()
         ):
@@ -2039,10 +2094,17 @@ def _pullapplyphases(pullop, remotephases):
     pullop.stepsdone.add(b'phases')
     publishing = bool(remotephases.get(b'publishing', False))
     if remotephases and not publishing:
+        unfi = pullop.repo.unfiltered()
+        to_rev = unfi.changelog.index.rev
+        to_node = unfi.changelog.node
+        pulledsubset_revs = [to_rev(n) for n in pullop.pulledsubset]
         # remote is new and non-publishing
-        pheads, _dr = phases.analyzeremotephases(
-            pullop.repo, pullop.pulledsubset, remotephases
+        pheads_revs, _dr = phases.analyze_remote_phases(
+            pullop.repo,
+            pulledsubset_revs,
+            remotephases,
         )
+        pheads = [to_node(r) for r in pheads_revs]
         dheads = pullop.pulledsubset
     else:
         # Remote is old or publishing all common changesets
@@ -2359,7 +2421,7 @@ def getbundlechunks(
     common=None,
     bundlecaps=None,
     remote_sidedata=None,
-    **kwargs
+    **kwargs,
 ):
     """Return chunks constituting a bundle's raw data.
 
@@ -2419,7 +2481,7 @@ def getbundlechunks(
             bundlecaps=bundlecaps,
             b2caps=b2caps,
             remote_sidedata=remote_sidedata,
-            **pycompat.strkwargs(kwargs)
+            **pycompat.strkwargs(kwargs),
         )
 
     info[b'prefercompressed'] = bundler.prefercompressed
@@ -2442,7 +2504,7 @@ def _getbundlechangegrouppart(
     heads=None,
     common=None,
     remote_sidedata=None,
-    **kwargs
+    **kwargs,
 ):
     """add a changegroup part to the requested bundle"""
     if not kwargs.get('cg', True) or not b2caps:
@@ -2542,10 +2604,15 @@ def _getbundleobsmarkerpart(
 ):
     """add an obsolescence markers part to the requested bundle"""
     if kwargs.get('obsmarkers', False):
+        unfi_cl = repo.unfiltered().changelog
         if heads is None:
-            heads = repo.heads()
-        subset = [c.node() for c in repo.set(b'::%ln', heads)]
-        markers = repo.obsstore.relevantmarkers(subset)
+            headrevs = repo.changelog.headrevs()
+        else:
+            get_rev = unfi_cl.index.get_rev
+            headrevs = [get_rev(node) for node in heads]
+            headrevs = [rev for rev in headrevs if rev is not None]
+        revs = unfi_cl.ancestors(headrevs, inclusive=True)
+        markers = repo.obsstore.relevantmarkers(revs=revs)
         markers = obsutil.sortedmarkers(markers)
         bundle2.buildobsmarkerspart(bundler, markers)
 
@@ -2608,7 +2675,7 @@ def _getbundletagsfnodes(
     b2caps=None,
     heads=None,
     common=None,
-    **kwargs
+    **kwargs,
 ):
     """Transfer the .hgtags filenodes mapping.
 
@@ -2636,7 +2703,7 @@ def _getbundlerevbranchcache(
     b2caps=None,
     heads=None,
     common=None,
-    **kwargs
+    **kwargs,
 ):
     """Transfer the rev-branch-cache mapping
 
@@ -2833,8 +2900,23 @@ def _maybeapplyclonebundle(pullop):
     entries = bundlecaches.sortclonebundleentries(repo.ui, entries)
 
     url = entries[0][b'URL']
+    digest = entries[0].get(b'DIGEST')
+    if digest:
+        algorithms = urlmod.digesthandler.digest_algorithms.keys()
+        preference = dict(zip(algorithms, range(len(algorithms))))
+        best_entry = None
+        best_preference = len(preference)
+        for digest_entry in digest.split(b','):
+            cur_algo, cur_digest = digest_entry.split(b':')
+            if cur_algo not in preference:
+                continue
+            if preference[cur_algo] < best_preference:
+                best_entry = digest_entry
+                best_preference = preference[cur_algo]
+        digest = best_entry
+
     repo.ui.status(_(b'applying clone bundle from %s\n') % url)
-    if trypullbundlefromurl(repo.ui, repo, url, remote):
+    if trypullbundlefromurl(repo.ui, repo, url, remote, digest):
         repo.ui.status(_(b'finished applying clone bundle\n'))
     # Bundle failed.
     #
@@ -2863,14 +2945,14 @@ def inline_clone_bundle_open(ui, url, peer):
     return util.chunkbuffer(peerclonebundle)
 
 
-def trypullbundlefromurl(ui, repo, url, peer):
+def trypullbundlefromurl(ui, repo, url, peer, digest):
     """Attempt to apply a bundle from a URL."""
     with repo.lock(), repo.transaction(b'bundleurl') as tr:
         try:
             if url.startswith(bundlecaches.CLONEBUNDLESCHEME):
                 fh = inline_clone_bundle_open(ui, url, peer)
             else:
-                fh = urlmod.open(ui, url)
+                fh = urlmod.open(ui, url, digest=digest)
             cg = readbundle(ui, fh, b'stream')
 
             if isinstance(cg, streamclone.streamcloneapplier):

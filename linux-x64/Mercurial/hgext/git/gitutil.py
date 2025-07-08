@@ -1,5 +1,7 @@
 """utilities to assist in working with pygit2"""
 
+from __future__ import annotations
+
 from mercurial.node import bin, sha1nodeconstants
 
 pygit2_module = None

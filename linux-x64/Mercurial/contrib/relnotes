@@ -1,0 +1,207 @@
+#!/usr/bin/env python3
+"""Generate release notes from our commit log.
+
+This uses the relnotes extension directives when they're available,
+and falls back to our old pre-relnotes logic that used to live in the
+release-tools repo.
+"""
+import argparse
+import re
+import subprocess
+
+rules = {
+    # keep
+    r"\(issue": 100,
+    r"\(BC\)": 100,
+    r"\(API\)": 100,
+    r"\(SEC\)": 100,
+    # core commands, bump up
+    r"(commit|files|log|pull|push|patch|status|tag|summary)(|s|es):": 20,
+    r"(annotate|alias|branch|bookmark|clone|graft|import|verify).*:": 20,
+    # extensions, bump up
+    r"(mq|shelve|rebase):": 20,
+    # newsy
+    r": deprecate": 20,
+    r": new.*(extension|flag|module)": 10,
+    r"( ability|command|feature|option|support)": 10,
+    # experimental
+    r"hg-experimental": 20,
+    r"(from|graduate).*experimental": 15,
+    r"(hide|mark).*experimental": -10,
+    # bug-like?
+    r"(fix|don't break|improve)": 7,
+    r"(not|n't|avoid|fix|prevent).*crash": 10,
+    r"vulnerab": 10,
+    # boring stuff, bump down
+    r"^contrib": -5,
+    r"debug": -5,
+    r"help": -5,
+    r"minor": -5,
+    r"(doc|metavar|bundle2|obsolete|obsmarker|rpm|setup|debug\S+:)": -15,
+    r"(check-code|check-commit|check-config|import-checker)": -20,
+    r"(flake8|lintian|pyflakes|pylint)": -20,
+    # cleanups and refactoring
+    r"(clean ?up|white ?space|spelling|quoting)": -20,
+    r"(flatten|dedent|indent|nesting|unnest)": -20,
+    r"(typo|hint|note|comment|TODO|FIXME)": -20,
+    r"(style:|convention|one-?liner)": -20,
+    r"(argument|absolute_import|attribute|assignment|mutable)": -15,
+    r"(scope|True|False)": -10,
+    r"(unused|useless|unnecessar|superfluous|duplicate|deprecated)": -10,
+    r"(redundant|pointless|confusing|uninitialized|meaningless|dead)": -10,
+    r": (drop|remove|delete|rip out)": -10,
+    r": (inherit|rename|simplify|naming|inline)": -10,
+    r"(correct doc|docstring|document .* method)": -20,
+    r"(abstract|factor|extract|prepare|split|replace| import)": -20,
+    r": add.*(function|method|implementation|example)": -10,
+    r": (move|extract) .* (to|into|from|out of)": -20,
+    r": implement ": -5,
+    r": use .* implementation": -20,
+    r": use .* instead of": -20,
+    # code
+    r"_": -10,
+    r"__": -5,
+    r"\(\)": -5,
+    r"\S\S\S+\.\S\S\S\S+": -5,
+    # dumb keywords
+    r"\S+/\S+:": -10,
+    r"\S+\.\S+:": -10,
+    # python compatibility
+    r"[Pp]y(|thon) ?[23]": -20,
+    r"pycompat": -20,
+    r"(coerce|convert|encode) .*to (byte|sys|)(s|str|string)": -20,
+    # tests
+    r"^test(|s|ing|runner|-\S+):": -20,
+    r"^(f|hghave|run-tests):": -20,
+    r"add.* tests?": -20,
+    r"(buildbot|fuzz|mock|ratchet)": -10,
+    # drop
+    r"^i18n-": -50,
+    r"^i18n:.*(hint|comment)": -50,
+    r"perf:": -50,
+    r"Added.*for changeset": -50,
+    r"^_": -50,
+}
+
+cutoff = 10
+commits = []
+
+groupings = [
+    (r"util|parsers|repo|ctx|context|revlog|filelog|alias|cmdutil", "core"),
+    (r"revset|template|ui|dirstate|hook|i18n|transaction|wire|vfs", "core"),
+    (r"dispatch|exchange|localrepo|streamclone|color|pager", "core"),
+    (r"hgweb|paper|coal|gitweb|monoblue|spartan", "hgweb"),
+    (r"pull|push|revert|resolve|annotate|bookmark|branch|clone", "commands"),
+    (r"commands|commit|config|files|graft|import|log|merge|patch", "commands"),
+    (r"phases|status|summary|amend|tag|help|verify", "commands"),
+    (r"rebase|mq|convert|eol|histedit|largefiles", "extensions"),
+    (r"shelve|unshelve", "extensions"),
+]
+
+
+def wikify(desc):
+    desc = desc.replace("(issue", "(Bts:issue")
+    desc = re.sub(r"\b([0-9a-f]{12})\b", r"Cset:\1", desc)
+    # stop ParseError from being recognized as a (nonexistent) wiki page
+    desc = re.sub(r" ([A-Z][a-z]+[A-Z][a-z]+)\b", r" !\1", desc)
+    # prevent wiki markup of magic methods
+    desc = re.sub(r"\b(\S*__\S*)\b", r"`\1`", desc)
+    return desc
+
+
+def main():
+    desc = "example: %(prog)s 4.7.2 --stoprev 4.8rc0"
+    ap = argparse.ArgumentParser(description=desc)
+    ap.add_argument(
+        "startrev",
+        metavar="REV",
+        type=str,
+        help=(
+            "Starting revision for the release notes. This revision "
+            "won't be included, but later revisions will."
+        ),
+    )
+    ap.add_argument(
+        "--stoprev",
+        metavar="REV",
+        type=str,
+        default="@",
+        help=(
+            "Stop revision for release notes. This revision will be included,"
+            " but no later revisions will. This revision needs to be "
+            "a descendant of startrev."
+        ),
+    )
+    args = ap.parse_args()
+    fromext = subprocess.check_output(
+        [
+            "hg",
+            "--config",
+            "extensions.releasenotes=",
+            "releasenotes",
+            "-r",
+            "only(%s, %s)" % (args.stoprev, args.startrev),
+        ]
+    ).decode("utf-8")
+    # Find all release notes from un-relnotes-flagged commits.
+    for entry in sorted(
+        subprocess.check_output(
+            [
+                "hg",
+                "log",
+                "-r",
+                "only(%s, %s) - merge()" % (args.stoprev, args.startrev),
+                "-T",
+                r"{desc|firstline}\n",
+            ]
+        )
+        .decode("utf-8")
+        .splitlines()
+    ):
+        desc = entry.replace("`", "'")
+
+        score = 0
+        for rule, val in rules.items():
+            if re.search(rule, desc):
+                score += val
+
+        if score >= cutoff:
+            commits.append(wikify(desc))
+    # Group unflagged notes.
+    groups = {}
+    bcs = []
+    apis = []
+
+    for d in commits:
+        if "(BC)" in d:
+            bcs.append(d)
+        if "(API)" in d:
+            apis.append(d)
+        for rule, g in groupings:
+            if re.match(rule, d):
+                groups.setdefault(g, []).append(d)
+                break
+        else:
+            groups.setdefault("unsorted", []).append(d)
+    print(fromext)
+    # print legacy release notes sections
+    for g in sorted(groups):
+        print("\n=== %s ===" % g)
+        for d in sorted(groups[g]):
+            print(" * %s" % d)
+
+    if bcs:
+        print("\n=== Behavior Changes ===\n")
+
+    for d in sorted(bcs):
+        print(" * %s" % d)
+
+    if apis:
+        print("\n=== Internal API Changes ===\n")
+
+    for d in sorted(apis):
+        print(" * %s" % d)
+
+
+if __name__ == "__main__":
+    main()

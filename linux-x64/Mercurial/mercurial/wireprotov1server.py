@@ -5,13 +5,13 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
 
 import binascii
 import os
 
 from .i18n import _
 from .node import hex
-from .pycompat import getattr
 
 from . import (
     bundle2,
@@ -279,21 +279,23 @@ def get_cached_bundle_inline(repo, proto, path):
             clonebundlepath=path,
         )
 
-    bundle_dir = repo.vfs.join(bundlecaches.BUNDLE_CACHE_DIR)
-    clonebundlepath = repo.vfs.join(bundle_dir, path)
+    bundle_root = repo.ui.config(b'server', b'peer-bundle-cache-root')
+    bundle_root_dir = repo.vfs.join(bundle_root)
+    clonebundlepath = repo.vfs.join(bundle_root, path)
     if not repo.vfs.exists(clonebundlepath):
         raise error.Abort(b'clonebundle %s does not exist' % path)
 
-    clonebundles_dir = os.path.realpath(bundle_dir)
+    clonebundles_dir = os.path.realpath(bundle_root_dir)
+    # audit invariance: absolute path of the bundle is below the bundle root
     if not os.path.realpath(clonebundlepath).startswith(clonebundles_dir):
         raise error.Abort(b'clonebundle %s is using an illegal path' % path)
 
     def generator(vfs, bundle_path):
-        with vfs(bundle_path) as f:
+        # path audited above already
+        with vfs(bundle_path, auditpath=False) as f:
             length = os.fstat(f.fileno())[6]
             yield util.uvarintencode(length)
-            for chunk in util.filechunkiter(f):
-                yield chunk
+            yield from util.filechunkiter(f)
 
     stream = generator(repo.vfs, clonebundlepath)
     return wireprototypes.streamres(gen=stream, prefer_uncompressed=True)
@@ -313,6 +315,7 @@ def clonebundles(repo, proto):
         if line.startswith(bundlecaches.CLONEBUNDLESCHEME):
             continue
         modified_manifest.append(line)
+    modified_manifest.append(b'')
     return wireprototypes.bytesresponse(b'\n'.join(modified_manifest))
 
 
@@ -487,7 +490,7 @@ def find_pullbundle(repo, proto, opts, clheads, heads, common):
         repo.ui.debug(b'sending pullbundle "%s"\n' % path)
         try:
             return repo.vfs.open(path)
-        except IOError:
+        except OSError:
             repo.ui.debug(b'pullbundle "%s" not accessible\n' % path)
             continue
     return None
@@ -721,7 +724,7 @@ def unbundle(repo, proto, heads):
                 r = exchange.unbundle(
                     repo, gen, their_heads, b'serve', proto.client()
                 )
-                if util.safehasattr(r, 'addpart'):
+                if hasattr(r, 'addpart'):
                     # The return looks streamable, we are in the bundle2 case
                     # and should return a stream.
                     return wireprototypes.streamreslegacy(gen=r.getchunks())

@@ -6,6 +6,7 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
 
 from .node import hex
 
@@ -57,10 +58,8 @@ def readremotenames(repo):
     information, call the respective functions.
     """
 
-    for bmentry in readremotenamefile(repo, b'bookmarks'):
-        yield bmentry
-    for branchentry in readremotenamefile(repo, b'branches'):
-        yield branchentry
+    yield from readremotenamefile(repo, b'bookmarks')
+    yield from readremotenamefile(repo, b'branches')
 
 
 def writeremotenamefile(repo, remotepath, names, nametype):

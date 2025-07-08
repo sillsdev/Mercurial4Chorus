@@ -6,6 +6,7 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
 
 import gc
 import os
@@ -34,7 +35,6 @@ from .. import (
     pathutil,
     profiling,
     pycompat,
-    rcutil,
     registrar,
     scmutil,
     templater,
@@ -49,6 +49,7 @@ from . import (
     webutil,
     wsgicgi,
 )
+from ..configuration import rcutil
 from ..utils import dateutil
 
 
@@ -120,7 +121,6 @@ def rawindexentries(ui, repos, req, subdir=b''):
     seenrepos = set()
     seendirs = set()
     for name, path in repos:
-
         if not name.startswith(subdir):
             continue
         name = name[len(subdir) :]
@@ -152,7 +152,7 @@ def rawindexentries(ui, repos, req, subdir=b''):
                 try:
                     hg.repository(ui, path)
                     directory = False
-                except (IOError, error.RepoError):
+                except (OSError, error.RepoError):
                     pass
 
         parts = [
@@ -211,7 +211,7 @@ def rawindexentries(ui, repos, req, subdir=b''):
         # update time with local timezone
         try:
             r = hg.repository(ui, path)
-        except IOError:
+        except OSError:
             u.warn(_(b'error accessing repository at %s\n') % path)
             continue
         except error.RepoError:
@@ -382,8 +382,7 @@ class hgwebdir:
         profile = self.ui.configbool(b'profiling', b'enabled')
         with profiling.profile(self.ui, enabled=profile):
             try:
-                for r in self._runwsgi(req, res):
-                    yield r
+                yield from self._runwsgi(req, res)
             finally:
                 # There are known cycles in localrepository that prevent
                 # those objects (and tons of held references) from being
@@ -410,15 +409,15 @@ class hgwebdir:
                     gc.collect(generation=1)
 
     def _runwsgi(self, req, res):
+        self.refresh()
+
+        csp, nonce = cspvalues(self.ui)
+        if csp:
+            res.headers[b'Content-Security-Policy'] = csp
+
+        virtual = req.dispatchpath.strip(b'/')
+        tmpl = self.templater(req, nonce)
         try:
-            self.refresh()
-
-            csp, nonce = cspvalues(self.ui)
-            if csp:
-                res.headers[b'Content-Security-Policy'] = csp
-
-            virtual = req.dispatchpath.strip(b'/')
-            tmpl = self.templater(req, nonce)
             ctype = tmpl.render(b'mimetype', {b'encoding': encoding.encoding})
 
             # Global defaults. These can be overridden by any handler.
@@ -452,8 +451,7 @@ class hgwebdir:
             def _virtualdirs():
                 # Check the full virtual path, and each parent
                 yield virtual
-                for p in pathutil.finddirs(virtual):
-                    yield p
+                yield from pathutil.finddirs(virtual)
 
             for virtualrepo in _virtualdirs():
                 real = repos.get(virtualrepo)
@@ -475,7 +473,7 @@ class hgwebdir:
                         # ensure caller gets private copy of ui
                         repo = hg.repository(self.ui.copy(), real)
                         return hgweb_mod.hgweb(repo).run_wsgi(req, res)
-                    except IOError as inst:
+                    except OSError as inst:
                         msg = encoding.strtolocal(inst.strerror)
                         raise ErrorResponse(HTTP_SERVER_ERROR, msg)
                     except error.RepoError as inst:

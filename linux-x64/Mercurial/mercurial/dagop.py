@@ -5,10 +5,21 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
 
 import heapq
+import typing
+from typing import (
+    List,
+)
 
 from .thirdparty import attr
+
+# Force pytype to use the non-vendored package
+if typing.TYPE_CHECKING:
+    # noinspection PyPackageRequirements
+    import attr
+
 from .node import nullrev
 from . import (
     error,
@@ -747,7 +758,7 @@ def _annotatepair(parents, childfctx, child, skipchild, diffopts):
     return child
 
 
-def annotate(base, parents, skiprevs=None, diffopts=None):
+def annotate(base, parents, skiprevs=None, diffopts=None) -> List[annotateline]:
     """Core algorithm for filectx.annotate()
 
     `parents(fctx)` is a function returning a list of parent filectxs.
@@ -997,8 +1008,7 @@ def toposort(revs, parentsfunc, firstbranch=()):
                 # subgroup
                 unblocked |= gr[1]
                 # output all revisions in the subgroup
-                for r in gr[0]:
-                    yield r
+                yield from gr[0]
                 # delete the subgroup that you just output
                 # unless it is groups[0] in which case you just empty it.
                 if targetidx:
@@ -1008,8 +1018,7 @@ def toposort(revs, parentsfunc, firstbranch=()):
     # Check if we have some subgroup waiting for revisions we are not going to
     # iterate over
     for g in groups:
-        for r in g[0]:
-            yield r
+        yield from g[0]
 
 
 def headrevs(revs, parentsfn):
@@ -1033,6 +1042,37 @@ def headrevs(revs, parentsfn):
         up(parentsfn(rev))
     headrevs.difference_update(parents)
     return headrevs
+
+
+def headrevsdiff(parentsfn, start, stop):
+    """Compute how the set of heads changed between
+    revisions `start-1` and `stop-1`.
+    """
+    parents = set()
+
+    heads_added = set()
+    heads_removed = set()
+
+    for rev in range(stop - 1, start - 1, -1):
+        if rev in parents:
+            parents.remove(rev)
+        else:
+            heads_added.add(rev)
+        for p in parentsfn(rev):
+            parents.add(p)
+
+    # now `parents` is the collection of candidate removed heads
+    rev = start - 1
+    while parents:
+        if rev in parents:
+            heads_removed.add(rev)
+            parents.remove(rev)
+
+        for p in parentsfn(rev):
+            parents.discard(p)
+        rev = rev - 1
+
+    return (heads_removed, heads_added)
 
 
 def headrevssubset(revsfn, parentrevsfn, startrev=None, stoprevs=None):

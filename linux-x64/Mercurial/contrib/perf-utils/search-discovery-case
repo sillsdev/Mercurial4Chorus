@@ -1,0 +1,214 @@
+#!/usr/bin/env python3
+# Search for interesting discovery instance
+#
+#  search-discovery-case REPO [REPO]…
+#
+# This use a subsetmaker extension (next to this script) to generate a steam of
+# random discovery instance. When interesting case are discovered, information
+# about them are print on the stdout.
+
+import json
+import os
+import queue
+import random
+import signal
+import subprocess
+import sys
+import threading
+
+this_script = os.path.abspath(sys.argv[0])
+this_dir = os.path.dirname(this_script)
+hg_dir = os.path.join(this_dir, '..', '..')
+HG_REPO = os.path.normpath(hg_dir)
+HG_BIN = os.path.join(HG_REPO, 'hg')
+
+JOB = int(os.environ.get('NUMBER_OF_PROCESSORS', 8))
+
+
+SLICING = ('scratch', 'randomantichain', 'rev')
+
+
+def nb_revs(repo_path):
+    cmd = [
+        HG_BIN,
+        '--repository',
+        repo_path,
+        'log',
+        '--template',
+        '{rev}',
+        '--rev',
+        'tip',
+    ]
+    s = subprocess.Popen(cmd, stdout=subprocess.PIPE)
+    out, err = s.communicate()
+    return int(out)
+
+
+repos = []
+for repo in sys.argv[1:]:
+    size = nb_revs(repo)
+    repos.append((repo, size))
+
+
+def pick_one(repo):
+    pick = random.choice(SLICING)
+    seed = random.randint(0, 100000)
+    if pick == 'scratch':
+        start = int(repo[1] * 0.3)
+        end = int(repo[1] * 0.7)
+        nb = random.randint(start, end)
+        return ('scratch', nb, seed)
+    elif pick == 'randomantichain':
+        return ('randomantichain', seed)
+    elif pick == 'rev':
+        start = int(repo[1] * 0.3)
+        end = int(repo[1])
+        rev = random.randint(start, end)
+        return ('rev', rev)
+    else:
+        assert False
+
+
+done = threading.Event()
+cases = queue.Queue(maxsize=10 * JOB)
+results = queue.Queue()
+
+
+def worker():
+    while not done.is_set():
+        c = cases.get()
+        if c is None:
+            return
+        try:
+            res = process(c)
+            results.put((c, res))
+        except Exception as exc:
+            print('processing-failed: %s %s' % (c, exc), file=sys.stderr)
+        c = (c[0], c[2], c[1])
+        try:
+            res = process(c)
+            results.put((c, res))
+        except Exception as exc:
+            print('processing-failed: %s %s' % (c, exc), file=sys.stderr)
+
+
+SUBSET_PATH = os.path.join(HG_REPO, 'contrib', 'perf-utils', 'subsetmaker.py')
+
+
+CMD_BASE = (
+    HG_BIN,
+    'debugdiscovery',
+    '--template',
+    'json',
+    '--config',
+    'extensions.subset=%s' % SUBSET_PATH,
+)
+#    '--local-as-revs "$left" --local-as-revs "$right"'
+#    > /data/discovery-references/results/disco-mozilla-unified-$1-$2.txt
+#        )
+
+
+def to_revsets(case):
+    t = case[0]
+    if t == 'scratch':
+        return 'not scratch(all(), %d, "%d")' % (case[1], case[2])
+    elif t == 'randomantichain':
+        return '::randomantichain(all(), "%d")' % case[1]
+    elif t == 'rev':
+        return '::%d' % case[1]
+    else:
+        assert False
+
+
+def process(case):
+    (repo, left, right) = case
+    cmd = list(CMD_BASE)
+    cmd.append('-R')
+    cmd.append(repo[0])
+    cmd.append('--local-as-revs')
+    cmd.append(to_revsets(left))
+    cmd.append('--remote-as-revs')
+    cmd.append(to_revsets(right))
+    s = subprocess.Popen(cmd, stdout=subprocess.PIPE)
+    out, err = s.communicate()
+    return json.loads(out)[0]
+
+
+def interesting_boundary(res):
+    """check if a case is interesting or not
+
+    For now we are mostly interrested in case were we do multiple roundstrip
+    and where the boundary is somewhere in the middle of the undecided set.
+
+    Ideally, we would make this configurable, but this is not a focus for now
+
+    return None or (
+        round-trip,
+        undecided-common,
+        undecided-missing,
+        total-revs,
+        common-revs,
+        missing-revs,
+    )
+    """
+    roundtrips = res["total-roundtrips"]
+    if roundtrips <= 1:
+        return None
+    total_revs = res["nb-revs"]
+    common_revs = res["nb-revs-common"]
+    missing_revs = res["nb-revs-missing"]
+    undecided_common = res["nb-ini_und-common"]
+    undecided_missing = res["nb-ini_und-missing"]
+    if undecided_common == 0:
+        return None
+    if undecided_missing == 0:
+        return None
+    return (
+        roundtrips,
+        undecided_common,
+        undecided_missing,
+        total_revs,
+        common_revs,
+        missing_revs,
+    )
+
+
+def end(*args, **kwargs):
+    done.set()
+
+
+def format_case(case):
+    return '-'.join(str(s) for s in case)
+
+
+signal.signal(signal.SIGINT, end)
+
+for i in range(JOB):
+    threading.Thread(target=worker).start()
+
+nb_cases = 0
+while not done.is_set():
+    repo = random.choice(repos)
+    left = pick_one(repo)
+    right = pick_one(repo)
+    cases.put((repo, left, right))
+    while not results.empty():
+        # results has a single reader so this is fine
+        c, res = results.get_nowait()
+        boundary = interesting_boundary(res)
+        if boundary is not None:
+            print(c[0][0], format_case(c[1]), format_case(c[2]), *boundary)
+            sys.stdout.flush()
+
+    nb_cases += 1
+    if not nb_cases % 100:
+        print('[%d cases generated]' % nb_cases, file=sys.stderr)
+
+for i in range(JOB):
+    try:
+        cases.put_nowait(None)
+    except queue.Full:
+        pass
+
+print('[%d cases generated]' % nb_cases, file=sys.stderr)
+print('[ouput generation is over]' % nb_cases, file=sys.stderr)

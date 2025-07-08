@@ -5,6 +5,7 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
 
 import datetime
 import errno
@@ -16,7 +17,6 @@ from mercurial.hgweb import common as hgwebcommon
 from mercurial import (
     exthelper,
     pycompat,
-    util,
     wireprotoserver,
 )
 
@@ -33,7 +33,7 @@ HTTP_UNSUPPORTED_MEDIA_TYPE = hgwebcommon.HTTP_UNSUPPORTED_MEDIA_TYPE
 eh = exthelper.exthelper()
 
 
-@eh.wrapfunction(wireprotoserver, b'handlewsgirequest')
+@eh.wrapfunction(wireprotoserver, 'handlewsgirequest')
 def handlewsgirequest(orig, rctx, req, res, checkperm):
     """Wrap wireprotoserver.handlewsgirequest() to possibly process an LFS
     request if it is left unprocessed by the wrapped method.
@@ -44,7 +44,7 @@ def handlewsgirequest(orig, rctx, req, res, checkperm):
     if not rctx.repo.ui.configbool(b'experimental', b'lfs.serve'):
         return False
 
-    if not util.safehasattr(rctx.repo.svfs, 'lfslocalblobstore'):
+    if not hasattr(rctx.repo.svfs, 'lfslocalblobstore'):
         return False
 
     if not req.dispatchpath:
@@ -229,7 +229,7 @@ def _batchresponseobjects(req, objects, action, store):
                 # The client will skip this upload, but make sure it remains
                 # available locally.
                 store.linkfromusercache(oid)
-        except IOError as inst:
+        except OSError as inst:
             if inst.errno != errno.ENOENT:
                 _logexception(req)
 

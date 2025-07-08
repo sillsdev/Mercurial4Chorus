@@ -5,6 +5,7 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
 
 # obsolete experimental requirements:
 #  - manifestv2: An experimental new manifest format that allowed
@@ -104,22 +105,13 @@ WORKING_DIR_REQUIREMENTS = {
     DIRSTATE_V2_REQUIREMENT,
 }
 
-# List of requirement that impact "stream-clone" (and hardlink clone) and
-# cannot be changed in such cases.
+# List of requirement that do not impact "stream-clone" (and hardlink clone) and
+# can be ignored in such case.
 #
-# requirements not in this list are safe to be altered during stream-clone.
-#
-# note: the list is currently inherited from previous code and miss some relevant requirement while containing some irrelevant ones.
-STREAM_FIXED_REQUIREMENTS = {
-    ARCHIVED_PHASE_REQUIREMENT,
-    BOOKMARKS_IN_STORE_REQUIREMENT,
-    CHANGELOGV2_REQUIREMENT,
-    COPIESSDC_REQUIREMENT,
-    GENERALDELTA_REQUIREMENT,
-    INTERNAL_PHASE_REQUIREMENT,
-    REVLOG_COMPRESSION_ZSTD,
-    REVLOGV1_REQUIREMENT,
-    REVLOGV2_REQUIREMENT,
-    SPARSEREVLOG_REQUIREMENT,
-    TREEMANIFEST_REQUIREMENT,
+# requirements not in this list safe to be altered during stream-clone.
+STREAM_IGNORABLE_REQUIREMENTS = WORKING_DIR_REQUIREMENTS | {
+    DOTENCODE_REQUIREMENT,  # abstracted by the vfs layer
+    FNCACHE_REQUIREMENT,  # abstracted by the vfs layer
+    STORE_REQUIREMENT,  # abstracted by the vfs layer
+    NODEMAP_REQUIREMENT,  # Have some special logic to handle that case
 }

@@ -5,6 +5,7 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
 
 import re
 
@@ -26,7 +27,7 @@ class gitlfspointer(dict):
 
     def __init__(self, *args, **kwargs):
         self[b'version'] = self.VERSION
-        super(gitlfspointer, self).__init__(*args)
+        super().__init__(*args)
         self.update(pycompat.byteskwargs(kwargs))
 
     @classmethod

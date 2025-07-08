@@ -22,6 +22,8 @@ takes precedence over ignore options and defaults::
   attend-cat = false
 '''
 
+from __future__ import annotations
+
 from mercurial import (
     cmdutil,
     commands,
@@ -76,7 +78,7 @@ def uisetup(ui):
                 ui.disablepager()
         return orig(ui, options, cmd, cmdfunc)
 
-    extensions.wrapfunction(dispatch, b'_runcommand', pagecmd)
+    extensions.wrapfunction(dispatch, '_runcommand', pagecmd)
 
 
 attended = [b'annotate', b'cat', b'diff', b'export', b'glog', b'log', b'qdiff']

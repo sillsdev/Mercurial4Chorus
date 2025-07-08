@@ -4,6 +4,7 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
 
 import contextlib
 import struct
@@ -18,7 +19,6 @@ from . import (
     wireprototypes,
     wireprotov1server,
 )
-from .interfaces import util as interfaceutil
 from .utils import (
     compression,
     stringutil,
@@ -55,8 +55,7 @@ def decodevaluefromheaders(req, headerprefix):
     return b''.join(chunks)
 
 
-@interfaceutil.implementer(wireprototypes.baseprotocolhandler)
-class httpv1protocolhandler:
+class httpv1protocolhandler(wireprototypes.baseprotocolhandler):
     def __init__(self, req, ui, checkperm):
         self._req = req
         self._ui = ui
@@ -64,7 +63,7 @@ class httpv1protocolhandler:
         self._protocaps = None
 
     @property
-    def name(self):
+    def name(self) -> bytes:
         return b'http-v1'
 
     def getargs(self, args):
@@ -288,8 +287,7 @@ def _callhttp(repo, req, res, proto, cmd):
         yield struct.pack(b'B', len(name))
         yield name
 
-        for chunk in gen:
-            yield chunk
+        yield from gen
 
     def setresponse(code, contenttype, bodybytes=None, bodygen=None):
         if code == HTTP_OK:
@@ -374,8 +372,7 @@ def _sshv1respondooberror(fout, ferr, rsp):
     fout.flush()
 
 
-@interfaceutil.implementer(wireprototypes.baseprotocolhandler)
-class sshv1protocolhandler:
+class sshv1protocolhandler(wireprototypes.baseprotocolhandler):
     """Handler for requests services via version 1 of SSH protocol."""
 
     def __init__(self, ui, fin, fout):
@@ -385,7 +382,7 @@ class sshv1protocolhandler:
         self._protocaps = set()
 
     @property
-    def name(self):
+    def name(self) -> bytes:
         return wireprototypes.SSHV1
 
     def getargs(self, args):
@@ -527,24 +524,34 @@ class sshserver:
     def __init__(self, ui, repo, logfh=None, accesshidden=False):
         self._ui = ui
         self._repo = repo
-        self._fin, self._fout = ui.protectfinout()
         self._accesshidden = accesshidden
-
-        # Log write I/O to stdout and stderr if configured.
-        if logfh:
-            self._fout = util.makeloggingfileobject(
-                logfh, self._fout, b'o', logdata=True
-            )
-            ui.ferr = util.makeloggingfileobject(
-                logfh, ui.ferr, b'e', logdata=True
-            )
+        self._logfh = logfh
 
     def serve_forever(self):
         self.serveuntil(threading.Event())
-        self._ui.restorefinout(self._fin, self._fout)
 
     def serveuntil(self, ev):
         """Serve until a threading.Event is set."""
-        _runsshserver(
-            self._ui, self._repo, self._fin, self._fout, ev, self._accesshidden
-        )
+        with self._ui.protectedfinout() as (fin, fout):
+            if self._logfh:
+                # Log write I/O to stdout and stderr if configured.
+                fout = util.makeloggingfileobject(
+                    self._logfh,
+                    fout,
+                    b'o',
+                    logdata=True,
+                )
+                self._ui.ferr = util.makeloggingfileobject(
+                    self._logfh,
+                    self._ui.ferr,
+                    b'e',
+                    logdata=True,
+                )
+            _runsshserver(
+                self._ui,
+                self._repo,
+                fin,
+                fout,
+                ev,
+                self._accesshidden,
+            )

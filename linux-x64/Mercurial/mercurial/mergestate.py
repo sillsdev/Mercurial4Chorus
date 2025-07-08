@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import collections
 import shutil
 import struct
@@ -495,7 +497,6 @@ class _mergestate_base:
 
 
 class mergestate(_mergestate_base):
-
     statepathv1 = b'merge/state'
     statepathv2 = b'merge/state2'
 
@@ -767,7 +768,7 @@ class mergestate(_mergestate_base):
 
 class memmergestate(_mergestate_base):
     def __init__(self, repo):
-        super(memmergestate, self).__init__(repo)
+        super().__init__(repo)
         self._backups = {}
 
     def _make_backup(self, fctx, localkey):
@@ -779,45 +780,46 @@ class memmergestate(_mergestate_base):
 
 def recordupdates(repo, actions, branchmerge, getfiledata):
     """record merge actions to the dirstate"""
+    dirstate = repo.dirstate
+    update_file = dirstate.update_file
+
     # remove (must come first)
     for f, args, msg in actions.get(ACTION_REMOVE, []):
         if branchmerge:
-            repo.dirstate.update_file(f, p1_tracked=True, wc_tracked=False)
+            update_file(f, p1_tracked=True, wc_tracked=False)
         else:
-            repo.dirstate.update_file(f, p1_tracked=False, wc_tracked=False)
+            update_file(f, p1_tracked=False, wc_tracked=False)
 
     # forget (must come first)
     for f, args, msg in actions.get(ACTION_FORGET, []):
-        repo.dirstate.update_file(f, p1_tracked=False, wc_tracked=False)
+        update_file(f, p1_tracked=False, wc_tracked=False)
 
     # resolve path conflicts
     for f, args, msg in actions.get(ACTION_PATH_CONFLICT_RESOLVE, []):
         (f0, origf0) = args
-        repo.dirstate.update_file(f, p1_tracked=False, wc_tracked=True)
-        repo.dirstate.copy(origf0, f)
+        update_file(f, p1_tracked=False, wc_tracked=True)
+        dirstate.copy(origf0, f)
         if f0 == origf0:
-            repo.dirstate.update_file(f0, p1_tracked=True, wc_tracked=False)
+            update_file(f0, p1_tracked=True, wc_tracked=False)
         else:
-            repo.dirstate.update_file(f0, p1_tracked=False, wc_tracked=False)
+            update_file(f0, p1_tracked=False, wc_tracked=False)
 
     # re-add
     for f, args, msg in actions.get(ACTION_ADD, []):
-        repo.dirstate.update_file(f, p1_tracked=False, wc_tracked=True)
+        update_file(f, p1_tracked=False, wc_tracked=True)
 
     # re-add/mark as modified
     for f, args, msg in actions.get(ACTION_ADD_MODIFIED, []):
         if branchmerge:
-            repo.dirstate.update_file(
+            update_file(
                 f, p1_tracked=True, wc_tracked=True, possibly_dirty=True
             )
         else:
-            repo.dirstate.update_file(f, p1_tracked=False, wc_tracked=True)
+            update_file(f, p1_tracked=False, wc_tracked=True)
 
     # exec change
     for f, args, msg in actions.get(ACTION_EXEC, []):
-        repo.dirstate.update_file(
-            f, p1_tracked=True, wc_tracked=True, possibly_dirty=True
-        )
+        update_file(f, p1_tracked=True, wc_tracked=True, possibly_dirty=True)
 
     # keep
     for f, args, msg in actions.get(ACTION_KEEP, []):
@@ -835,9 +837,9 @@ def recordupdates(repo, actions, branchmerge, getfiledata):
     for f, args, msg in actions.get(ACTION_GET, []):
         if branchmerge:
             # tracked in p1 can be True also but update_file should not care
-            old_entry = repo.dirstate.get_entry(f)
+            old_entry = dirstate.get_entry(f)
             p1_tracked = old_entry.any_tracked and not old_entry.added
-            repo.dirstate.update_file(
+            update_file(
                 f,
                 p1_tracked=p1_tracked,
                 wc_tracked=True,
@@ -845,7 +847,7 @@ def recordupdates(repo, actions, branchmerge, getfiledata):
             )
         else:
             parentfiledata = getfiledata[f] if getfiledata else None
-            repo.dirstate.update_file(
+            update_file(
                 f,
                 p1_tracked=True,
                 wc_tracked=True,
@@ -859,7 +861,7 @@ def recordupdates(repo, actions, branchmerge, getfiledata):
             # We've done a branch merge, mark this file as merged
             # so that we properly record the merger later
             p1_tracked = f1 == f
-            repo.dirstate.update_file(
+            update_file(
                 f,
                 p1_tracked=p1_tracked,
                 wc_tracked=True,
@@ -867,13 +869,11 @@ def recordupdates(repo, actions, branchmerge, getfiledata):
             )
             if f1 != f2:  # copy/rename
                 if move:
-                    repo.dirstate.update_file(
-                        f1, p1_tracked=True, wc_tracked=False
-                    )
+                    update_file(f1, p1_tracked=True, wc_tracked=False)
                 if f1 != f:
-                    repo.dirstate.copy(f1, f)
+                    dirstate.copy(f1, f)
                 else:
-                    repo.dirstate.copy(f2, f)
+                    dirstate.copy(f2, f)
         else:
             # We've update-merged a locally modified file, so
             # we set the dirstate to emulate a normal checkout
@@ -881,30 +881,28 @@ def recordupdates(repo, actions, branchmerge, getfiledata):
             # merge will appear as a normal local file
             # modification.
             if f2 == f:  # file not locally copied/moved
-                repo.dirstate.update_file(
+                update_file(
                     f, p1_tracked=True, wc_tracked=True, possibly_dirty=True
                 )
             if move:
-                repo.dirstate.update_file(
-                    f1, p1_tracked=False, wc_tracked=False
-                )
+                update_file(f1, p1_tracked=False, wc_tracked=False)
 
     # directory rename, move local
     for f, args, msg in actions.get(ACTION_DIR_RENAME_MOVE_LOCAL, []):
         f0, flag = args
         if branchmerge:
-            repo.dirstate.update_file(f, p1_tracked=False, wc_tracked=True)
-            repo.dirstate.update_file(f0, p1_tracked=True, wc_tracked=False)
-            repo.dirstate.copy(f0, f)
+            update_file(f, p1_tracked=False, wc_tracked=True)
+            update_file(f0, p1_tracked=True, wc_tracked=False)
+            dirstate.copy(f0, f)
         else:
-            repo.dirstate.update_file(f, p1_tracked=True, wc_tracked=True)
-            repo.dirstate.update_file(f0, p1_tracked=False, wc_tracked=False)
+            update_file(f, p1_tracked=True, wc_tracked=True)
+            update_file(f0, p1_tracked=False, wc_tracked=False)
 
     # directory rename, get
     for f, args, msg in actions.get(ACTION_LOCAL_DIR_RENAME_GET, []):
         f0, flag = args
         if branchmerge:
-            repo.dirstate.update_file(f, p1_tracked=False, wc_tracked=True)
-            repo.dirstate.copy(f0, f)
+            update_file(f, p1_tracked=False, wc_tracked=True)
+            dirstate.copy(f0, f)
         else:
-            repo.dirstate.update_file(f, p1_tracked=True, wc_tracked=True)
+            update_file(f, p1_tracked=True, wc_tracked=True)

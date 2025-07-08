@@ -82,15 +82,14 @@ EXTRA ATTRIBUTES AND METHODS
 
 # $Id: keepalive.py,v 1.14 2006/04/04 21:00:32 mstenner Exp $
 
+from __future__ import annotations
 
 import collections
 import hashlib
-import socket
 import sys
 import threading
 
 from .i18n import _
-from .pycompat import getattr
 from .node import hex
 from . import (
     pycompat,
@@ -249,7 +248,7 @@ class KeepAliveHandler:
             raise urlerr.urlerror(
                 _(b'bad HTTP status line: %s') % pycompat.sysbytes(err.line)
             )
-        except (socket.error, httplib.HTTPException) as err:
+        except (OSError, httplib.HTTPException) as err:
             raise urlerr.urlerror(err)
 
         # If not a persistent connection, don't try to reuse it. Look
@@ -282,7 +281,7 @@ class KeepAliveHandler:
             r = h.getresponse()
             # note: just because we got something back doesn't mean it
             # worked.  We'll check the version below, too.
-        except (socket.error, httplib.HTTPException):
+        except (OSError, httplib.HTTPException):
             r = None
         except:  # re-raises
             # adding this block just in case we've missed
@@ -340,7 +339,7 @@ class KeepAliveHandler:
                 h.putrequest(
                     req.get_method(),
                     urllibcompat.getselector(req),
-                    **skipheaders
+                    **skipheaders,
                 )
                 if 'content-type' not in headers:
                     h.putheader(
@@ -352,9 +351,9 @@ class KeepAliveHandler:
                 h.putrequest(
                     req.get_method(),
                     urllibcompat.getselector(req),
-                    **skipheaders
+                    **skipheaders,
                 )
-        except socket.error as err:
+        except OSError as err:
             raise urlerr.urlerror(err)
         for k, v in headers.items():
             h.putheader(k, v)
@@ -381,22 +380,9 @@ class HTTPHandler(KeepAliveHandler, urlreq.httphandler):
 
 class HTTPResponse(httplib.HTTPResponse):
     # we need to subclass HTTPResponse in order to
-    # 1) add readline(), readlines(), and readinto() methods
-    # 2) add close_connection() methods
-    # 3) add info() and geturl() methods
-
-    # in order to add readline(), read must be modified to deal with a
-    # buffer.  example: readline must read a buffer and then spit back
-    # one line at a time.  The only real alternative is to read one
-    # BYTE at a time (ick).  Once something has been read, it can't be
-    # put back (ok, maybe it can, but that's even uglier than this),
-    # so if you THEN do a normal read, you must first take stuff from
-    # the buffer.
-
-    # the read method wraps the original to accommodate buffering,
-    # although read() never adds to the buffer.
-    # Both readline and readlines have been stolen with almost no
-    # modification from socket.py
+    # 1) add close_connection() method
+    # 2) add geturl() method
+    # 3) add accounting for read(), readlines() and readinto()
 
     def __init__(self, sock, debuglevel=0, strict=0, method=None):
         httplib.HTTPResponse.__init__(
@@ -411,9 +397,6 @@ class HTTPResponse(httplib.HTTPResponse):
         self._host = None  # (same)
         self._url = None  # (same)
         self._connection = None  # (same)
-
-    _raw_read = httplib.HTTPResponse.read
-    _raw_readinto = getattr(httplib.HTTPResponse, 'readinto', None)
 
     # Python 2.7 has a single close() which closes the socket handle.
     # This method was effectively renamed to _close_conn() in Python 3. But
@@ -436,183 +419,34 @@ class HTTPResponse(httplib.HTTPResponse):
         self._handler._remove_connection(self._host, self._connection, close=1)
         self.close()
 
-    def info(self):
-        return self.headers
-
     def geturl(self):
         return self._url
 
     def read(self, amt=None):
-        # the _rbuf test is only in this first if for speed.  It's not
-        # logically necessary
-        if self._rbuf and amt is not None:
-            L = len(self._rbuf)
-            if amt > L:
-                amt -= L
-            else:
-                s = self._rbuf[:amt]
-                self._rbuf = self._rbuf[amt:]
-                return s
-        # Careful! http.client.HTTPResponse.read() on Python 3 is
-        # implemented using readinto(), which can duplicate self._rbuf
-        # if it's not empty.
-        s = self._rbuf
-        self._rbuf = b''
-        data = self._raw_read(amt)
-
+        data = super().read(amt)
         self.receivedbytescount += len(data)
-        try:
+        if self._connection is not None:
             self._connection.receivedbytescount += len(data)
-        except AttributeError:
-            pass
-        try:
+        if self._handler is not None:
             self._handler.parent.receivedbytescount += len(data)
-        except AttributeError:
-            pass
+        return data
 
-        s += data
-        return s
-
-    # stolen from Python SVN #68532 to fix issue1088
-    def _read_chunked(self, amt):
-        chunk_left = self.chunk_left
-        parts = []
-
-        while True:
-            if chunk_left is None:
-                line = self.fp.readline()
-                i = line.find(b';')
-                if i >= 0:
-                    line = line[:i]  # strip chunk-extensions
-                try:
-                    chunk_left = int(line, 16)
-                except ValueError:
-                    # close the connection as protocol synchronization is
-                    # probably lost
-                    self.close()
-                    raise httplib.IncompleteRead(b''.join(parts))
-                if chunk_left == 0:
-                    break
-            if amt is None:
-                parts.append(self._safe_read(chunk_left))
-            elif amt < chunk_left:
-                parts.append(self._safe_read(amt))
-                self.chunk_left = chunk_left - amt
-                return b''.join(parts)
-            elif amt == chunk_left:
-                parts.append(self._safe_read(amt))
-                self._safe_read(2)  # toss the CRLF at the end of the chunk
-                self.chunk_left = None
-                return b''.join(parts)
-            else:
-                parts.append(self._safe_read(chunk_left))
-                amt -= chunk_left
-
-            # we read the whole chunk, get another
-            self._safe_read(2)  # toss the CRLF at the end of the chunk
-            chunk_left = None
-
-        # read and discard trailer up to the CRLF terminator
-        ### note: we shouldn't have any trailers!
-        while True:
-            line = self.fp.readline()
-            if not line:
-                # a vanishingly small number of sites EOF without
-                # sending the trailer
-                break
-            if line == b'\r\n':
-                break
-
-        # we read everything; close the "file"
-        self.close()
-
-        return b''.join(parts)
-
-    def readline(self):
-        # Fast path for a line is already available in read buffer.
-        i = self._rbuf.find(b'\n')
-        if i >= 0:
-            i += 1
-            line = self._rbuf[:i]
-            self._rbuf = self._rbuf[i:]
-            return line
-
-        # No newline in local buffer. Read until we find one.
-        # readinto read via readinto will already return _rbuf
-        if self._raw_readinto is None:
-            chunks = [self._rbuf]
-        else:
-            chunks = []
-        i = -1
-        readsize = self._rbufsize
-        while True:
-            new = self._raw_read(readsize)
-            if not new:
-                break
-
-            self.receivedbytescount += len(new)
-            self._connection.receivedbytescount += len(new)
-            try:
-                self._handler.parent.receivedbytescount += len(new)
-            except AttributeError:
-                pass
-
-            chunks.append(new)
-            i = new.find(b'\n')
-            if i >= 0:
-                break
-
-        # We either have exhausted the stream or have a newline in chunks[-1].
-
-        # EOF
-        if i == -1:
-            self._rbuf = b''
-            return b''.join(chunks)
-
-        i += 1
-        self._rbuf = chunks[-1][i:]
-        chunks[-1] = chunks[-1][:i]
-        return b''.join(chunks)
-
-    def readlines(self, sizehint=0):
-        total = 0
-        list = []
-        while True:
-            line = self.readline()
-            if not line:
-                break
-            list.append(line)
-            total += len(line)
-            if sizehint and total >= sizehint:
-                break
-        return list
+    def readline(self, limit: int = -1):
+        data = super().readline(limit=limit)
+        self.receivedbytescount += len(data)
+        if self._connection is not None:
+            self._connection.receivedbytescount += len(data)
+        if self._handler is not None:
+            self._handler.parent.receivedbytescount += len(data)
+        return data
 
     def readinto(self, dest):
-        if self._raw_readinto is None:
-            res = self.read(len(dest))
-            if not res:
-                return 0
-            dest[0 : len(res)] = res
-            return len(res)
-        total = len(dest)
-        have = len(self._rbuf)
-        if have >= total:
-            dest[0:total] = self._rbuf[:total]
-            self._rbuf = self._rbuf[total:]
-            return total
-        mv = memoryview(dest)
-        got = self._raw_readinto(mv[have:total])
-
+        got = super().readinto(dest)
         self.receivedbytescount += got
-        self._connection.receivedbytescount += got
-        try:
-            self._handler.receivedbytescount += got
-        except AttributeError:
-            pass
-
-        dest[0:have] = self._rbuf
-        got += len(self._rbuf)
-        self._rbuf = b''
+        if self._connection is not None:
+            self._connection.receivedbytescount += got
+        if self._handler is not None:
+            self._handler.parent.receivedbytescount += got
         return got
 
 
@@ -703,7 +537,7 @@ class HTTPConnection(httplib.HTTPConnection):
         self.receivedbytescount = 0
 
     def __repr__(self):
-        base = super(HTTPConnection, self).__repr__()
+        base = super().__repr__()
         local = "(unconnected)"
         s = self.sock
         if s:
@@ -853,6 +687,6 @@ if __name__ == '__main__':
         N = int(sys.argv[1])
         url = sys.argv[2]
     except (IndexError, ValueError):
-        print(b"%s <integer> <url>" % sys.argv[0])
+        print("%s <integer> <url>" % sys.argv[0])
     else:
         test(url, N)

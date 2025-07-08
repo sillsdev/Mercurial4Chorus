@@ -1,0 +1,12 @@
+<Include>
+  <!-- These are component GUIDs used for Mercurial installers.
+       YOU MUST CHANGE ALL GUIDs below when copying this file
+       and replace 'Mercurial' in this notice with the name of
+       your project. Component GUIDs have global namespace!      -->
+
+  <!-- mercurial.wxs -->
+  <?define ProductUpgradeCode = {A1CC6134-E945-4399-BE36-EB0017FDF7CF} ?>
+  <?define ComponentMainExecutableGUID = {D102B8FA-059B-4ACC-9FA3-8C78C3B58EEF} ?>
+  <?define ProgramMenuDir.guid = {D5A63320-1238-489B-B68B-CF053E9577CA} ?>
+
+</Include>

@@ -14,6 +14,7 @@ For more information:
 https://mercurial-scm.org/wiki/RebaseExtension
 '''
 
+from __future__ import annotations
 
 import os
 
@@ -23,7 +24,6 @@ from mercurial.node import (
     short,
     wdirrev,
 )
-from mercurial.pycompat import open
 from mercurial import (
     bookmarks,
     cmdutil,
@@ -830,7 +830,6 @@ class rebaseruntime:
                 cleanup = False
 
             if cleanup:
-
                 if rebased:
                     strippoints = [
                         c.node() for c in repo.set(b'roots(%ld)', rebased)
@@ -1826,11 +1825,9 @@ def defineparents(repo, rev, destmap, state, skipped, obsskipped):
             # we have a more advanced merge algorithm that handles multiple bases.
             if l > 0:
                 unwanteddesc = _(b' or ').join(
-                    (
-                        b', '.join(b'%d:%s' % (r, repo[r]) for r in revs)
-                        for revs in unwanted
-                        if revs is not None
-                    )
+                    b', '.join(b'%d:%s' % (r, repo[r]) for r in revs)
+                    for revs in unwanted
+                    if revs is not None
                 )
                 raise error.InputError(
                     _(b'rebasing %d:%s will include unwanted changes from %s')
@@ -1857,9 +1854,11 @@ def defineparents(repo, rev, destmap, state, skipped, obsskipped):
 def isagitpatch(repo, patchname):
     """Return true if the given patch is in git format"""
     mqpatch = os.path.join(repo.mq.path, patchname)
-    for line in patch.linereader(open(mqpatch, b'rb')):
-        if line.startswith(b'diff --git'):
-            return True
+
+    with open(mqpatch, 'rb') as fp:
+        for line in patch.linereader(fp):
+            if line.startswith(b'diff --git'):
+                return True
     return False
 
 
@@ -2042,7 +2041,7 @@ def buildstate(repo, destmap, collapse):
     for rev in sorted(state):
         parents = [p for p in repo.changelog.parentrevs(rev) if p != nullrev]
         # if all parents of this revision are done, then so is this revision
-        if parents and all((state.get(p) == p for p in parents)):
+        if parents and all(state.get(p) == p for p in parents):
             state[rev] = rev
     return originalwd, destmap, state
 
@@ -2133,16 +2132,16 @@ def pullrebase(orig, ui, repo, *args, **opts):
             )
 
             revsprepull = len(repo)
-            origpostincoming = commands.postincoming
+            origpostincoming = cmdutil.postincoming
 
             def _dummy(*args, **kwargs):
                 pass
 
-            commands.postincoming = _dummy
+            cmdutil.postincoming = _dummy
             try:
                 ret = orig(ui, repo, *args, **opts)
             finally:
-                commands.postincoming = origpostincoming
+                cmdutil.postincoming = origpostincoming
             revspostpull = len(repo)
             if revspostpull > revsprepull:
                 # --rev option from pull conflict with rebase own --rev

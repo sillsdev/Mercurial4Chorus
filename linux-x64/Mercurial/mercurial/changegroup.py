@@ -5,6 +5,7 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
 
 import os
 import struct
@@ -16,7 +17,6 @@ from .node import (
     nullrev,
     short,
 )
-from .pycompat import open
 
 from . import (
     error,
@@ -86,7 +86,7 @@ def writechunks(ui, chunks, filename, vfs=None):
             else:
                 # Increase default buffer size because default is usually
                 # small (4k is common on Linux).
-                fh = open(filename, b"wb", 131072)
+                fh = open(filename, "wb", 131072)
         else:
             fd, filename = pycompat.mkstemp(prefix=b"hg-bundle-", suffix=b".hg")
             fh = os.fdopen(fd, "wb")
@@ -407,7 +407,7 @@ class cg1unpacker:
                 yield chunkheader(len(chunk))
                 pos = 0
                 while pos < len(chunk):
-                    next = pos + 2 ** 20
+                    next = pos + 2**20
                     yield chunk[pos:next]
                     pos = next
             yield closechunk()
@@ -518,7 +518,7 @@ class cg1unpacker:
             # will not see an inconsistent view
             cl = repo.changelog
             cl.delayupdate(tr)
-            oldheads = set(cl.heads())
+            oldrevcount = len(cl)
 
             trp = weakref.proxy(tr)
             # pull off the changeset group
@@ -611,7 +611,7 @@ class cg1unpacker:
                 # validate incoming csets have their manifests
                 for cset in range(clstart, clend):
                     mfnode = cl.changelogrevision(cset).manifest
-                    mfest = ml[mfnode].readdelta()
+                    mfest = ml[mfnode].read_delta_new_entries()
                     # store file nodes we must see
                     for f, n in mfest.items():
                         needfiles.setdefault(f, set()).add(n)
@@ -673,12 +673,12 @@ class cg1unpacker:
                 tr.changes[b'changegroup-count-files'] += newfiles
 
             deltaheads = 0
-            if oldheads:
-                heads = cl.heads()
-                deltaheads += len(heads) - len(oldheads)
-                for h in heads:
-                    if h not in oldheads and repo[h].closesbranch():
-                        deltaheads -= 1
+            newrevcount = len(cl)
+            heads_removed, heads_added = cl.diffheads(oldrevcount, newrevcount)
+            deltaheads += len(heads_added) - len(heads_removed)
+            for h in heads_added:
+                if repo[h].closesbranch():
+                    deltaheads -= 1
 
             # see previous comment about checking ui.quiet
             if not repo.ui.quiet:
@@ -697,7 +697,7 @@ class cg1unpacker:
                 repo.hook(
                     b'pretxnchangegroup',
                     throw=True,
-                    **pycompat.strkwargs(hookargs)
+                    **pycompat.strkwargs(hookargs),
                 )
 
             added = range(clstart, clend)
@@ -746,12 +746,11 @@ class cg1unpacker:
                         del args[b'node_last']
                         repo.hook(b"incoming", **pycompat.strkwargs(args))
 
-                    newheads = [h for h in repo.heads() if h not in oldheads]
                     repo.ui.log(
                         b"incoming",
                         b"%d incoming changes - new heads: %s\n",
                         len(added),
-                        b', '.join([hex(c[:6]) for c in newheads]),
+                        b', '.join([hex(c[:6]) for c in heads_added]),
                     )
 
                 tr.addpostclose(
@@ -829,7 +828,7 @@ class cg3unpacker(cg2unpacker):
         debug_info=None,
         delta_base_reuse_policy=None,
     ):
-        super(cg3unpacker, self)._unpackmanifests(
+        super()._unpackmanifests(
             repo,
             revmap,
             trp,
@@ -869,7 +868,7 @@ class cg4unpacker(cg3unpacker):
         return node, p1, p2, deltabase, cs, flags, protocol_flags
 
     def deltachunk(self, prevnode):
-        res = super(cg4unpacker, self).deltachunk(prevnode)
+        res = super().deltachunk(prevnode)
         if not res:
             return res
 
@@ -1043,7 +1042,7 @@ def _resolvenarrowrevisioninfo(
                         return i
                 # We failed to resolve a parent for this node, so
                 # we crash the changegroup construction.
-                if util.safehasattr(store, 'target'):
+                if hasattr(store, 'target'):
                     target = store.display_id
                 else:
                     # some revlog not actually a revlog
@@ -1735,7 +1734,6 @@ class cgpacker:
                     x in self._fullclnodes
                     or cl.rev(x) in self._precomputedellipsis
                 ):
-
                     manifestnode = c.manifest
                     # Record the first changeset introducing this manifest
                     # version.
@@ -1832,7 +1830,8 @@ class cgpacker:
                 treemanifests to send.
                 """
                 clnode = nodes[x]
-                mdata = mfl.get(tree, x).readfast(shallow=True)
+                mctx = mfl.get(tree, x)
+                mdata = mctx.read_delta_parents(shallow=True, exact=False)
                 for p, n, fl in mdata.iterentries():
                     if fl == b't':  # subdirectory manifest
                         subtree = tree + p + b'/'
@@ -1994,6 +1993,7 @@ class cgpacker:
             clrevtolocalrev.clear()
 
             linkrevnodes = linknodes(filerevlog, fname)
+
             # Lookup for filenodes, we collected the linkrev nodes above in the
             # fastpath case and with lookupmf in the slowpath case.
             def lookupfilelog(x):

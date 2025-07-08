@@ -5,12 +5,17 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
 
 import errno
 import os
 
+from typing import (
+    List,
+    Tuple,
+)
+
 from .i18n import _
-from .pycompat import getattr
 from . import (
     encoding,
     error,
@@ -47,8 +52,7 @@ class config:
         return self._data.get(section, {})
 
     def __iter__(self):
-        for d in self.sections():
-            yield d
+        yield from self.sections()
 
     def update(self, src):
         current_level = self._current_source_level
@@ -108,7 +112,7 @@ class config:
     def sections(self):
         return sorted(self._data.keys())
 
-    def items(self, section):
+    def items(self, section: bytes) -> List[Tuple[bytes, bytes]]:
         items = self._data.get(section, {}).items()
         return [(k, v[0]) for (k, v) in items]
 
@@ -191,7 +195,7 @@ class config:
                 expanded = util.expandpath(m.group(1))
                 try:
                     include(expanded, remap=remap, sections=sections)
-                except IOError as inst:
+                except OSError as inst:
                     if inst.errno != errno.ENOENT:
                         raise error.ConfigError(
                             _(b"cannot include %s (%s)")

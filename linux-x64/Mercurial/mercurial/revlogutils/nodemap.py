@@ -6,6 +6,7 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
 
 import re
 import struct
@@ -74,7 +75,7 @@ def persisted_data(revlog):
     test_race_hook_1()
     try:
         with revlog.opener(filename) as fd:
-            if use_mmap:
+            if use_mmap and revlog.opener.is_mmap_safe(filename):
                 try:
                     data = util.buffer(util.mmapread(fd, data_length))
                 except ValueError:
@@ -163,6 +164,8 @@ def delete_nodemap(tr, repo, revlog):
 
 def persist_nodemap(tr, revlog, pending=False, force=False):
     """Write nodemap data on disk for a given revlog"""
+    if len(revlog.index) <= 0:
+        return
     if getattr(revlog, 'filteredrevs', ()):
         raise error.ProgrammingError(
             "cannot persist nodemap of a filtered changelog"
@@ -174,9 +177,9 @@ def persist_nodemap(tr, revlog, pending=False, force=False):
             msg = "calling persist nodemap on a revlog without the feature enabled"
             raise error.ProgrammingError(msg)
 
-    can_incremental = util.safehasattr(revlog.index, "nodemap_data_incremental")
+    can_incremental = hasattr(revlog.index, "nodemap_data_incremental")
     ondisk_docket = revlog._nodemap_docket
-    feed_data = util.safehasattr(revlog.index, "update_nodemap_data")
+    feed_data = hasattr(revlog.index, "update_nodemap_data")
     use_mmap = revlog.opener.options.get(b"persistent-nodemap.mmap")
 
     data = None
@@ -203,12 +206,12 @@ def persist_nodemap(tr, revlog, pending=False, force=False):
                 fd.seek(target_docket.data_length)
                 fd.write(data)
                 if feed_data:
-                    if use_mmap:
-                        fd.seek(0)
-                        new_data = fd.read(new_length)
-                    else:
+                    if use_mmap and revlog.opener.is_mmap_safe(datafile):
                         fd.flush()
                         new_data = util.buffer(util.mmapread(fd, new_length))
+                    else:
+                        fd.seek(0)
+                        new_data = fd.read(new_length)
             target_docket.data_length = new_length
             target_docket.data_unused = new_unused
 
@@ -216,7 +219,7 @@ def persist_nodemap(tr, revlog, pending=False, force=False):
         # otherwise fallback to a full new export
         target_docket = NodeMapDocket()
         datafile = _rawdata_filepath(revlog, target_docket)
-        if util.safehasattr(revlog.index, "nodemap_data_all"):
+        if hasattr(revlog.index, "nodemap_data_all"):
             data = revlog.index.nodemap_data_all()
         else:
             data = persistent_data(revlog.index)
@@ -236,11 +239,11 @@ def persist_nodemap(tr, revlog, pending=False, force=False):
         with revlog.opener(datafile, b'w+') as fd:
             fd.write(data)
             if feed_data:
-                if use_mmap:
-                    new_data = data
-                else:
+                if use_mmap and revlog.opener.is_mmap_safe(datafile):
                     fd.flush()
                     new_data = util.buffer(util.mmapread(fd, len(data)))
+                else:
+                    new_data = data
         target_docket.data_length = len(data)
     target_docket.tip_rev = revlog.tiprev()
     target_docket.tip_node = revlog.node(target_docket.tip_rev)
@@ -461,7 +464,7 @@ class Block(dict):
     contains up to 16 entry indexed from 0 to 15"""
 
     def __init__(self):
-        super(Block, self).__init__()
+        super().__init__()
         # If this block exist on disk, here is its ID
         self.ondisk_id = None
 
@@ -551,10 +554,9 @@ def _walk_trie(block):
 
     Children blocks are always yield before their parent block.
     """
-    for (__, item) in sorted(block.items()):
+    for __, item in sorted(block.items()):
         if isinstance(item, dict):
-            for sub_block in _walk_trie(item):
-                yield sub_block
+            yield from _walk_trie(item)
     yield block
 
 

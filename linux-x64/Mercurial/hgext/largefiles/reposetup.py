@@ -8,6 +8,8 @@
 
 '''setup for largefiles repositories: reposetup'''
 
+from __future__ import annotations
+
 import copy
 
 from mercurial.i18n import _
@@ -46,7 +48,7 @@ def reposetup(ui, repo):
         # identifies the largefiles as always binary, regardless of
         # their actual contents.
         def __getitem__(self, changeid):
-            ctx = super(lfilesrepo, self).__getitem__(changeid)
+            ctx = super().__getitem__(changeid)
             if self.lfstatus:
 
                 def files(orig):
@@ -60,7 +62,7 @@ def reposetup(ui, repo):
 
                     class lfilesmanifest(man1.__class__):
                         def __contains__(self, filename):
-                            orig = super(lfilesmanifest, self).__contains__
+                            orig = super().__contains__
                             return orig(filename) or orig(
                                 lfutil.standin(filename)
                             )
@@ -109,7 +111,7 @@ def reposetup(ui, repo):
             listsubrepos=False,
         ):
             listignored, listclean, listunknown = ignored, clean, unknown
-            orig = super(lfilesrepo, self).status
+            orig = super().status
             if not self.lfstatus:
                 return orig(
                     node1,
@@ -140,7 +142,6 @@ def reposetup(ui, repo):
                 wlock = util.nullcontextmanager()
                 gotlock = False
             with wlock, self.dirstate.running_status(self):
-
                 # First check if paths or patterns were specified on the
                 # command line.  If there were, and they don't match any
                 # largefiles, we should just bail here and let super
@@ -181,6 +182,7 @@ def reposetup(ui, repo):
                     return newfiles
 
                 m = copy.copy(match)
+                m._was_tampered_with = True
                 m._files = tostandins(m._files)
 
                 result = orig(
@@ -193,6 +195,7 @@ def reposetup(ui, repo):
                         dirstate = self.dirstate
                         return sf in dirstate or dirstate.hasdir(sf)
 
+                    match._was_tampered_with = True
                     match._files = [f for f in match._files if sfindirstate(f)]
                     # Don't waste time getting the ignored and unknown
                     # files from lfdirstate
@@ -328,11 +331,11 @@ def reposetup(ui, repo):
             return scmutil.status(*result)
 
         def commitctx(self, ctx, *args, **kwargs):
-            node = super(lfilesrepo, self).commitctx(ctx, *args, **kwargs)
+            node = super().commitctx(ctx, *args, **kwargs)
 
             class lfilesctx(ctx.__class__):
                 def markcommitted(self, node):
-                    orig = super(lfilesctx, self).markcommitted
+                    orig = super().markcommitted
                     return lfutil.markcommitted(orig, self, node)
 
             ctx.__class__ = lfilesctx
@@ -353,7 +356,7 @@ def reposetup(ui, repo):
         ):
             if extra is None:
                 extra = {}
-            orig = super(lfilesrepo, self).commit
+            orig = super().commit
 
             with self.wlock():
                 lfcommithook = self._lfcommithooks[-1]

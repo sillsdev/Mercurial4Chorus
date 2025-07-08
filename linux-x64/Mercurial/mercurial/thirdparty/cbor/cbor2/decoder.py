@@ -291,7 +291,7 @@ semantic_decoders = {
 }
 
 
-class CBORDecoder(object):
+class CBORDecoder:
     """
     Deserializes a CBOR encoded byte stream.
 

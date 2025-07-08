@@ -1,0 +1,21 @@
+# A tool that performs a 3-way merge, resolving conflicts in sorted lists and
+# leaving other conflicts unchanged. This is useful with Mercurial's support
+# for partial merge tools (configured in `[partial-merge-tools]`).
+
+[package]
+name = "merge-lists"
+version = "0.1.0"
+edition = "2021"
+# We need https://github.com/rust-lang/rust/pull/89825
+rust-version = "1.59"
+
+[dependencies]
+clap = { version = "4.3.17", features = ["derive"] }
+itertools = "0.10.3"
+regex = "1.5.5"
+similar = { version="2.1.0", features = ["bytes"] }
+
+[dev-dependencies]
+assert_cmd = "2.0.4"
+insta = "1.13.0"
+tempdir = "0.3.7"

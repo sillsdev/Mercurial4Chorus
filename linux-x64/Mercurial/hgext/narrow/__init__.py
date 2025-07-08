@@ -6,6 +6,7 @@
 # GNU General Public License version 2 or any later version.
 '''create clones which fetch history data for subset of files (EXPERIMENTAL)'''
 
+from __future__ import annotations
 
 from mercurial import (
     localrepo,

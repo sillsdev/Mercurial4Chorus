@@ -6,6 +6,7 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
 
 import contextlib
 import os
@@ -17,7 +18,6 @@ from .common import (
     permhooks,
     statusmessage,
 )
-from ..pycompat import getattr
 
 from .. import (
     encoding,
@@ -34,7 +34,6 @@ from .. import (
     templater,
     templateutil,
     ui as uimod,
-    util,
     wireprotoserver,
 )
 
@@ -362,8 +361,7 @@ class hgweb:
         with self._obtainrepo() as repo:
             profile = repo.ui.configbool(b'profiling', b'enabled')
             with profiling.profile(repo.ui, enabled=profile):
-                for r in self._runwsgi(req, res, repo):
-                    yield r
+                yield from self._runwsgi(req, res, repo)
 
     def _runwsgi(self, req, res, repo):
         rctx = requestcontext(self, repo, req, res)
@@ -403,7 +401,7 @@ class hgweb:
                 cmd = cmd[style + 1 :]
 
             # avoid accepting e.g. style parameter as command
-            if util.safehasattr(webcommands, cmd):
+            if hasattr(webcommands, pycompat.sysstr(cmd)):
                 req.qsparams[b'cmd'] = cmd
 
             if cmd == b'static':
@@ -466,19 +464,22 @@ class hgweb:
 
                 res.headers[b'ETag'] = tag
 
-            if cmd not in webcommands.__all__:
-                msg = b'no such method: %s' % cmd
+            if pycompat.sysstr(cmd) not in webcommands.__all__:
+                msg = b'method not found'
+                # /!\ Do not print `cmd` here unless you do *extensive*
+                # escaping.
+                # Because XSS escaping is hard, we just don't risk it.
                 raise ErrorResponse(HTTP_BAD_REQUEST, msg)
             else:
                 # Set some globals appropriate for web handlers. Commands can
                 # override easily enough.
                 res.status = b'200 Script output follows'
                 res.headers[b'Content-Type'] = ctype
-                return getattr(webcommands, cmd)(rctx)
+                return getattr(webcommands, pycompat.sysstr(cmd))(rctx)
 
         except (error.LookupError, error.RepoLookupError) as err:
             msg = pycompat.bytestr(err)
-            if util.safehasattr(err, 'name') and not isinstance(
+            if hasattr(err, 'name') and not isinstance(
                 err, error.ManifestLookupError
             ):
                 msg = b'revision not found: %s' % err.name

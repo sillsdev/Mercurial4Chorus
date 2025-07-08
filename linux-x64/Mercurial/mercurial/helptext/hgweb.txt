@@ -83,4 +83,4 @@ Commands and URLs
 
 The following web commands and their URLs are available:
 
-  .. webcommandsmarker
+.. webcommandsmarker

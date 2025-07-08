@@ -38,7 +38,7 @@ static PyObject *b85encode(PyObject *self, PyObject *args)
 	unsigned int acc, val, ch;
 	int pad = 0;
 
-	if (!PyArg_ParseTuple(args, "y#|i", &text, &len, &pad)) {
+	if (!PyArg_ParseTuple(args, "y#|p", &text, &len, &pad)) {
 		return NULL;
 	}
 

@@ -8,6 +8,8 @@
 
 '''largefiles utility code: must not import other modules in this package.'''
 
+from __future__ import annotations
+
 import contextlib
 import copy
 import os
@@ -15,7 +17,6 @@ import stat
 
 from mercurial.i18n import _
 from mercurial.node import hex
-from mercurial.pycompat import open
 
 from mercurial import (
     dirstate,
@@ -73,7 +74,7 @@ def link(src, dest):
         util.oslink(src, dest)
     except OSError:
         # if hardlinks fail, fallback on atomic copy
-        with open(src, b'rb') as srcf, util.atomictempfile(dest) as dstf:
+        with open(src, 'rb') as srcf, util.atomictempfile(dest) as dstf:
             for chunk in util.filechunkiter(srcf):
                 dstf.write(chunk)
         os.chmod(dest, os.stat(src).st_mode)
@@ -162,36 +163,16 @@ class largefilesdirstate(dirstate.dirstate):
     _large_file_dirstate = True
     _tr_key_suffix = b'-large-files'
 
-    def __getitem__(self, key):
-        return super(largefilesdirstate, self).__getitem__(unixpath(key))
+    # XXX: why are there overrides to fix the path, if the path should already
+    #   be in unix form for the superclass?
 
-    def set_tracked(self, f):
-        return super(largefilesdirstate, self).set_tracked(unixpath(f))
+    def set_tracked(self, f, reset_copy=False):
+        return super().set_tracked(unixpath(f), reset_copy=reset_copy)
 
     def set_untracked(self, f):
-        return super(largefilesdirstate, self).set_untracked(unixpath(f))
+        return super().set_untracked(unixpath(f))
 
-    def normal(self, f, parentfiledata=None):
-        # not sure if we should pass the `parentfiledata` down or throw it
-        # away. So throwing it away to stay on the safe side.
-        return super(largefilesdirstate, self).normal(unixpath(f))
-
-    def remove(self, f):
-        return super(largefilesdirstate, self).remove(unixpath(f))
-
-    def add(self, f):
-        return super(largefilesdirstate, self).add(unixpath(f))
-
-    def drop(self, f):
-        return super(largefilesdirstate, self).drop(unixpath(f))
-
-    def forget(self, f):
-        return super(largefilesdirstate, self).forget(unixpath(f))
-
-    def normallookup(self, f):
-        return super(largefilesdirstate, self).normallookup(unixpath(f))
-
-    def _ignore(self, f):
+    def _dirignore(self, f):
         return False
 
     def write(self, tr):
@@ -200,7 +181,7 @@ class largefilesdirstate(dirstate.dirstate):
         # (2) avoid develwarn 'use dirstate.write with ....'
         if tr:
             tr.addbackup(b'largefiles/dirstate', location=b'plain')
-        super(largefilesdirstate, self).write(None)
+        super().write(None)
 
 
 def openlfdirstate(ui, repo, create=True):
@@ -344,7 +325,7 @@ def copyfromcache(repo, hash, filename):
     wvfs.makedirs(wvfs.dirname(wvfs.join(filename)))
     # The write may fail before the file is fully written, but we
     # don't use atomic writes in the working copy.
-    with open(path, b'rb') as srcfd, wvfs(filename, b'wb') as destfd:
+    with open(path, 'rb') as srcfd, wvfs(filename, b'wb') as destfd:
         gothash = copyandhash(util.filechunkiter(srcfd), destfd)
     if gothash != hash:
         repo.ui.warn(
@@ -385,7 +366,7 @@ def copytostoreabsolute(repo, file, hash):
         link(usercachepath(repo.ui, hash), storepath(repo, hash))
     else:
         util.makedirs(os.path.dirname(storepath(repo, hash)))
-        with open(file, b'rb') as srcf:
+        with open(file, 'rb') as srcf:
             with util.atomictempfile(
                 storepath(repo, hash), createmode=repo.store.createmode
             ) as dstf:
@@ -430,6 +411,7 @@ def composestandinmatcher(repo, rmatcher):
     def composedmatchfn(f):
         return isstandin(f) and rmatcher.matchfn(splitstandin(f))
 
+    smatcher._was_tampered_with = True
     smatcher.matchfn = composedmatchfn
 
     return smatcher
@@ -504,7 +486,7 @@ def copyandhash(instream, outfile):
 def hashfile(file):
     if not os.path.exists(file):
         return b''
-    with open(file, b'rb') as fd:
+    with open(file, 'rb') as fd:
         return hexsha1(fd)
 
 
@@ -574,7 +556,7 @@ def getstandinsstate(repo):
         lfile = splitstandin(standin)
         try:
             hash = readasstandin(wctx[standin])
-        except IOError:
+        except OSError:
             hash = None
         standins.append((lfile, hash))
     return standins
@@ -716,6 +698,7 @@ def updatestandinsbymatch(repo, match):
         return match
 
     lfiles = listlfiles(repo)
+    match._was_tampered_with = True
     match._files = repo._subdirlfs(match.files(), lfiles)
 
     # Case 2: user calls commit with specified patterns: refresh
@@ -746,6 +729,7 @@ def updatestandinsbymatch(repo, match):
     # user.  Have to modify _files to prevent commit() from
     # complaining "not tracked" for big files.
     match = copy.copy(match)
+    match._was_tampered_with = True
     origmatchfn = match.matchfn
 
     # Check both the list of largefiles and the list of
@@ -814,7 +798,7 @@ def getstatuswriter(ui, repo, forcibly=None):
     Otherwise, this returns the function to always write out (or
     ignore if ``not forcibly``) status.
     """
-    if forcibly is None and util.safehasattr(repo, b'_largefilesenabled'):
+    if forcibly is None and hasattr(repo, '_largefilesenabled'):
         return repo._lfstatuswriters[-1]
     else:
         if forcibly:

@@ -5,6 +5,7 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
 
 import binascii
 import re
@@ -439,9 +440,10 @@ def join(context, mapping, args):
 
 @templatefunc(b'label(label, expr)', requires={b'ui'})
 def label(context, mapping, args):
-    """Apply a label to generated content. Content with
-    a label applied can result in additional post-processing, such as
-    automatic colorization."""
+    """Apply a label to generated content. Content with a label
+    applied can result in additional post-processing, such as
+    automatic colorization. In order to receive effects, labels must
+    have a dot, such as `log.secret` or `branch.active`."""
     if len(args) != 2:
         # i18n: "label" is a keyword
         raise error.ParseError(_(b"label expects two arguments"))

@@ -5,6 +5,8 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
+
 import os
 import zlib
 
@@ -15,13 +17,13 @@ from mercurial.node import (
     short,
 )
 from mercurial.i18n import _
-from mercurial.pycompat import open
 from mercurial import (
     error,
     filelog,
     lock as lockmod,
     pycompat,
     revlog,
+    util,
 )
 from mercurial.utils import hashutil
 from . import (
@@ -34,7 +36,7 @@ from . import (
 )
 
 
-def debugremotefilelog(ui, path, **opts):
+def debugremotefilelog(ui, path, **opts) -> None:
     decompress = opts.get('decompress')
 
     size, firstnode, mapping = parsefileblob(path, decompress)
@@ -62,7 +64,7 @@ def debugremotefilelog(ui, path, **opts):
             queue.append(p2)
 
 
-def buildtemprevlog(repo, file):
+def buildtemprevlog(repo, file) -> filelog.filelog:
     # get filename key
     filekey = hex(hashutil.sha1(file).digest())
     filedir = os.path.join(repo.path, b'store/data', filekey)
@@ -115,38 +117,34 @@ def debugindex(orig, ui, repo, file_=None, **opts):
     r = buildtemprevlog(repo, file_)
 
     # debugindex like normal
-    format = opts.get(b'format', 0)
+    format = opts.get('format', 0)
     if format not in (0, 1):
         raise error.Abort(_(b"unknown format %d") % format)
 
-    generaldelta = r.version & revlog.FLAG_GENERALDELTA
+    generaldelta = r.get_revlog()._format_flags & revlog.FLAG_GENERALDELTA
     if generaldelta:
         basehdr = b' delta'
     else:
         basehdr = b'  base'
 
     if format == 0:
-        ui.write(
-            (
-                b"   rev    offset  length " + basehdr + b" linkrev"
-                b" nodeid       p1           p2\n"
-            )
+        ui.writenoi18n(
+            b"   rev    offset  length " + basehdr + b" linkrev"
+            b" nodeid       p1           p2\n"
         )
     elif format == 1:
-        ui.write(
-            (
-                b"   rev flag   offset   length"
-                b"     size " + basehdr + b"   link     p1     p2"
-                b"       nodeid\n"
-            )
+        ui.writenoi18n(
+            b"   rev flag   offset   length"
+            b"     size " + basehdr + b"   link     p1     p2"
+            b"       nodeid\n"
         )
 
     for i in r:
         node = r.node(i)
         if generaldelta:
-            base = r.deltaparent(i)
+            base = r.get_revlog().deltaparent(i)
         else:
-            base = r.chainbase(i)
+            base = r.get_revlog().chainbase(i)
         if format == 0:
             try:
                 pp = r.parents(node)
@@ -156,8 +154,8 @@ def debugindex(orig, ui, repo, file_=None, **opts):
                 b"% 6d % 9d % 7d % 6d % 7d %s %s %s\n"
                 % (
                     i,
-                    r.start(i),
-                    r.length(i),
+                    r.get_revlog().start(i),
+                    r.get_revlog().length(i),
                     base,
                     r.linkrev(i),
                     short(node),
@@ -171,10 +169,10 @@ def debugindex(orig, ui, repo, file_=None, **opts):
                 b"% 6d %04x % 8d % 8d % 8d % 6d % 6d % 6d % 6d %s\n"
                 % (
                     i,
-                    r.flags(i),
-                    r.start(i),
-                    r.length(i),
-                    r.rawsize(i),
+                    r.get_revlog().flags(i),
+                    r.get_revlog().start(i),
+                    r.get_revlog().length(i),
+                    r.get_revlog().rawsize(i),
                     base,
                     r.linkrev(i),
                     pr[0],
@@ -226,11 +224,7 @@ def _decompressblob(raw):
 
 
 def parsefileblob(path, decompress):
-    f = open(path, b"rb")
-    try:
-        raw = f.read()
-    finally:
-        f.close()
+    raw = util.readfile(path)
 
     if decompress:
         raw = _decompressblob(raw)
@@ -309,7 +303,7 @@ def debugdatapack(ui, *paths, **opts):
         for filename, node, deltabase, deltalen in dpack.iterentries():
             bases[node] = deltabase
             if node in nodes:
-                ui.write((b"Bad entry: %s appears twice\n" % short(node)))
+                ui.writenoi18n(b"Bad entry: %s appears twice\n" % short(node))
                 failures += 1
             nodes.add(node)
             if filename != lastfilename:
@@ -352,7 +346,7 @@ def debugdatapack(ui, *paths, **opts):
 
         failures += _sanitycheck(ui, set(nodes), bases)
         if failures > 1:
-            ui.warn((b"%d failures\n" % failures))
+            ui.warnnoi18n(b"%d failures\n" % failures)
             return 1
 
 
@@ -372,21 +366,17 @@ def _sanitycheck(ui, nodes, bases):
 
         while deltabase != sha1nodeconstants.nullid:
             if deltabase not in nodes:
-                ui.warn(
-                    (
-                        b"Bad entry: %s has an unknown deltabase (%s)\n"
-                        % (short(node), short(deltabase))
-                    )
+                ui.warnnoi18n(
+                    b"Bad entry: %s has an unknown deltabase (%s)\n"
+                    % (short(node), short(deltabase))
                 )
                 failures += 1
                 break
 
             if deltabase in seen:
-                ui.warn(
-                    (
-                        b"Bad entry: %s has a cycle (at %s)\n"
-                        % (short(node), short(deltabase))
-                    )
+                ui.warnnoi18n(
+                    b"Bad entry: %s has a cycle (at %s)\n"
+                    % (short(node), short(deltabase))
                 )
                 failures += 1
                 break

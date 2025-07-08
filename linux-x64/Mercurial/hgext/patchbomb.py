@@ -72,6 +72,8 @@ You can set patchbomb to always ask for confirmation by setting
 ``patchbomb.confirm`` to true.
 '''
 
+from __future__ import annotations
+
 import email.encoders as emailencoders
 import email.mime.base as emimebase
 import email.mime.multipart as emimemultipart
@@ -80,7 +82,6 @@ import os
 import socket
 
 from mercurial.i18n import _
-from mercurial.pycompat import open
 from mercurial.node import bin
 from mercurial import (
     cmdutil,
@@ -261,7 +262,6 @@ def makepatch(
     numbered,
     patchname=None,
 ):
-
     desc = []
     node = None
     body = b''
@@ -409,7 +409,7 @@ def _getdescription(repo, defaultbody, sender, **opts):
     """
     ui = repo.ui
     if opts.get('desc'):
-        body = open(opts.get('desc')).read()
+        body = util.readfile(opts.get('desc'))
     else:
         ui.write(
             _(b'\nWrite the introductory message for the patch series.\n\n')
@@ -417,10 +417,11 @@ def _getdescription(repo, defaultbody, sender, **opts):
         body = ui.edit(
             defaultbody, sender, repopath=repo.path, action=b'patchbombbody'
         )
+
         # Save series description in case sendmail fails
-        msgfile = repo.vfs(b'last-email.txt', b'wb')
-        msgfile.write(body)
-        msgfile.close()
+        with repo.vfs(b'last-email.txt', b'wb') as msgfile:
+            msgfile.write(body)
+
     return body
 
 

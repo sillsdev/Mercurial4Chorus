@@ -1,3 +1,10 @@
+from __future__ import annotations
+
+from typing import (
+    Iterable,
+    Iterator,
+)
+
 from mercurial.i18n import _
 
 from mercurial.node import (
@@ -17,7 +24,6 @@ from mercurial import (
 )
 from mercurial.interfaces import (
     repository,
-    util as interfaceutil,
 )
 from mercurial.utils import stringutil
 from . import (
@@ -36,10 +42,95 @@ class baselog:  # revlog.revlog):
         self.gitrepo = gr
         self._db = db
 
-    def __len__(self):
-        return int(
-            self._db.execute('SELECT COUNT(*) FROM changelog').fetchone()[0]
-        )
+    def __len__(self) -> int:
+        return int(self._db.execute('SELECT ncommits FROM cache').fetchone()[0])
+
+    def files(self):
+        raise NotImplementedError
+
+    def storageinfo(
+        self,
+        exclusivefiles=False,
+        sharedfiles=False,
+        revisionscount=False,
+        trackedsize=False,
+        storedsize=False,
+    ):
+        raise NotImplementedError
+
+    def verifyintegrity(self, state) -> Iterable[repository.iverifyproblem]:
+        raise NotImplementedError
+
+    def revs(self, start=0, stop=None):
+        raise NotImplementedError
+
+    def addgroup(
+        self,
+        deltas,
+        linkmapper,
+        transaction,
+        addrevisioncb=None,
+        duplicaterevisioncb=None,
+    ):
+        raise NotImplementedError
+
+    def commonancestorsheads(self, node1, node2):
+        raise NotImplementedError
+
+    def descendants(self, revs):
+        raise NotImplementedError
+
+    def heads(self, start=None, stop=None):
+        raise NotImplementedError
+
+    def children(self, node):
+        raise NotImplementedError
+
+    def emitrevisions(
+        self,
+        nodes,
+        nodesorder=None,
+        revisiondata=False,
+        assumehaveparentrevisions=False,
+    ):
+        raise NotImplementedError
+
+    def getstrippoint(self, minlink):
+        raise NotImplementedError
+
+    def iscensored(self, rev):
+        raise NotImplementedError
+
+    def parentrevs(self, rev):
+        raise NotImplementedError
+
+    def rawdata(self, node):
+        raise NotImplementedError
+
+    def revision(self, node):
+        raise NotImplementedError
+
+    def size(self, rev):
+        raise NotImplementedError
+
+    def strip(self, minlink, transaction):
+        raise NotImplementedError
+
+    def addrevision(
+        self,
+        revisiondata,
+        transaction,
+        linkrev,
+        p1,
+        p2,
+        node=None,
+        flags=0,
+        cachedelta=None,
+    ):
+        raise NotImplementedError
+
+    def censorrevision(self, tr, node, tombstone=b''):
+        raise NotImplementedError
 
     def rev(self, n):
         if n == sha1nodeconstants.nullid:
@@ -48,7 +139,7 @@ class baselog:  # revlog.revlog):
             'SELECT rev FROM changelog WHERE node = ?', (gitutil.togitnode(n),)
         ).fetchone()
         if t is None:
-            raise error.LookupError(n, b'00changelog.i', _(b'no node %d'))
+            raise error.LookupError(n, b'00changelog.i', _(b'no node'))
         return t[0]
 
     def node(self, r):
@@ -58,13 +149,29 @@ class baselog:  # revlog.revlog):
             'SELECT node FROM changelog WHERE rev = ?', (r,)
         ).fetchone()
         if t is None:
-            raise error.LookupError(r, b'00changelog.i', _(b'no node'))
+            raise error.LookupError(b'%d' % r, b'00changelog.i', _(b'no rev'))
+        return bin(t[0])
+
+    def synthetic(self, n):
+        """Map any node to a non-synthetic node.
+
+        Indexing may have created synthetic nodes to handle octopus merges.
+        Certain operations on these made up nodes need to actually happen on
+        the real octopus merge commit.  Given any node, this function
+        returns the real commit hash.  One can think of this as hg-to-git
+        commit hash translation that always works."""
+        t = self._db.execute(
+            'SELECT synthetic FROM changelog WHERE node = ?',
+            (gitutil.togitnode(n),),
+        ).fetchone()
+        if t is None or t[0] is None:
+            return n
         return bin(t[0])
 
     def hasnode(self, n):
         t = self._db.execute(
             'SELECT node FROM changelog WHERE node = ?',
-            (pycompat.sysstr(n),),
+            (gitutil.togitnode(n),),
         ).fetchone()
         return t is not None
 
@@ -96,6 +203,12 @@ class baselogindex:
             p2rev,
             self._log.node(idx),
         )
+
+    def rev(self, node):
+        return self._log.rev(node)
+
+    def get_rev(self, node):
+        return self._log.get_rev(node)
 
 
 # TODO: an interface for the changelog type?
@@ -190,8 +303,8 @@ class changelog(baselog):
             candidate = nodehex[:attempt]
             matches = int(
                 self._db.execute(
-                    'SELECT COUNT(*) FROM changelog WHERE node LIKE ?',
-                    (pycompat.sysstr(candidate + b'%'),),
+                    'SELECT COUNT(*) FROM changelog WHERE node GLOB ?',
+                    (pycompat.sysstr(candidate + b'*'),),
                 ).fetchone()[0]
             )
             if matches == 1:
@@ -222,8 +335,10 @@ class changelog(baselog):
             return hgchangelog._changelogrevision(
                 extra=extra, manifest=sha1nodeconstants.nullid
             )
+        n = self.synthetic(n)
         hn = gitutil.togitnode(n)
         # We've got a real commit!
+        index._index_repo_commit(self.gitrepo, self._db, hn, commit=True)
         files = [
             r[0]
             for r in self._db.execute(
@@ -324,7 +439,7 @@ class changelog(baselog):
         if common is None:
             common = [sha1nodeconstants.nullid]
         if heads is None:
-            heads = self.heads()
+            heads = [self.node(r) for r in self.headrevs()]
 
         common = [self.rev(n) for n in common]
         heads = [self.rev(n) for n in heads]
@@ -367,20 +482,13 @@ class changelog(baselog):
         return bool(self.reachableroots(a, [b], [a], includepath=False))
 
     def parentrevs(self, rev):
-        n = self.node(rev)
-        hn = gitutil.togitnode(n)
-        if hn != gitutil.nullgit:
-            c = self.gitrepo[hn]
-        else:
-            return nullrev, nullrev
-        p1 = p2 = nullrev
-        if c.parents:
-            p1 = self.rev(c.parents[0].id.raw)
-            if len(c.parents) > 2:
-                raise error.Abort(b'TODO octopus merge handling')
-            if len(c.parents) == 2:
-                p2 = self.rev(c.parents[1].id.raw)
-        return p1, p2
+        assert rev >= 0, rev
+        t = self._db.execute(
+            'SELECT p1, p2 FROM changelog WHERE rev = ?', (rev,)
+        ).fetchone()
+        if t is None:
+            raise error.LookupError(b'%d' % rev, b'00changelog.i', _(b'no rev'))
+        return self.rev(bin(t[0])), self.rev(bin(t[1]))
 
     # Private method is used at least by the tags code.
     _uncheckedparentrevs = parentrevs
@@ -459,6 +567,7 @@ class manifestlog(baselog):
         if node == sha1nodeconstants.nullid:
             # TODO: this should almost certainly be a memgittreemanifestctx
             return manifest.memtreemanifestctx(self, relpath)
+        node = self.synthetic(node)
         commit = self.gitrepo[gitutil.togitnode(node)]
         t = commit.tree
         if relpath:
@@ -469,10 +578,9 @@ class manifestlog(baselog):
         return gitmanifest.gittreemanifestctx(self.gitrepo, t)
 
 
-@interfaceutil.implementer(repository.ifilestorage)
-class filelog(baselog):
+class filelog(baselog, repository.ifilestorage):
     def __init__(self, gr, db, path):
-        super(filelog, self).__init__(gr, db)
+        super().__init__(gr, db)
         assert isinstance(path, bytes)
         self.path = path
         self.nullid = sha1nodeconstants.nullid
@@ -502,7 +610,7 @@ class filelog(baselog):
         assert not meta  # Should we even try to handle this?
         return self.gitrepo.create_blob(text).raw
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[int]:
         for clrev in self._db.execute(
             '''
 SELECT rev FROM changelog
@@ -525,7 +633,7 @@ WHERE changedfiles.filename = ? AND changedfiles.filenode = ?''',
             (pycompat.fsdecode(self.path), gitutil.togitnode(node)),
         ).fetchone()
         if row is None:
-            raise error.LookupError(self.path, node, _(b'no such node'))
+            raise error.LookupError(self.path, node, _(b'no node'))
         return int(row[0])
 
     def node(self, rev):

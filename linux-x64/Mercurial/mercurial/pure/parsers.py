@@ -5,10 +5,12 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
 
 import io
 import stat
 import struct
+import typing
 import zlib
 
 from ..node import (
@@ -16,14 +18,27 @@ from ..node import (
     sha1nodeconstants,
 )
 from ..thirdparty import attr
+
+# Force pytype to use the non-vendored package
+if typing.TYPE_CHECKING:
+    # noinspection PyPackageRequirements
+    import attr
+
 from .. import (
     error,
+    pycompat,
     revlogutils,
     util,
 )
 
 from ..revlogutils import nodemap as nodemaputil
 from ..revlogutils import constants as revlog_constants
+
+if typing.TYPE_CHECKING:
+    from typing import (
+        Any,
+        ByteString,  # TODO: Change to Buffer for 3.14+ support
+    )
 
 stringio = io.BytesIO
 
@@ -228,7 +243,7 @@ class DirstateItem:
                     parentfiledata=(mode, size, (mtime, 0, False)),
                 )
         else:
-            raise RuntimeError(b'unknown state: %s' % state)
+            raise RuntimeError('unknown state: %s' % pycompat.sysstr(state))
 
     def set_possibly_dirty(self):
         """Mark a file as "possibly dirty"
@@ -324,7 +339,7 @@ class DirstateItem:
             return self_ns == other_ns
 
     @property
-    def state(self):
+    def state(self) -> bytes:
         """
         States are:
           n  normal
@@ -503,7 +518,7 @@ class DirstateItem:
         # since we never set _DIRSTATE_V2_HAS_DIRCTORY_MTIME
         return (flags, self._size or 0, self._mtime_s or 0, self._mtime_ns or 0)
 
-    def _v1_state(self):
+    def _v1_state(self) -> bytes:
         """return a "state" suitable for v1 serialization"""
         if not self.any_tracked:
             # the object has no state to record, this is -currently-
@@ -591,6 +606,11 @@ class BaseIndexObject:
         revlog_constants.RANK_UNKNOWN,
     )
 
+    # These aren't needed for rust
+    _data: ByteString
+    _extra: list[bytes]
+    _lgt: int
+
     @util.propertycache
     def entry_size(self):
         return self.index_format.size
@@ -628,7 +648,7 @@ class BaseIndexObject:
     def clearcaches(self):
         self.__dict__.pop('_nodemap', None)
 
-    def __len__(self):
+    def __len__(self) -> int:
         return self._lgt + len(self._extra)
 
     def append(self, tup):
@@ -644,9 +664,15 @@ class BaseIndexObject:
 
     def _check_index(self, i):
         if not isinstance(i, int):
-            raise TypeError(b"expecting int indexes")
+            raise TypeError("expecting int indexes")
         if i < 0 or i >= len(self):
             raise IndexError(i)
+
+    def _calculate_index(self, i: int) -> int:
+        # This isn't @abstractmethod because it is only used in __getitem__().
+        # The revlog.RustIndexProxy implementation provides its own, so there's
+        # no reason to force it to implement an unused method.
+        raise NotImplementedError
 
     def __getitem__(self, i):
         if i == -1:
@@ -662,6 +688,9 @@ class BaseIndexObject:
             offset = revlogutils.offset_type(0, gettype(r[0]))
             r = (offset,) + r[1:]
         return r
+
+    def __delitem__(self, i):
+        raise NotImplementedError()
 
     def _unpack_entry(self, rev, data):
         r = self.index_format.unpack(data)
@@ -679,7 +708,7 @@ class BaseIndexObject:
         v_fmt = revlog_constants.INDEX_HEADER
         return v_fmt.pack(header)
 
-    def entry_binary(self, rev):
+    def entry_binary(self, rev) -> bytes:
         """return the raw binary string representing a revision"""
         entry = self[rev]
         p = revlog_constants.INDEX_ENTRY_V1.pack(*entry[:8])
@@ -687,9 +716,27 @@ class BaseIndexObject:
             p = p[revlog_constants.INDEX_HEADER.size :]
         return p
 
+    def headrevs(self, excluded_revs=None, stop_rev=None) -> list[int]:
+        count = len(self)
+        if stop_rev is not None:
+            count = min(count, stop_rev)
+        if not count:
+            return [nullrev]
+        # we won't iter over filtered rev so nobody is a head at start
+        ishead = [0] * (count + 1)
+        revs = range(count)
+        if excluded_revs is not None:
+            revs = (r for r in revs if r not in excluded_revs)
+
+        for r in revs:
+            ishead[r] = 1  # I may be an head
+            e = self[r]
+            ishead[e[5]] = ishead[e[6]] = 0  # my parent are not
+        return [r for r, val in enumerate(ishead) if val]
+
 
 class IndexObject(BaseIndexObject):
-    def __init__(self, data):
+    def __init__(self, data: ByteString, uses_generaldelta=False):
         assert len(data) % self.entry_size == 0, (
             len(data),
             self.entry_size,
@@ -699,12 +746,12 @@ class IndexObject(BaseIndexObject):
         self._lgt = len(data) // self.entry_size
         self._extra = []
 
-    def _calculate_index(self, i):
+    def _calculate_index(self, i: int) -> int:
         return i * self.entry_size
 
     def __delitem__(self, i):
         if not isinstance(i, slice) or not i.stop == -1 or i.step is not None:
-            raise ValueError(b"deleting slices only supports a:-1 with step 1")
+            raise ValueError("deleting slices only supports a:-1 with step 1")
         i = i.start
         self._check_index(i)
         self._stripnodes(i)
@@ -723,6 +770,11 @@ class PersistentNodeMapIndexObject(IndexObject):
     the Rust implementation for  more serious usage. This should be used only
     through the dedicated `devel.persistent-nodemap` config.
     """
+
+    # TODO: add type info
+    _nm_docket: Any  # TODO: could be None, but need to handle .tip_rev below
+    _nm_max_idx: int | None
+    _nm_root: nodemaputil.Block | None
 
     def nodemap_data_all(self):
         """Return bytes containing a full serialization of a nodemap
@@ -761,7 +813,7 @@ class PersistentNodeMapIndexObject(IndexObject):
 
 
 class InlinedIndexObject(BaseIndexObject):
-    def __init__(self, data, inline=0):
+    def __init__(self, data, inline=0, uses_generaldelta=False):
         self._data = data
         self._lgt = self._inline_scan(None)
         self._inline_scan(self._lgt)
@@ -783,12 +835,12 @@ class InlinedIndexObject(BaseIndexObject):
             count += 1
             off += self.entry_size + s
         if off != len(self._data):
-            raise ValueError(b"corrupted data")
+            raise ValueError("corrupted data")
         return count
 
     def __delitem__(self, i):
         if not isinstance(i, slice) or not i.stop == -1 or i.step is not None:
-            raise ValueError(b"deleting slices only supports a:-1 with step 1")
+            raise ValueError("deleting slices only supports a:-1 with step 1")
         i = i.start
         self._check_index(i)
         self._stripnodes(i)
@@ -799,11 +851,16 @@ class InlinedIndexObject(BaseIndexObject):
         else:
             self._extra = self._extra[: i - self._lgt]
 
-    def _calculate_index(self, i):
+    def _calculate_index(self, i: int) -> int:
         return self._offsets[i]
 
 
-def parse_index2(data, inline, format=revlog_constants.REVLOGV1):
+def parse_index2(
+    data: ByteString,
+    inline,
+    uses_generaldelta,
+    format=revlog_constants.REVLOGV1,
+) -> tuple[IndexObject | InlinedIndexObject, tuple[int, ByteString] | None]:
     if format == revlog_constants.CHANGELOGV2:
         return parse_index_cl_v2(data)
     if not inline:
@@ -811,9 +868,9 @@ def parse_index2(data, inline, format=revlog_constants.REVLOGV1):
             cls = IndexObject2
         else:
             cls = IndexObject
-        return cls(data), None
+        return cls(data, uses_generaldelta), None
     cls = InlinedIndexObject
-    return cls(data, inline), (0, data)
+    return cls(data, inline, uses_generaldelta), (0, data)
 
 
 def parse_index_cl_v2(data):
@@ -841,7 +898,7 @@ class IndexObject2(IndexObject):
             raise KeyError
         self._check_index(rev)
         if rev < self._lgt:
-            msg = b"cannot rewrite entries outside of this transaction"
+            msg = "cannot rewrite entries outside of this transaction"
             raise KeyError(msg)
         else:
             entry = list(self[rev])
@@ -911,7 +968,6 @@ class IndexChangelogV2(IndexObject2):
         )
 
     def _pack_entry(self, rev, entry):
-
         base = entry[revlog_constants.ENTRY_DELTA_BASE]
         link_rev = entry[revlog_constants.ENTRY_LINK_REV]
         assert base == rev, (base, rev)
@@ -933,9 +989,9 @@ class IndexChangelogV2(IndexObject2):
         return self.index_format.pack(*data)
 
 
-def parse_index_devel_nodemap(data, inline):
-    """like parse_index2, but alway return a PersistentNodeMapIndexObject"""
-    return PersistentNodeMapIndexObject(data), None
+def parse_index_devel_nodemap(data, inline, uses_generaldelta):
+    """like parse_index2, but always return a PersistentNodeMapIndexObject"""
+    return PersistentNodeMapIndexObject(data, uses_generaldelta), None
 
 
 def parse_dirstate(dmap, copymap, st):

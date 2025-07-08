@@ -3,6 +3,15 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
+
+import stat
+
+from typing import (
+    Optional,
+    TYPE_CHECKING,
+    Tuple,
+)
 
 from .i18n import _
 
@@ -12,6 +21,7 @@ from . import (
     policy,
     testing,
     txnutil,
+    typelib,
     util,
 )
 
@@ -20,8 +30,13 @@ from .dirstateutils import (
     v2,
 )
 
+if TYPE_CHECKING:
+    from . import (
+        ui as uimod,
+    )
+
 parsers = policy.importmod('parsers')
-rustmod = policy.importrust('dirstate')
+rustmod = policy.importrust('dirstate', pyo3=True)
 
 propertycache = util.propertycache
 
@@ -46,12 +61,31 @@ class _dirstatemapcommon:
     class, with and without Rust extensions enabled.
     """
 
+    _use_dirstate_v2: bool
+    _nodeconstants: typelib.NodeConstants
+    _ui: uimod.ui
+    _root: bytes
+    _filename: bytes
+    _nodelen: int
+    _dirtyparents: bool
+    _docket: Optional[docketmod.DirstateDocket]
+    _write_mode: int
+    _pendingmode: Optional[bool]
+    identity: Optional[typelib.CacheStat]
+
     # please pytype
 
     _map = None
     copymap = None
 
-    def __init__(self, ui, opener, root, nodeconstants, use_dirstate_v2):
+    def __init__(
+        self,
+        ui: uimod.ui,
+        opener,
+        root: bytes,
+        nodeconstants: typelib.NodeConstants,
+        use_dirstate_v2: bool,
+    ) -> None:
         self._use_dirstate_v2 = use_dirstate_v2
         self._nodeconstants = nodeconstants
         self._ui = ui
@@ -76,16 +110,17 @@ class _dirstatemapcommon:
         # for consistent view between _pl() and _read() invocations
         self._pendingmode = None
 
-    def _set_identity(self):
-        self.identity = self._get_current_identity()
-
-    def _get_current_identity(self):
+    def _get_current_identity(self) -> Optional[typelib.CacheStat]:
+        # TODO have a cleaner approach on httpstaticrepo side
+        path = self._opener.join(self._filename)
+        if path.startswith(b'https://') or path.startswith(b'http://'):
+            return util.uncacheable_cachestat()
         try:
-            return util.cachestat(self._opener.join(self._filename))
+            return util.cachestat(path)
         except FileNotFoundError:
             return None
 
-    def may_need_refresh(self):
+    def may_need_refresh(self) -> bool:
         if 'identity' not in vars(self):
             # no existing identity, we need a refresh
             return True
@@ -104,7 +139,7 @@ class _dirstatemapcommon:
             return True
         return current_identity != self.identity
 
-    def preload(self):
+    def preload(self) -> None:
         """Loads the underlying data, if it's not already loaded"""
         self._map
 
@@ -135,23 +170,45 @@ class _dirstatemapcommon:
         self._pendingmode = mode
         return fp
 
-    def _readdirstatefile(self, size=-1):
+    def _readdirstatefile(
+        self,
+        size: int = -1,
+    ) -> Tuple[Optional[typelib.CacheStat], bytes]:
+        """read the content of the file used as "entry point" for the dirstate
+
+        Return a (identity, data) tuple. The identity can be used for cache
+        validation and concurrent changes detection and must be set as
+        `self.identity` if `data` is preserved.
+        """
+        identity = self._get_current_identity()
+        # There is a race condition between fetching the identity and reading
+        # the file content.  Another process might update the file after we get
+        # the identity information.  However this is fine for our purpose as
+        # this will only create false-positive for "data changed" and no
+        # false-negative.
+        #
+        # in addition for the case that matter the most (updating the dirstate
+        # semantic content and not just some cache information), this will not
+        # happens as the lock should be held when changes to the dirstate
+        # content are made.
+        testing.wait_on_cfg(self._ui, b'dirstate.pre-read-file')
         try:
             with self._opendirstatefile() as fp:
-                return fp.read(size)
+                data = fp.read(size)
         except FileNotFoundError:
             # File doesn't exist, so the current state is empty
-            return b''
+            data = b''
+        testing.wait_on_cfg(self._ui, b'dirstate.post-docket-read-file')
+        return identity, data
 
     @property
-    def docket(self):
+    def docket(self) -> docketmod.DirstateDocket:
         if not self._docket:
             if not self._use_dirstate_v2:
                 raise error.ProgrammingError(
                     b'dirstate only has a docket in v2 format'
                 )
-            self._set_identity()
-            data = self._readdirstatefile()
+            self.identity, data = self._readdirstatefile()
             if data == b'' or data.startswith(docketmod.V2_FORMAT_MARKER):
                 self._docket = docketmod.DirstateDocket.parse(
                     data, self._nodeconstants
@@ -241,7 +298,7 @@ class _dirstatemapcommon:
 
     def _v1_parents(self, from_v2_exception=None):
         read_len = self._nodelen * 2
-        st = self._readdirstatefile(read_len)
+        _identity, st = self._readdirstatefile(read_len)
         l = len(st)
         if l == read_len:
             self._parents = (
@@ -331,7 +388,7 @@ class dirstatemap(_dirstatemapcommon):
 
         `all` is unused when Rust is not enabled
         """
-        for (filename, item) in self.items():
+        for filename, item in self.items():
             yield (filename, item.state, item.mode, item.size, item.mtime)
 
     def keys(self):
@@ -356,28 +413,24 @@ class dirstatemap(_dirstatemapcommon):
     ### disk interaction
 
     def read(self):
-        testing.wait_on_cfg(self._ui, b'dirstate.pre-read-file')
         if self._use_dirstate_v2:
             try:
                 self.docket
             except error.CorruptedDirstate:
                 # fall back to dirstate-v1 if we fail to read v2
-                self._set_identity()
-                st = self._readdirstatefile()
+                self.identity, st = self._readdirstatefile()
             else:
                 if not self.docket.uuid:
                     return
-                testing.wait_on_cfg(self._ui, b'dirstate.post-docket-read-file')
                 st = self._read_v2_data()
         else:
-            self._set_identity()
-            st = self._readdirstatefile()
+            self.identity, st = self._readdirstatefile()
 
         if not st:
             return
 
         # TODO: adjust this estimate for dirstate-v2
-        if util.safehasattr(parsers, 'dict_new_presized'):
+        if hasattr(parsers, 'dict_new_presized'):
             # Make an estimate of the number of files in the dirstate based on
             # its size. This trades wasting some memory for avoiding costly
             # resizes. Each entry have a prefix of 17 bytes followed by one or
@@ -434,7 +487,14 @@ class dirstatemap(_dirstatemapcommon):
         self._dirtyparents = False
 
     @propertycache
-    def identity(self):
+    def identity(self) -> Optional[typelib.CacheStat]:
+        """A cache identifier for the state of the file as data were read
+
+        This must always be set with the object returned from
+        `self._readdirstatefile()`. assigning another value later will break
+        some security mechanism and can lead to misbehavior when concurrent
+        operation are run.
+        """
         self._map
         return self.identity
 
@@ -617,7 +677,8 @@ class dirstatemap(_dirstatemapcommon):
 
         This should also drop associated copy information
 
-        The fact we actually need to drop it is the responsability of the caller"""
+        The fact we actually need to drop it is the responsability of the caller
+        """
         self._map.pop(f, None)
         self.copymap.pop(f, None)
 
@@ -625,7 +686,6 @@ class dirstatemap(_dirstatemapcommon):
 if rustmod is not None:
 
     class dirstatemap(_dirstatemapcommon):
-
         ### Core data storage and access
 
         @propertycache
@@ -634,9 +694,7 @@ if rustmod is not None:
             Fills the Dirstatemap when called.
             """
             # ignore HG_PENDING because identity is used only for writing
-            self._set_identity()
 
-            testing.wait_on_cfg(self._ui, b'dirstate.pre-read-file')
             if self._use_dirstate_v2:
                 try:
                     self.docket
@@ -645,15 +703,7 @@ if rustmod is not None:
                     parents = self._v1_map(e)
                 else:
                     parents = self.docket.parents
-                    inode = (
-                        self.identity.stat.st_ino
-                        if self.identity is not None
-                        and self.identity.stat is not None
-                        else None
-                    )
-                    testing.wait_on_cfg(
-                        self._ui, b'dirstate.post-docket-read-file'
-                    )
+                    identity = self._get_rust_identity()
                     if not self.docket.uuid:
                         data = b''
                         self._map = rustmod.DirstateMap.new_empty()
@@ -664,7 +714,7 @@ if rustmod is not None:
                             self.docket.data_size,
                             self.docket.tree_metadata,
                             self.docket.uuid,
-                            inode,
+                            identity,
                         )
                     parents = self.docket.parents
             else:
@@ -678,17 +728,30 @@ if rustmod is not None:
             self.get = self._map.get
             return self._map
 
-        def _v1_map(self, from_v2_exception=None):
-            self._set_identity()
-            inode = (
-                self.identity.stat.st_ino
-                if self.identity is not None and self.identity.stat is not None
-                else None
-            )
-            try:
-                self._map, parents = rustmod.DirstateMap.new_v1(
-                    self._readdirstatefile(), inode
+        def _get_rust_identity(self):
+            identity = None
+            if self.identity is not None and self.identity.stat is not None:
+                stat_info = self.identity.stat
+                identity = rustmod.DirstateIdentity(
+                    mode=stat_info.st_mode,
+                    dev=stat_info.st_dev,
+                    ino=stat_info.st_ino,
+                    nlink=stat_info.st_nlink,
+                    uid=stat_info.st_uid,
+                    gid=stat_info.st_gid,
+                    size=stat_info.st_size,
+                    mtime=stat_info[stat.ST_MTIME],
+                    mtime_nsec=0,
+                    ctime=stat_info[stat.ST_CTIME],
+                    ctime_nsec=0,
                 )
+            return identity
+
+        def _v1_map(self, from_v2_exception=None):
+            try:
+                self.identity, data = self._readdirstatefile()
+                identity = self._get_rust_identity()
+                self._map, parents = rustmod.DirstateMap.new_v1(data, identity)
             except OSError as e:
                 if from_v2_exception is not None:
                     raise e from from_v2_exception

@@ -5,6 +5,8 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
+
 import os
 import re
 import shutil
@@ -101,7 +103,7 @@ class darcs_source(common.converter_source, common.commandline):
             # encode into ASCII. We convert them back to str to get
             # recode's normal conversion behavior.
             s = s.encode('latin-1')
-        return super(darcs_source, self).recode(s, encoding)
+        return super().recode(s, encoding)
 
     def xml(self, cmd, **kwargs):
         # NOTE: darcs is currently encoding agnostic and will print

@@ -3,20 +3,18 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
 
 import bz2
 import collections
 import zlib
 
-from ..pycompat import getattr
 from .. import (
     error,
     i18n,
     pycompat,
 )
 from . import stringutil
-
-safehasattr = pycompat.safehasattr
 
 
 _ = i18n._
@@ -185,7 +183,7 @@ class compressormanager:
         """
         assert role in (SERVERROLE, CLIENTROLE)
 
-        attr = b'serverpriority' if role == SERVERROLE else b'clientpriority'
+        attr = 'serverpriority' if role == SERVERROLE else 'clientpriority'
 
         engines = [self._engines[e] for e in self._wiretypes.values()]
         if onlyavailable:
@@ -340,7 +338,7 @@ class compressionengine:
 
 class _CompressedStreamReader:
     def __init__(self, fh):
-        if safehasattr(fh, 'unbufferedread'):
+        if hasattr(fh, 'unbufferedread'):
             self._reader = fh.unbufferedread
         else:
             self._reader = fh.read
@@ -381,7 +379,7 @@ class _CompressedStreamReader:
 
 class _GzipCompressedStreamReader(_CompressedStreamReader):
     def __init__(self, fh):
-        super(_GzipCompressedStreamReader, self).__init__(fh)
+        super().__init__(fh)
         self._decompobj = zlib.decompressobj()
 
     def _decompress(self, chunk):
@@ -400,7 +398,7 @@ class _GzipCompressedStreamReader(_CompressedStreamReader):
 
 class _BZ2CompressedStreamReader(_CompressedStreamReader):
     def __init__(self, fh):
-        super(_BZ2CompressedStreamReader, self).__init__(fh)
+        super().__init__(fh)
         self._decompobj = bz2.BZ2Decompressor()
 
     def _decompress(self, chunk):
@@ -420,7 +418,7 @@ class _BZ2CompressedStreamReader(_CompressedStreamReader):
 
 class _TruncatedBZ2CompressedStreamReader(_BZ2CompressedStreamReader):
     def __init__(self, fh):
-        super(_TruncatedBZ2CompressedStreamReader, self).__init__(fh)
+        super().__init__(fh)
         newbuf = self._decompobj.decompress(b'BZ')
         if newbuf:
             self._pending.append(newbuf)
@@ -428,7 +426,7 @@ class _TruncatedBZ2CompressedStreamReader(_BZ2CompressedStreamReader):
 
 class _ZstdCompressedStreamReader(_CompressedStreamReader):
     def __init__(self, fh, zstd):
-        super(_ZstdCompressedStreamReader, self).__init__(fh)
+        super().__init__(fh)
         self._zstd = zstd
         self._decompobj = zstd.ZstdDecompressor().decompressobj()
 
@@ -514,7 +512,7 @@ class _zlibengine(compressionengine):
                 parts = []
                 pos = 0
                 while pos < insize:
-                    pos2 = pos + 2 ** 20
+                    pos2 = pos + 2**20
                     parts.append(z.compress(data[pos:pos2]))
                     pos = pos2
                 parts.append(z.flush())

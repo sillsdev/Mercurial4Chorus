@@ -1,8 +1,11 @@
+from __future__ import annotations
+
 import os
 import winreg  # pytype: disable=import-error
 
 from typing import (
     List,
+    TYPE_CHECKING,
     Tuple,
 )
 
@@ -13,7 +16,7 @@ from . import (
     win32,
 )
 
-if pycompat.TYPE_CHECKING:
+if TYPE_CHECKING:
     from . import ui as uimod
 
 # MS-DOS 'more' is the only pager available by default on Windows.
@@ -112,5 +115,5 @@ def _legacy_expanduser(path: bytes) -> bytes:
     return userhome + path[i:]
 
 
-def termsize(ui: "uimod.ui") -> Tuple[int, int]:
+def termsize(ui: uimod.ui) -> Tuple[int, int]:
     return win32.termsize()

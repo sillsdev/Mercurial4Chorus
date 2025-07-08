@@ -5,6 +5,7 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
 
 import struct
 
@@ -14,7 +15,6 @@ from .node import (
     hex,
     short,
 )
-from .pycompat import getattr
 from . import (
     encoding,
     error,
@@ -686,7 +686,7 @@ def mirroring_remote(ui, repo, remotemarks):
     remotemarks"""
     changed = []
     localmarks = repo._bookmarks
-    for (b, id) in remotemarks.items():
+    for b, id in remotemarks.items():
         if id != localmarks.get(b, None) and id in repo:
             changed.append((b, id, ui.debug, _(b"updating bookmark %s\n") % b))
     for b in localmarks:

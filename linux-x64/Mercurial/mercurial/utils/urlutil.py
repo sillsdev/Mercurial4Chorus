@@ -4,15 +4,22 @@
 #
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
+
+from __future__ import annotations
+
 import os
 import re as remod
 import socket
 
-from ..i18n import _
-from ..pycompat import (
-    getattr,
-    setattr,
+from typing import (
+    Callable,
+    Dict,
+    Optional,
+    Tuple,
+    Union,
 )
+
+from ..i18n import _
 from .. import (
     encoding,
     error,
@@ -24,21 +31,21 @@ from . import (
     stringutil,
 )
 
+from ..interfaces import (
+    misc as int_misc,
+)
+
 from ..revlogutils import (
     constants as revlog_constants,
 )
 
-
-if pycompat.TYPE_CHECKING:
-    from typing import (
-        Union,
-    )
+# keeps pyflakes happy
+assert [Callable, Dict, Tuple, Union]
 
 urlreq = urllibcompat.urlreq
 
 
-def getport(port):
-    # type: (Union[bytes, int]) -> int
+def getport(port: Union[bytes, int]) -> int:
     """Return the port for a given network service.
 
     If port is an integer, it's returned as is. If it's a string, it's
@@ -52,13 +59,13 @@ def getport(port):
 
     try:
         return socket.getservbyname(pycompat.sysstr(port))
-    except socket.error:
+    except OSError:
         raise error.Abort(
             _(b"no port number associated with service '%s'") % port
         )
 
 
-class url:
+class url(int_misc.IUrl):
     r"""Reliable URL parser.
 
     This parses URLs and provides attributes for the following
@@ -136,8 +143,12 @@ class url:
     _safepchars = b"/!~*'()+:\\"
     _matchscheme = remod.compile(b'^[a-zA-Z0-9+.\\-]+:').match
 
-    def __init__(self, path, parsequery=True, parsefragment=True):
-        # type: (bytes, bool, bool) -> None
+    def __init__(
+        self,
+        path: bytes,
+        parsequery: bool = True,
+        parsefragment: bool = True,
+    ) -> None:
         # We slowly chomp away at path until we have only the path left
         self.scheme = self.user = self.passwd = self.host = None
         self.port = self.path = self.query = self.fragment = None
@@ -238,7 +249,7 @@ class url:
             if v is not None:
                 setattr(self, a, urlreq.unquote(v))
 
-    def copy(self):
+    def copy(self) -> url:
         u = url(b'temporary useless value')
         u.path = self.path
         u.scheme = self.scheme
@@ -257,18 +268,20 @@ class url:
     def __repr__(self):
         attrs = []
         for a in (
-            b'scheme',
-            b'user',
-            b'passwd',
-            b'host',
-            b'port',
-            b'path',
-            b'query',
-            b'fragment',
+            'scheme',
+            'user',
+            'passwd',
+            'host',
+            'port',
+            'path',
+            'query',
+            'fragment',
         ):
             v = getattr(self, a)
             if v is not None:
-                attrs.append(b'%s: %r' % (a, pycompat.bytestr(v)))
+                line = b'%s: %r'
+                line %= (pycompat.bytestr(a), pycompat.bytestr(v))
+                attrs.append(line)
         return b'<url %s>' % b', '.join(attrs)
 
     def __bytes__(self):
@@ -353,7 +366,7 @@ class url:
 
     __str__ = encoding.strmethod(__bytes__)
 
-    def authinfo(self):
+    def authinfo(self) -> int_misc.AuthInfoT:
         user, passwd = self.user, self.passwd
         try:
             self.user, self.passwd = None, None
@@ -368,7 +381,7 @@ class url:
         # a password.
         return (s, (None, (s, self.host), self.user, self.passwd or b''))
 
-    def isabs(self):
+    def isabs(self) -> bool:
         if self.scheme and self.scheme != b'file':
             return True  # remote URL
         if hasdriveletter(self.path):
@@ -379,8 +392,7 @@ class url:
             return True  # POSIX-style
         return False
 
-    def localpath(self):
-        # type: () -> bytes
+    def localpath(self) -> bytes:
         if self.scheme == b'file' or self.scheme == b'bundle':
             path = self.path or b'/'
             # For Windows, we need to promote hosts containing drive
@@ -394,7 +406,7 @@ class url:
             return path
         return self._origpath
 
-    def islocal(self):
+    def islocal(self) -> bool:
         '''whether localpath will return something that posixfile can open'''
         return (
             not self.scheme
@@ -403,23 +415,19 @@ class url:
         )
 
 
-def hasscheme(path):
-    # type: (bytes) -> bool
+def hasscheme(path: bytes) -> bool:
     return bool(url(path).scheme)  # cast to help pytype
 
 
-def hasdriveletter(path):
-    # type: (bytes) -> bool
+def hasdriveletter(path: bytes) -> bool:
     return bool(path) and path[1:2] == b':' and path[0:1].isalpha()
 
 
-def urllocalpath(path):
-    # type: (bytes) -> bytes
+def urllocalpath(path: bytes) -> bytes:
     return url(path, parsequery=False, parsefragment=False).localpath()
 
 
-def checksafessh(path):
-    # type: (bytes) -> None
+def checksafessh(path: bytes) -> None:
     """check if a path / url is a potentially unsafe ssh exploit (SEC)
 
     This is a sanity check for ssh urls. ssh will parse the first item as
@@ -436,8 +444,7 @@ def checksafessh(path):
         )
 
 
-def hidepassword(u):
-    # type: (bytes) -> bytes
+def hidepassword(u: bytes) -> bytes:
     '''hide user credential in a url string'''
     u = url(u)
     if u.passwd:
@@ -445,8 +452,7 @@ def hidepassword(u):
     return bytes(u)
 
 
-def removeauth(u):
-    # type: (bytes) -> bytes
+def removeauth(u: bytes) -> bytes:
     '''remove all authentication information from a url string'''
     u = url(u)
     u.user = u.passwd = None
@@ -657,12 +663,12 @@ class paths(dict):
             self[name] = new_paths
 
 
-_pathsuboptions = {}
+_pathsuboptions: Dict[bytes, Tuple[str, Callable]] = {}
 # a dictionnary of methods that can be used to format a sub-option value
 path_suboptions_display = {}
 
 
-def pathsuboption(option, attr, display=pycompat.bytestr):
+def pathsuboption(option: bytes, attr: str, display=pycompat.bytestr):
     """Decorator used to declare a path sub-option.
 
     Arguments are the sub-option name and the attribute it should set on
@@ -679,6 +685,9 @@ def pathsuboption(option, attr, display=pycompat.bytestr):
     This decorator can be used to perform additional verification of
     sub-options and to change the type of sub-options.
     """
+    if isinstance(attr, bytes):
+        msg = b'pathsuboption take `str` as "attr" argument, not `bytes`'
+        raise TypeError(msg)
 
     def register(func):
         _pathsuboptions[option] = (attr, func)
@@ -693,7 +702,7 @@ def display_bool(value):
     return b'yes' if value else b'no'
 
 
-@pathsuboption(b'pushurl', b'_pushloc')
+@pathsuboption(b'pushurl', '_pushloc')
 def pushurlpathoption(ui, path, value):
     u = url(value)
     # Actually require a URL.
@@ -718,7 +727,7 @@ def pushurlpathoption(ui, path, value):
     return bytes(u)
 
 
-@pathsuboption(b'pushrev', b'pushrev')
+@pathsuboption(b'pushrev', 'pushrev')
 def pushrevpathoption(ui, path, value):
     return value
 
@@ -730,7 +739,7 @@ SUPPORTED_BOOKMARKS_MODES = {
 }
 
 
-@pathsuboption(b'bookmarks.mode', b'bookmarks_mode')
+@pathsuboption(b'bookmarks.mode', 'bookmarks_mode')
 def bookmarks_mode_option(ui, path, value):
     if value not in SUPPORTED_BOOKMARKS_MODES:
         path_name = path.name
@@ -756,7 +765,7 @@ DELTA_REUSE_POLICIES_NAME = dict(i[::-1] for i in DELTA_REUSE_POLICIES.items())
 
 @pathsuboption(
     b'pulled-delta-reuse-policy',
-    b'delta_reuse_policy',
+    'delta_reuse_policy',
     display=DELTA_REUSE_POLICIES_NAME.get,
 )
 def delta_reuse_policy(ui, path, value):
@@ -773,7 +782,7 @@ def delta_reuse_policy(ui, path, value):
     return DELTA_REUSE_POLICIES.get(value)
 
 
-@pathsuboption(b'multi-urls', b'multi_urls', display=display_bool)
+@pathsuboption(b'multi-urls', 'multi_urls', display=display_bool)
 def multiurls_pathoption(ui, path, value):
     res = stringutil.parsebool(value)
     if res is None:
@@ -817,7 +826,7 @@ def _chain_path(base_path, ui, paths):
     return new_paths
 
 
-class path:
+class path(int_misc.IPath):
     """Represents an individual path and its configuration."""
 
     def __init__(
@@ -884,7 +893,7 @@ class path:
         self.rawloc = rawloc
         self.loc = b'%s' % u
 
-    def copy(self, new_raw_location=None):
+    def copy(self, new_raw_location: Optional[bytes] = None) -> path:
         """make a copy of this path object
 
         When `new_raw_location` is set, the new path will point to it.
@@ -901,11 +910,11 @@ class path:
         return new
 
     @property
-    def is_push_variant(self):
+    def is_push_variant(self) -> bool:
         """is this a path variant to be used for pushing"""
         return self.main_path is not None
 
-    def get_push_variant(self):
+    def get_push_variant(self) -> path:
         """get a "copy" of the path, but suitable for pushing
 
         This means using the value of the `pushurl` option (if any) as the url.
@@ -919,14 +928,6 @@ class path:
         if self._pushloc:
             new._setup_url(self._pushloc)
         return new
-
-    def pushloc(self):
-        """compatibility layer for the deprecated attributes"""
-        from .. import util  # avoid a cycle
-
-        msg = "don't use path.pushloc, use path.get_push_variant()"
-        util.nouideprecwarn(msg, b"6.5")
-        return self._pushloc
 
     def _validate_path(self):
         # When given a raw location but not a symbolic name, validate the
@@ -965,7 +966,7 @@ class path:
             return False
 
     @property
-    def suboptions(self):
+    def suboptions(self) -> Dict[bytes, bytes]:
         """Return sub-options and their values for this path.
 
         This is intended to be used for presentation purposes.

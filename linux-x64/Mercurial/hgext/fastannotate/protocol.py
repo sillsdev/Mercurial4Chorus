@@ -4,12 +4,12 @@
 #
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
+from __future__ import annotations
 
 import contextlib
 import os
 
 from mercurial.i18n import _
-from mercurial.pycompat import open
 from mercurial import (
     error,
     extensions,
@@ -83,7 +83,7 @@ def _getannotate(repo, proto, path, lastnode):
             for p in [actx.revmappath, actx.linelogpath]:
                 if not os.path.exists(p):
                     continue
-                with open(p, b'rb') as f:
+                with open(p, 'rb') as f:
                     content = f.read()
                 vfsbaselen = len(repo.vfs.base + b'/')
                 relpath = p[vfsbaselen:]
@@ -101,7 +101,7 @@ def _registerwireprotocommand():
 
 def serveruisetup(ui):
     _registerwireprotocommand()
-    extensions.wrapfunction(wireprotov1server, b'_capabilities', _capabilities)
+    extensions.wrapfunction(wireprotov1server, '_capabilities', _capabilities)
 
 
 # client-side

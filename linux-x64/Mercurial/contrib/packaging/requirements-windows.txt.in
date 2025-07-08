@@ -1,0 +1,23 @@
+# Declare Windows-specific requirements for generating
+# the compiled (frozen) set of requirements in
+# ./requirements-windows-py3.txt.
+# If run on Windows, it may be necessary to run dos2unix
+# on the output file to replace any CRLF newlines with LF.
+
+docutils
+dulwich
+
+# Needed by the release note tooling
+fuzzywuzzy
+
+keyring
+pygit2
+pygments
+
+# Needed by the phabricator tests
+pytest-vcr
+
+# Need to list explicitly so dependency gets pulled in when
+# not running on Windows.
+pywin32-ctypes
+windows-curses

@@ -6,8 +6,8 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
 
-import errno
 import os
 import socket
 import sys
@@ -15,10 +15,6 @@ import traceback
 import wsgiref.validate
 
 from ..i18n import _
-from ..pycompat import (
-    getattr,
-    open,
-)
 
 from .. import (
     encoding,
@@ -67,7 +63,6 @@ class _error_logger:
 
 
 class _httprequesthandler(httpservermod.basehttprequesthandler):
-
     url_scheme = b'http'
 
     @staticmethod
@@ -100,7 +95,7 @@ class _httprequesthandler(httpservermod.basehttprequesthandler):
 
     def log_request(self, code='-', size='-'):
         xheaders = []
-        if util.safehasattr(self, 'headers'):
+        if hasattr(self, 'headers'):
             xheaders = [
                 h for h in self.headers.items() if h[0].startswith('x-')
             ]
@@ -125,8 +120,7 @@ class _httprequesthandler(httpservermod.basehttprequesthandler):
             # I/O below could raise another exception. So log the original
             # exception first to ensure it is recorded.
             if not (
-                isinstance(e, (OSError, socket.error))
-                and e.errno == errno.ECONNRESET
+                isinstance(e, (ConnectionResetError, ConnectionAbortedError))
             ):
                 tb = "".join(traceback.format_exception(*sys.exc_info()))
                 # We need a native-string newline to poke in the log
@@ -214,7 +208,7 @@ class _httprequesthandler(httpservermod.basehttprequesthandler):
         env['wsgi.multithread'] = isinstance(
             self.server, socketserver.ThreadingMixIn
         )
-        if util.safehasattr(socketserver, 'ForkingMixIn'):
+        if hasattr(socketserver, 'ForkingMixIn'):
             env['wsgi.multiprocess'] = isinstance(
                 self.server, socketserver.ForkingMixIn
             )
@@ -344,7 +338,7 @@ try:
     threading.active_count()  # silence pyflakes and bypass demandimport
     _mixin = socketserver.ThreadingMixIn
 except ImportError:
-    if util.safehasattr(os, "fork"):
+    if hasattr(os, "fork"):
         _mixin = socketserver.ForkingMixIn
     else:
 
@@ -354,12 +348,11 @@ except ImportError:
 
 def openlog(opt, default):
     if opt and opt != b'-':
-        return open(opt, b'ab')
+        return open(opt, 'ab')
     return default
 
 
-class MercurialHTTPServer(_mixin, httpservermod.httpserver, object):
-
+class MercurialHTTPServer(_mixin, httpservermod.httpserver):
     # SO_REUSEADDR has broken semantics on windows
     if pycompat.iswindows:
         allow_reuse_address = 0
@@ -393,11 +386,10 @@ class IPv6HTTPServer(MercurialHTTPServer):
     def __init__(self, *args, **kwargs):
         if self.address_family is None:
             raise error.RepoError(_(b'IPv6 is not available on this system'))
-        super(IPv6HTTPServer, self).__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
 
 
 def create_server(ui, app):
-
     if ui.config(b'web', b'certificate'):
         handler = _httprequesthandlerssl
     else:
@@ -417,7 +409,7 @@ def create_server(ui, app):
     port = urlutil.getport(ui.config(b'web', b'port'))
     try:
         return cls(ui, app, (address, port), handler)
-    except socket.error as inst:
+    except OSError as inst:
         raise error.Abort(
             _(b"cannot start server at '%s:%d': %s")
             % (address, port, encoding.strtolocal(inst.args[1]))

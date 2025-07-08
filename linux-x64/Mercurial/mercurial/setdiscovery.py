@@ -40,6 +40,7 @@ nodes that will maximize the number of nodes that will be
 classified with it (since all ancestors or descendants will be marked as well).
 """
 
+from __future__ import annotations
 
 import collections
 import random
@@ -190,7 +191,6 @@ class partialdiscovery:
         return getparents
 
     def _childrengetter(self):
-
         if self._childrenmap is not None:
             # During discovery, the `undecided` set keep shrinking.
             # Therefore, the map computed for an iteration N will be
@@ -276,7 +276,7 @@ class partialdiscovery:
 pure_partialdiscovery = partialdiscovery
 
 partialdiscovery = policy.importrust(
-    'discovery', member='PartialDiscovery', default=partialdiscovery
+    'discovery', member='PartialDiscovery', default=partialdiscovery, pyo3=True
 )
 
 
@@ -454,7 +454,6 @@ def findcommonheads(
     full = not initial_head_exchange
     progress = ui.makeprogress(_(b'searching'), unit=_(b'queries'))
     while not disco.iscomplete():
-
         if full or disco.hasinfo():
             if full:
                 ui.note(_(b"sampling from both directions\n"))

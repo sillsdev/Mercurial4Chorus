@@ -21,10 +21,22 @@ shelved change has a distinct name. For details, see the help for "hg
 shelve".
 """
 
+from __future__ import annotations
+
 import collections
 import io
 import itertools
 import stat
+
+from typing import (
+    Any,
+    Dict,
+    Iterable,
+    Iterator,
+    List,
+    Sequence,
+    Tuple,
+)
 
 from .i18n import _
 from .node import (
@@ -37,6 +49,7 @@ from . import (
     bundle2,
     changegroup,
     cmdutil,
+    context as contextmod,
     discovery,
     error,
     exchange,
@@ -69,16 +82,16 @@ shelveuser = b'shelve@localhost'
 
 
 class ShelfDir:
-    def __init__(self, repo, for_backups=False):
+    def __init__(self, repo, for_backups: bool = False) -> None:
         if for_backups:
             self.vfs = vfsmod.vfs(repo.vfs.join(backupdir))
         else:
             self.vfs = vfsmod.vfs(repo.vfs.join(shelvedir))
 
-    def get(self, name):
+    def get(self, name: bytes) -> Shelf:
         return Shelf(self.vfs, name)
 
-    def listshelves(self):
+    def listshelves(self) -> List[Tuple[float, bytes]]:
         """return all shelves in repo as list of (time, name)"""
         try:
             names = self.vfs.listdir()
@@ -99,14 +112,14 @@ class ShelfDir:
         return sorted(info, reverse=True)
 
 
-def _use_internal_phase(repo):
+def _use_internal_phase(repo) -> bool:
     return (
         phases.supportinternal(repo)
         and repo.ui.config(b'shelve', b'store') == b'internal'
     )
 
 
-def _target_phase(repo):
+def _target_phase(repo) -> int:
     return phases.internal if _use_internal_phase(repo) else phases.secret
 
 
@@ -118,29 +131,29 @@ class Shelf:
     differences and lets you work with the shelf as a whole.
     """
 
-    def __init__(self, vfs, name):
+    def __init__(self, vfs: vfsmod.vfs, name: bytes) -> None:
         self.vfs = vfs
         self.name = name
 
-    def exists(self):
+    def exists(self) -> bool:
         return self._exists(b'.shelve') or self._exists(b'.patch', b'.hg')
 
-    def _exists(self, *exts):
+    def _exists(self, *exts: bytes) -> bool:
         return all(self.vfs.exists(self.name + ext) for ext in exts)
 
-    def mtime(self):
+    def mtime(self) -> float:
         try:
             return self._stat(b'.shelve')[stat.ST_MTIME]
         except FileNotFoundError:
             return self._stat(b'.patch')[stat.ST_MTIME]
 
-    def _stat(self, ext):
+    def _stat(self, ext: bytes):
         return self.vfs.stat(self.name + ext)
 
-    def writeinfo(self, info):
+    def writeinfo(self, info) -> None:
         scmutil.simplekeyvaluefile(self.vfs, self.name + b'.shelve').write(info)
 
-    def hasinfo(self):
+    def hasinfo(self) -> bool:
         return self.vfs.exists(self.name + b'.shelve')
 
     def readinfo(self):
@@ -148,7 +161,7 @@ class Shelf:
             self.vfs, self.name + b'.shelve'
         ).read()
 
-    def writebundle(self, repo, bases, node):
+    def writebundle(self, repo, bases, node) -> None:
         cgversion = changegroup.safeversion(repo)
         if cgversion == b'01':
             btype = b'HG10BZ'
@@ -174,7 +187,7 @@ class Shelf:
             compression=compression,
         )
 
-    def applybundle(self, repo, tr):
+    def applybundle(self, repo, tr) -> contextmod.changectx:
         filename = self.name + b'.hg'
         fp = self.vfs(filename)
         try:
@@ -197,10 +210,10 @@ class Shelf:
         finally:
             fp.close()
 
-    def open_patch(self, mode=b'rb'):
+    def open_patch(self, mode: bytes = b'rb'):
         return self.vfs(self.name + b'.patch', mode)
 
-    def patch_from_node(self, repo, node):
+    def patch_from_node(self, repo, node) -> io.BytesIO:
         repo = repo.unfiltered()
         match = _optimized_match(repo, node)
         fp = io.BytesIO()
@@ -221,8 +234,8 @@ class Shelf:
         except (FileNotFoundError, error.RepoLookupError):
             return self.open_patch()
 
-    def _backupfilename(self, backupvfs, filename):
-        def gennames(base):
+    def _backupfilename(self, backupvfs: vfsmod.vfs, filename: bytes) -> bytes:
+        def gennames(base: bytes):
             yield base
             base, ext = base.rsplit(b'.', 1)
             for i in itertools.count(1):
@@ -232,7 +245,10 @@ class Shelf:
             if not backupvfs.exists(n):
                 return backupvfs.join(n)
 
-    def movetobackup(self, backupvfs):
+        # Help pytype- gennames() yields infinitely
+        raise error.ProgrammingError("unreachable")
+
+    def movetobackup(self, backupvfs: vfsmod.vfs) -> None:
         if not backupvfs.isdir():
             backupvfs.makedir()
         for suffix in shelvefileextensions:
@@ -243,7 +259,7 @@ class Shelf:
                     self._backupfilename(backupvfs, filename),
                 )
 
-    def delete(self):
+    def delete(self) -> None:
         for ext in shelvefileextensions:
             self.vfs.tryunlink(self.name + b'.' + ext)
 
@@ -256,7 +272,7 @@ class Shelf:
             return patch.changedfiles(ui, repo, filename)
 
 
-def _optimized_match(repo, node):
+def _optimized_match(repo, node: bytes):
     """
     Create a matcher so that prefetch doesn't attempt to fetch
     the entire repository pointlessly, and as an optimisation
@@ -272,6 +288,7 @@ class shelvedstate:
     versions of a shelved state are possible and handles them appropriately.
     """
 
+    # Class-wide constants
     _version = 2
     _filename = b'shelvedstate'
     _keep = b'keep'
@@ -280,8 +297,19 @@ class shelvedstate:
     _noactivebook = b':no-active-bookmark'
     _interactive = b'interactive'
 
+    # Per instance attrs
+    name: bytes
+    wctx: contextmod.workingctx
+    pendingctx: contextmod.changectx
+    parents: List[bytes]
+    nodestoremove: List[bytes]
+    branchtorestore: bytes
+    keep: bool
+    activebookmark: bytes
+    interactive: bool
+
     @classmethod
-    def _verifyandtransform(cls, d):
+    def _verifyandtransform(cls, d: Dict[bytes, Any]) -> None:
         """Some basic shelvestate syntactic verification and transformation"""
         try:
             d[b'originalwctx'] = bin(d[b'originalwctx'])
@@ -294,7 +322,7 @@ class shelvedstate:
             raise error.CorruptedState(stringutil.forcebytestr(err))
 
     @classmethod
-    def _getversion(cls, repo):
+    def _getversion(cls, repo) -> int:
         """Read version information from shelvestate file"""
         fp = repo.vfs(cls._filename)
         try:
@@ -306,7 +334,7 @@ class shelvedstate:
         return version
 
     @classmethod
-    def _readold(cls, repo):
+    def _readold(cls, repo) -> Dict[bytes, Any]:
         """Read the old position-based version of a shelvestate file"""
         # Order is important, because old shelvestate file uses it
         # to detemine values of fields (i.g. name is on the second line,
@@ -365,7 +393,7 @@ class shelvedstate:
                 obj.activebookmark = d.get(b'activebook', b'')
             obj.interactive = d.get(b'interactive') == cls._interactive
         except (error.RepoLookupError, KeyError) as err:
-            raise error.CorruptedState(pycompat.bytestr(err))
+            raise error.CorruptedState(stringutil.forcebytestr(err))
 
         return obj
 
@@ -373,15 +401,15 @@ class shelvedstate:
     def save(
         cls,
         repo,
-        name,
-        originalwctx,
-        pendingctx,
-        nodestoremove,
-        branchtorestore,
-        keep=False,
-        activebook=b'',
-        interactive=False,
-    ):
+        name: bytes,
+        originalwctx: contextmod.workingctx,
+        pendingctx: contextmod.changectx,
+        nodestoremove: List[bytes],
+        branchtorestore: bytes,
+        keep: bool = False,
+        activebook: bytes = b'',
+        interactive: bool = False,
+    ) -> None:
         info = {
             b"name": name,
             b"originalwctx": hex(originalwctx.node()),
@@ -399,11 +427,11 @@ class shelvedstate:
         )
 
     @classmethod
-    def clear(cls, repo):
+    def clear(cls, repo) -> None:
         repo.vfs.unlinkpath(cls._filename, ignoremissing=True)
 
 
-def cleanupoldbackups(repo):
+def cleanupoldbackups(repo) -> None:
     maxbackups = repo.ui.configint(b'shelve', b'maxbackups')
     backup_dir = ShelfDir(repo, for_backups=True)
     hgfiles = backup_dir.listshelves()
@@ -418,19 +446,19 @@ def cleanupoldbackups(repo):
         backup_dir.get(name).delete()
 
 
-def _backupactivebookmark(repo):
+def _backupactivebookmark(repo) -> bytes:
     activebookmark = repo._activebookmark
     if activebookmark:
         bookmarks.deactivate(repo)
     return activebookmark
 
 
-def _restoreactivebookmark(repo, mark):
+def _restoreactivebookmark(repo, mark) -> None:
     if mark:
         bookmarks.activate(repo, mark)
 
 
-def _aborttransaction(repo, tr):
+def _aborttransaction(repo, tr) -> None:
     """Abort current transaction for shelve/unshelve, but keep dirstate"""
     # disable the transaction invalidation of the dirstate, to preserve the
     # current change in memory.
@@ -456,7 +484,7 @@ def _aborttransaction(repo, tr):
     ds.setbranch(current_branch, None)
 
 
-def getshelvename(repo, parent, opts):
+def getshelvename(repo, parent, opts) -> bytes:
     """Decide on the name this shelve is going to have"""
 
     def gennames():
@@ -496,7 +524,7 @@ def getshelvename(repo, parent, opts):
     return name
 
 
-def mutableancestors(ctx):
+def mutableancestors(ctx) -> Iterator[bytes]:
     """return all mutable ancestors for ctx (included)
 
     Much faster than the revset ancestors(ctx) & draft()"""
@@ -514,9 +542,9 @@ def mutableancestors(ctx):
                     visit.append(parent)
 
 
-def getcommitfunc(extra, interactive, editor=False):
+def getcommitfunc(extra, interactive: bool, editor: bool = False):
     def commitfunc(ui, repo, message, match, opts):
-        hasmq = util.safehasattr(repo, 'mq')
+        hasmq = hasattr(repo, 'mq')
         if hasmq:
             saved, repo.mq.checkapplied = repo.mq.checkapplied, False
 
@@ -550,7 +578,7 @@ def getcommitfunc(extra, interactive, editor=False):
     return interactivecommitfunc if interactive else commitfunc
 
 
-def _nothingtoshelvemessaging(ui, repo, pats, opts):
+def _nothingtoshelvemessaging(ui, repo, pats, opts) -> None:
     stat = repo.status(match=scmutil.match(repo[None], pats, opts))
     if stat.deleted:
         ui.status(
@@ -561,7 +589,7 @@ def _nothingtoshelvemessaging(ui, repo, pats, opts):
         ui.status(_(b"nothing changed\n"))
 
 
-def _shelvecreatedcommit(repo, node, name, match):
+def _shelvecreatedcommit(repo, node: bytes, name: bytes, match) -> None:
     info = {b'node': hex(node)}
     shelf = ShelfDir(repo).get(name)
     shelf.writeinfo(info)
@@ -573,14 +601,14 @@ def _shelvecreatedcommit(repo, node, name, match):
         )
 
 
-def _includeunknownfiles(repo, pats, opts, extra):
+def _includeunknownfiles(repo, pats, opts, extra) -> None:
     s = repo.status(match=scmutil.match(repo[None], pats, opts), unknown=True)
     if s.unknown:
         extra[b'shelve_unknown'] = b'\0'.join(s.unknown)
         repo[None].add(s.unknown)
 
 
-def _finishshelve(repo, tr):
+def _finishshelve(repo, tr) -> None:
     if _use_internal_phase(repo):
         tr.close()
     else:
@@ -647,7 +675,7 @@ def _docreatecmd(ui, repo, pats, opts):
                 False,
                 cmdutil.recordfilter,
                 *pats,
-                **pycompat.strkwargs(opts)
+                **pycompat.strkwargs(opts),
             )
         if not node:
             _nothingtoshelvemessaging(ui, repo, pats, opts)
@@ -675,7 +703,7 @@ def _docreatecmd(ui, repo, pats, opts):
         lockmod.release(tr, lock)
 
 
-def _isbareshelve(pats, opts):
+def _isbareshelve(pats, opts) -> bool:
     return (
         not pats
         and not opts.get(b'interactive', False)
@@ -684,11 +712,11 @@ def _isbareshelve(pats, opts):
     )
 
 
-def _iswctxonnewbranch(repo):
+def _iswctxonnewbranch(repo) -> bool:
     return repo[None].branch() != repo[b'.'].branch()
 
 
-def cleanupcmd(ui, repo):
+def cleanupcmd(ui, repo) -> None:
     """subcommand that deletes all shelves"""
 
     with repo.wlock():
@@ -699,7 +727,7 @@ def cleanupcmd(ui, repo):
             cleanupoldbackups(repo)
 
 
-def deletecmd(ui, repo, pats):
+def deletecmd(ui, repo, pats) -> None:
     """subcommand that deletes a specific shelve"""
     if not pats:
         raise error.InputError(_(b'no shelved changes specified!'))
@@ -715,7 +743,7 @@ def deletecmd(ui, repo, pats):
             cleanupoldbackups(repo)
 
 
-def listcmd(ui, repo, pats, opts):
+def listcmd(ui, repo, pats: Iterable[bytes], opts) -> None:
     """subcommand that displays the list of shelves"""
     pats = set(pats)
     width = 80
@@ -762,7 +790,7 @@ def listcmd(ui, repo, pats, opts):
                     ui.write(chunk, label=label)
 
 
-def patchcmds(ui, repo, pats, opts):
+def patchcmds(ui, repo, pats: Sequence[bytes], opts) -> None:
     """subcommand that displays shelves"""
     shelf_dir = ShelfDir(repo)
     if len(pats) == 0:
@@ -779,7 +807,7 @@ def patchcmds(ui, repo, pats, opts):
     listcmd(ui, repo, pats, opts)
 
 
-def checkparents(repo, state):
+def checkparents(repo, state: shelvedstate) -> None:
     """check parent while resuming an unshelve"""
     if state.parents != repo.dirstate.parents():
         raise error.Abort(
@@ -787,11 +815,12 @@ def checkparents(repo, state):
         )
 
 
-def _loadshelvedstate(ui, repo, opts):
+def _loadshelvedstate(ui, repo, opts) -> shelvedstate:
     try:
         state = shelvedstate.load(repo)
         if opts.get(b'keep') is None:
             opts[b'keep'] = state.keep
+        return state
     except FileNotFoundError:
         cmdutil.wrongtooltocontinue(repo, _(b'unshelve'))
     except error.CorruptedState as err:
@@ -812,10 +841,13 @@ def _loadshelvedstate(ui, repo, opts):
                     b'please update to some commit\n'
                 )
             )
-    return state
+        else:
+            raise error.ProgrammingError(
+                "a corrupted shelvedstate exists without --abort or --continue"
+            )
 
 
-def unshelveabort(ui, repo, state):
+def unshelveabort(ui, repo, state: shelvedstate) -> None:
     """subcommand that abort an in-progress unshelve"""
     with repo.lock():
         try:
@@ -834,14 +866,14 @@ def unshelveabort(ui, repo, state):
             ui.warn(_(b"unshelve of '%s' aborted\n") % state.name)
 
 
-def hgabortunshelve(ui, repo):
+def hgabortunshelve(ui, repo) -> None:
     """logic to  abort unshelve using 'hg abort"""
     with repo.wlock():
         state = _loadshelvedstate(ui, repo, {b'abort': True})
         return unshelveabort(ui, repo, state)
 
 
-def mergefiles(ui, repo, wctx, shelvectx):
+def mergefiles(ui, repo, wctx, shelvectx) -> None:
     """updates to wctx and merges the changes from shelvectx into the
     dirstate."""
     with ui.configoverride({(b'ui', b'quiet'): True}):
@@ -849,7 +881,7 @@ def mergefiles(ui, repo, wctx, shelvectx):
         cmdutil.revert(ui, repo, shelvectx)
 
 
-def restorebranch(ui, repo, branchtorestore):
+def restorebranch(ui, repo, branchtorestore: bytes) -> None:
     if branchtorestore and branchtorestore != repo.dirstate.branch():
         repo.dirstate.setbranch(branchtorestore, repo.currenttransaction())
         ui.status(
@@ -857,7 +889,7 @@ def restorebranch(ui, repo, branchtorestore):
         )
 
 
-def unshelvecleanup(ui, repo, name, opts):
+def unshelvecleanup(ui, repo, name: bytes, opts) -> None:
     """remove related files after an unshelve"""
     if not opts.get(b'keep'):
         backupvfs = vfsmod.vfs(repo.vfs.join(backupdir))
@@ -865,7 +897,7 @@ def unshelvecleanup(ui, repo, name, opts):
         cleanupoldbackups(repo)
 
 
-def unshelvecontinue(ui, repo, state, opts):
+def unshelvecontinue(ui, repo, state: shelvedstate, opts) -> None:
     """subcommand to continue an in-progress unshelve"""
     # We're finishing off a merge. First parent is our original
     # parent, second is the temporary "fake" commit we're unshelving.
@@ -923,7 +955,7 @@ def unshelvecontinue(ui, repo, state, opts):
         ui.status(_(b"unshelve of '%s' complete\n") % state.name)
 
 
-def hgcontinueunshelve(ui, repo):
+def hgcontinueunshelve(ui, repo) -> None:
     """logic to resume unshelve using 'hg continue'"""
     with repo.wlock():
         state = _loadshelvedstate(ui, repo, {b'continue': True})
@@ -955,7 +987,7 @@ def _commitworkingcopychanges(ui, repo, opts, tmpwctx):
     return tmpwctx, addedbefore
 
 
-def _unshelverestorecommit(ui, repo, tr, basename):
+def _unshelverestorecommit(ui, repo, tr, basename: bytes):
     """Recreate commit in the repository during the unshelve"""
     repo = repo.unfiltered()
     node = None
@@ -976,7 +1008,9 @@ def _unshelverestorecommit(ui, repo, tr, basename):
     return repo, shelvectx
 
 
-def _createunshelvectx(ui, repo, shelvectx, basename, interactive, opts):
+def _createunshelvectx(
+    ui, repo, shelvectx, basename: bytes, interactive: bool, opts
+) -> Tuple[bytes, bool]:
     """Handles the creation of unshelve commit and updates the shelve if it
     was partially unshelved.
 
@@ -1018,7 +1052,7 @@ def _createunshelvectx(ui, repo, shelvectx, basename, interactive, opts):
         False,
         cmdutil.recordfilter,
         *pats,
-        **pycompat.strkwargs(opts)
+        **pycompat.strkwargs(opts),
     )
     snode = repo.commit(
         text=shelvectx.description(),
@@ -1038,7 +1072,7 @@ def _rebaserestoredcommit(
     opts,
     tr,
     oldtiprev,
-    basename,
+    basename: bytes,
     pctx,
     tmpwctx,
     shelvectx,
@@ -1109,7 +1143,7 @@ def _rebaserestoredcommit(
     return shelvectx, ispartialunshelve
 
 
-def _forgetunknownfiles(repo, shelvectx, addedbefore):
+def _forgetunknownfiles(repo, shelvectx, addedbefore) -> None:
     # Forget any files that were unknown before the shelve, unknown before
     # unshelve started, but are now added.
     shelveunknown = shelvectx.extra().get(b'shelve_unknown')
@@ -1121,17 +1155,15 @@ def _forgetunknownfiles(repo, shelvectx, addedbefore):
     repo[None].forget(toforget)
 
 
-def _finishunshelve(repo, oldtiprev, tr, activebookmark):
+def _finishunshelve(repo, oldtiprev, tr, activebookmark) -> None:
     _restoreactivebookmark(repo, activebookmark)
-    # The transaction aborting will strip all the commits for us,
-    # but it doesn't update the inmemory structures, so addchangegroup
-    # hooks still fire and try to operate on the missing commits.
-    # Clean up manually to prevent this.
-    repo.unfiltered().changelog.strip(oldtiprev, tr)
+    # We used to manually strip the commit to update inmemory structure and
+    # prevent some issue around hooks. This no longer seems to be the case, so
+    # we simply abort the transaction.
     _aborttransaction(repo, tr)
 
 
-def _checkunshelveuntrackedproblems(ui, repo, shelvectx):
+def _checkunshelveuntrackedproblems(ui, repo, shelvectx) -> None:
     """Check potential problems which may result from working
     copy having untracked changes."""
     wcdeleted = set(repo.status().deleted)
@@ -1143,7 +1175,7 @@ def _checkunshelveuntrackedproblems(ui, repo, shelvectx):
         raise error.Abort(m, hint=hint)
 
 
-def unshelvecmd(ui, repo, *shelved, **opts):
+def unshelvecmd(ui, repo, *shelved, **opts) -> None:
     opts = pycompat.byteskwargs(opts)
     abortf = opts.get(b'abort')
     continuef = opts.get(b'continue')
@@ -1180,6 +1212,11 @@ def unshelvecmd(ui, repo, *shelved, **opts):
             )
         elif continuef:
             return unshelvecontinue(ui, repo, state, opts)
+        else:
+            # Unreachable code, but help type checkers not think that
+            # 'basename' may be used before initialization when checking
+            # ShelfDir below.
+            raise error.ProgrammingError("neither abort nor continue specified")
     elif len(shelved) > 1:
         raise error.InputError(_(b'can only unshelve one change at a time'))
     elif not shelved:
@@ -1197,7 +1234,7 @@ def unshelvecmd(ui, repo, *shelved, **opts):
     return _dounshelve(ui, repo, basename, opts)
 
 
-def _dounshelve(ui, repo, basename, opts):
+def _dounshelve(ui, repo, basename: bytes, opts) -> None:
     repo = repo.unfiltered()
     lock = tr = None
     try:

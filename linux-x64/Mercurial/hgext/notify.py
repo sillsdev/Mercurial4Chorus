@@ -155,6 +155,8 @@ web.baseurl
 
 '''
 
+from __future__ import annotations
+
 import email.errors as emailerrors
 import email.utils as emailutils
 import fnmatch
@@ -416,7 +418,7 @@ class notifier:
             baseurl=self.ui.config(b'web', b'baseurl'),
             root=self.repo.root,
             webroot=self.root,
-            **props
+            **props,
         )
         return True
 
@@ -543,7 +545,6 @@ class notifier:
             )
 
     def diff(self, ctx, ref=None):
-
         maxdiff = int(self.ui.config(b'notify', b'maxdiff'))
         prev = ctx.p1().node()
         if ref:

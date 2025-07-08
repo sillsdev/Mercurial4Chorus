@@ -8,6 +8,7 @@
 # The original module was split in an interface and an implementation
 # file to defer pygments loading and speedup extension setup.
 
+from __future__ import annotations
 
 from mercurial import demandimport
 
@@ -43,7 +44,6 @@ SYNTAX_CSS = (
 
 
 def pygmentize(field, fctx, style, tmpl, guessfilenameonly=False):
-
     # append a <link ...> to the syntax highlighting css
     tmpl.load(b'header')
     old_header = tmpl.cache[b'header']

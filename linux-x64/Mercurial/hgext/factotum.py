@@ -45,10 +45,10 @@ service entry controls the service name used when reading keys.
 
 '''
 
+from __future__ import annotations
 
 import os
 from mercurial.i18n import _
-from mercurial.pycompat import setattr
 from mercurial.utils import procutil
 from mercurial import (
     error,
@@ -111,7 +111,7 @@ def auth_getuserpasswd(self, getkey, params):
                         else:
                             raise error.Abort(_(b'malformed password string'))
                     return (user, passwd)
-        except (OSError, IOError):
+        except OSError:
             raise error.Abort(_(b'factotum not responding'))
         finally:
             os.close(fd)

@@ -5,6 +5,8 @@
 # memorytop in strategic places to show the current memory use by allocation
 # site.
 
+from __future__ import annotations
+
 import gc
 import tracemalloc
 

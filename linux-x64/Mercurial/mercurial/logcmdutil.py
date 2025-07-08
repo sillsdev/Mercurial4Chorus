@@ -5,24 +5,43 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
 
 import itertools
 import os
 import posixpath
+import typing
+
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Optional,
+    Sequence,
+    Tuple,
+)
 
 from .i18n import _
-from .node import nullrev, wdirrev
+from .interfaces.types import (
+    MatcherT,
+)
+from .node import wdirrev
 
 from .thirdparty import attr
 
+# Force pytype to use the non-vendored package
+if typing.TYPE_CHECKING:
+    # noinspection PyPackageRequirements
+    import attr
+
 from . import (
     dagop,
+    diffutil,
     error,
     formatter,
     graphmod,
     match as matchmod,
     mdiff,
-    merge,
     patch,
     pathutil,
     pycompat,
@@ -40,20 +59,6 @@ from .utils import (
 )
 
 
-if pycompat.TYPE_CHECKING:
-    from typing import (
-        Any,
-        Callable,
-        Dict,
-        Optional,
-        Sequence,
-        Tuple,
-    )
-
-    for t in (Any, Callable, Dict, Optional, Tuple):
-        assert t
-
-
 def getlimit(opts):
     """get the log limit according to option -l/--limit"""
     limit = opts.get(b'limit')
@@ -69,36 +74,7 @@ def getlimit(opts):
     return limit
 
 
-def diff_parent(ctx):
-    """get the context object to use as parent when diffing
-
-
-    If diff.merge is enabled, an overlayworkingctx of the auto-merged parents will be returned.
-    """
-    repo = ctx.repo()
-    if repo.ui.configbool(b"diff", b"merge") and ctx.p2().rev() != nullrev:
-        # avoid cycle context -> subrepo -> cmdutil -> logcmdutil
-        from . import context
-
-        wctx = context.overlayworkingctx(repo)
-        wctx.setbase(ctx.p1())
-        with repo.ui.configoverride(
-            {
-                (
-                    b"ui",
-                    b"forcemerge",
-                ): b"internal:merge3-lie-about-conflicts",
-            },
-            b"merge-diff",
-        ):
-            with repo.ui.silent():
-                merge.merge(ctx.p2(), wc=wctx)
-        return wctx
-    else:
-        return ctx.p1()
-
-
-def diffordiffstat(
+def get_diff_chunks(
     ui,
     repo,
     diffopts,
@@ -107,14 +83,10 @@ def diffordiffstat(
     match,
     changes=None,
     stat=False,
-    fp=None,
-    graphwidth=0,
     prefix=b'',
     root=b'',
-    listsubrepos=False,
     hunksfilterfn=None,
 ):
-    '''show diff or diffstat.'''
     if root:
         relroot = pathutil.canonpath(repo.root, repo.getcwd(), root)
     else:
@@ -159,14 +131,11 @@ def diffordiffstat(
 
     if stat:
         diffopts = diffopts.copy(context=0, noprefix=False)
-        width = 80
-        if not ui.plain():
-            width = ui.termwidth() - graphwidth
         # If an explicit --root was given, don't respect ui.relative-paths
         if not relroot:
             pathfn = compose(scmutil.getuipathfn(repo), pathfn)
 
-    chunks = ctx2.diff(
+    return ctx2.diff(
         ctx1,
         match,
         changes,
@@ -175,6 +144,45 @@ def diffordiffstat(
         copysourcematch=copysourcematch,
         hunksfilterfn=hunksfilterfn,
     )
+
+
+def diffordiffstat(
+    ui,
+    repo,
+    diffopts,
+    ctx1,
+    ctx2,
+    match,
+    changes=None,
+    stat=False,
+    fp=None,
+    graphwidth=0,
+    prefix=b'',
+    root=b'',
+    listsubrepos=False,
+    hunksfilterfn=None,
+):
+    '''show diff or diffstat.'''
+
+    chunks = get_diff_chunks(
+        ui,
+        repo,
+        diffopts,
+        ctx1,
+        ctx2,
+        match,
+        changes=changes,
+        stat=stat,
+        prefix=prefix,
+        root=root,
+        hunksfilterfn=hunksfilterfn,
+    )
+
+    if stat:
+        diffopts = diffopts.copy(context=0, noprefix=False)
+        width = 80
+        if not ui.plain():
+            width = ui.termwidth() - graphwidth
 
     if fp is not None or ui.canwritewithoutlabels():
         out = fp or ui
@@ -241,13 +249,40 @@ class changesetdiffer:
             ui,
             ctx.repo(),
             diffopts,
-            diff_parent(ctx),
+            diffutil.diff_parent(ctx),
             ctx,
             match=self._makefilematcher(ctx),
             stat=stat,
             graphwidth=graphwidth,
             hunksfilterfn=self._makehunksfilter(ctx),
         )
+
+    def getdiffstats(self, ui, ctx, diffopts, stat=False):
+        chunks = get_diff_chunks(
+            ui,
+            ctx.repo(),
+            diffopts,
+            diffutil.diff_parent(ctx),
+            ctx,
+            match=self._makefilematcher(ctx),
+            stat=stat,
+            hunksfilterfn=self._makehunksfilter(ctx),
+        )
+
+        diffdata = []
+        for filename, additions, removals, binary in patch.diffstatdata(
+            util.iterlines(chunks)
+        ):
+            diffdata.append(
+                {
+                    b"name": filename,
+                    b"additions": additions,
+                    b"removals": removals,
+                    b"binary": binary,
+                }
+            )
+
+        return diffdata
 
 
 def changesetlabels(ctx):
@@ -525,9 +560,10 @@ class changesetformatter(changesetprinter):
             )
 
         if self._includestat or b'diffstat' in datahint:
-            self.ui.pushbuffer()
-            self._differ.showdiff(self.ui, ctx, self._diffopts, stat=True)
-            fm.data(diffstat=self.ui.popbuffer())
+            data = self._differ.getdiffstats(
+                self.ui, ctx, self._diffopts, stat=True
+            )
+            fm.data(diffstat=fm.formatlist(data, name=b'diffstat'))
         if self._includediff or b'diff' in datahint:
             self.ui.pushbuffer()
             self._differ.showdiff(self.ui, ctx, self._diffopts, stat=False)
@@ -542,6 +578,10 @@ class changesettemplater(changesetprinter):
     maketemplater, changesetdisplayer, buildcommittemplate, or other
     functions that use changesest_templater.
     """
+
+    _tresources: formatter.templateresources
+    lastheader: Optional[bytes]
+    t: templater.templater
 
     # Arguments before "buffered" used to be positional. Consider not
     # adding/removing arguments before "buffered" to not break callers.
@@ -596,7 +636,7 @@ class changesettemplater(changesetprinter):
             if not self.footer:
                 self.footer = b""
             self.footer += self.t.render(self._parts[b'docfooter'], {})
-        return super(changesettemplater, self).close()
+        return super().close()
 
     def _show(self, ctx, copies, props):
         '''show a single changeset or file revision'''
@@ -633,7 +673,7 @@ class changesettemplater(changesetprinter):
                 self.footer = self.t.render(self._parts[b'footer'], props)
 
 
-def templatespec(tmpl, mapfile):
+def templatespec(tmpl, mapfile) -> formatter.templatespec:
     assert not (tmpl and mapfile)
     if mapfile:
         return formatter.mapfile_templatespec(b'changeset', mapfile)
@@ -641,7 +681,7 @@ def templatespec(tmpl, mapfile):
         return formatter.literal_templatespec(tmpl)
 
 
-def _lookuptemplate(ui, tmpl, style):
+def _lookuptemplate(ui, tmpl, style) -> formatter.templatespec:
     """Find the template matching the given template spec or style
 
     See formatter.lookuptemplate() for details.
@@ -749,8 +789,11 @@ class walkopts:
     limit = attr.ib(default=None)
 
 
-def parseopts(ui, pats, opts):
-    # type: (Any, Sequence[bytes], Dict[bytes, Any]) -> walkopts
+def parseopts(
+    ui: Any,
+    pats: Sequence[bytes],
+    opts: Dict[bytes, Any],
+) -> walkopts:
     """Parse log command options into walkopts
 
     The returned walkopts will be passed in to getrevs() or makewalker().
@@ -1040,8 +1083,10 @@ def _initialrevs(repo, wopts):
     return revs
 
 
-def makewalker(repo, wopts):
-    # type: (Any, walkopts) -> Tuple[smartset.abstractsmartset, Optional[Callable[[Any], matchmod.basematcher]]]
+def makewalker(
+    repo: Any,
+    wopts: walkopts,
+) -> Tuple[smartset.abstractsmartset, Optional[Callable[[Any], MatcherT]]]:
     """Build (revs, makefilematcher) to scan revision/file history
 
     - revs is the smartset to be traversed.
@@ -1091,8 +1136,10 @@ def makewalker(repo, wopts):
     return revs, filematcher
 
 
-def getrevs(repo, wopts):
-    # type: (Any, walkopts) -> Tuple[smartset.abstractsmartset, Optional[changesetdiffer]]
+def getrevs(
+    repo: Any,
+    wopts: walkopts,
+) -> Tuple[smartset.abstractsmartset, Optional[changesetdiffer]]:
     """Return (revs, differ) where revs is a smartset
 
     differ is a changesetdiffer with pre-configured file matcher.
@@ -1176,8 +1223,7 @@ def getlinerangerevs(repo, userrevs, opts):
                     if any(mdiff.hunkinrange(hr[2:], lr) for lr in lineranges):
                         yield hr, lines
             else:
-                for hunk in hunks:
-                    yield hunk
+                yield from hunks
 
         return filterfn
 

@@ -34,6 +34,7 @@ Revisions context menu will now display additional entries to fire
 vdiff on hovered and selected revisions.
 '''
 
+from __future__ import annotations
 
 import os
 
@@ -151,23 +152,23 @@ def catcommit(ui, repo, n, prefix, ctx=None):
     if ctx is None:
         ctx = repo[n]
     # use ctx.node() instead ??
-    ui.write((b"tree %s\n" % short(ctx.changeset()[0])))
+    ui.writenoi18n(b"tree %s\n" % short(ctx.changeset()[0]))
     for p in ctx.parents():
-        ui.write((b"parent %s\n" % p))
+        ui.writenoi18n(b"parent %s\n" % p)
 
     date = ctx.date()
     description = ctx.description().replace(b"\0", b"")
-    ui.write((b"author %s %d %d\n" % (ctx.user(), int(date[0]), date[1])))
+    ui.writenoi18n(b"author %s %d %d\n" % (ctx.user(), int(date[0]), date[1]))
 
     if b'committer' in ctx.extra():
-        ui.write((b"committer %s\n" % ctx.extra()[b'committer']))
+        ui.writenoi18n(b"committer %s\n" % ctx.extra()[b'committer'])
 
-    ui.write((b"revision %d\n" % ctx.rev()))
-    ui.write((b"branch %s\n" % ctx.branch()))
+    ui.writenoi18n(b"revision %d\n" % ctx.rev())
+    ui.writenoi18n(b"branch %s\n" % ctx.branch())
     if obsolete.isenabled(repo, obsolete.createmarkersopt):
         if ctx.obsolete():
             ui.writenoi18n(b"obsolete\n")
-    ui.write((b"phase %s\n\n" % ctx.phasestr()))
+    ui.writenoi18n(b"phase %s\n\n" % ctx.phasestr())
 
     if prefix != b"":
         ui.write(

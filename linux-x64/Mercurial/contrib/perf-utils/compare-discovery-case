@@ -1,0 +1,226 @@
+#!/usr/bin/env python3
+# compare various algorithm variants for a given case
+#
+#  search-discovery-case REPO LOCAL_CASE REMOTE_CASE
+#
+# The description for the case input uses the same format as the ouput of
+# search-discovery-case
+
+import json
+import os
+import subprocess
+import sys
+
+this_script = os.path.abspath(sys.argv[0])
+script_name = os.path.basename(this_script)
+this_dir = os.path.dirname(this_script)
+hg_dir = os.path.join(this_dir, '..', '..')
+HG_REPO = os.path.normpath(hg_dir)
+HG_BIN = os.path.join(HG_REPO, 'hg')
+
+
+SUBSET_PATH = os.path.join(HG_REPO, 'contrib', 'perf-utils', 'subsetmaker.py')
+
+CMD_BASE = (
+    HG_BIN,
+    'debugdiscovery',
+    '--template',
+    'json',
+    '--config',
+    'extensions.subset=%s' % SUBSET_PATH,
+)
+
+# --old
+# --nonheads
+#
+# devel.discovery.exchange-heads=True
+# devel.discovery.grow-sample=True
+# devel.discovery.grow-sample.dynamic=True
+
+VARIANTS = {
+    'tree-discovery': ('--old',),
+    'set-discovery-basic': (
+        '--config',
+        'devel.discovery.exchange-heads=no',
+        '--config',
+        'devel.discovery.grow-sample=no',
+        '--config',
+        'devel.discovery.grow-sample.dynamic=no',
+        '--config',
+        'devel.discovery.randomize=yes',
+    ),
+    'set-discovery-heads': (
+        '--config',
+        'devel.discovery.exchange-heads=yes',
+        '--config',
+        'devel.discovery.grow-sample=no',
+        '--config',
+        'devel.discovery.grow-sample.dynamic=no',
+        '--config',
+        'devel.discovery.randomize=yes',
+    ),
+    'set-discovery-grow-sample': (
+        '--config',
+        'devel.discovery.exchange-heads=yes',
+        '--config',
+        'devel.discovery.grow-sample=yes',
+        '--config',
+        'devel.discovery.grow-sample.dynamic=no',
+        '--config',
+        'devel.discovery.randomize=yes',
+    ),
+    'set-discovery-dynamic-sample': (
+        '--config',
+        'devel.discovery.exchange-heads=yes',
+        '--config',
+        'devel.discovery.grow-sample=yes',
+        '--config',
+        'devel.discovery.grow-sample.dynamic=yes',
+        '--config',
+        'devel.discovery.randomize=yes',
+    ),
+    'set-discovery-default': (
+        '--config',
+        'devel.discovery.randomize=yes',
+    ),
+}
+
+VARIANTS_KEYS = [
+    'tree-discovery',
+    'set-discovery-basic',
+    'set-discovery-heads',
+    'set-discovery-grow-sample',
+    'set-discovery-dynamic-sample',
+    'set-discovery-default',
+]
+
+assert set(VARIANTS.keys()) == set(VARIANTS_KEYS)
+
+
+def parse_case(case):
+    case_type, case_args = case.split('-', 1)
+    if case_type == 'file':
+        case_args = (case_args,)
+    else:
+        case_args = tuple(int(x) for x in case_args.split('-'))
+    case = (case_type,) + case_args
+    return case
+
+
+def format_case(case):
+    return '-'.join(str(s) for s in case)
+
+
+def to_revsets(case):
+    t = case[0]
+    if t == 'scratch':
+        return 'not scratch(all(), %d, "%d")' % (case[1], case[2])
+    elif t == 'randomantichain':
+        return '::randomantichain(all(), "%d")' % case[1]
+    elif t == 'rev':
+        return '::%d' % case[1]
+    elif t == 'file':
+        return '::nodefromfile("%s")' % case[1]
+    else:
+        assert False
+
+
+def compare(
+    repo,
+    local_case,
+    remote_case,
+    display_header=True,
+    display_case=True,
+):
+    case = (repo, local_case, remote_case)
+    if display_header:
+        pieces = ['#']
+        if display_case:
+            pieces += [
+                "repo",
+                "local-subset",
+                "remote-subset",
+            ]
+
+        pieces += [
+            "discovery-variant",
+            "roundtrips",
+            "queries",
+            "revs",
+            "local-heads",
+            "common-heads",
+            "undecided-initial",
+            "undecided-common",
+            "undecided-missing",
+        ]
+        print(*pieces)
+    for variant in VARIANTS_KEYS:
+        res = process(case, VARIANTS[variant])
+        revs = res["nb-revs"]
+        local_heads = res["nb-head-local"]
+        common_heads = res["nb-common-heads"]
+        roundtrips = res["total-roundtrips"]
+        queries = res["total-queries"]
+        pieces = []
+        if display_case:
+            pieces += [
+                repo,
+                format_case(local_case),
+                format_case(remote_case),
+            ]
+        pieces += [
+            variant,
+            roundtrips,
+            queries,
+            revs,
+            local_heads,
+            common_heads,
+        ]
+        if 'tree-discovery' not in variant:
+            undecided_common = res["nb-ini_und-common"]
+            undecided_missing = res["nb-ini_und-missing"]
+            undecided = undecided_common + undecided_missing
+            pieces += [
+                undecided,
+                undecided_common,
+                undecided_missing,
+            ]
+        print(*pieces)
+    return 0
+
+
+def process(case, variant):
+    (repo, left, right) = case
+    cmd = list(CMD_BASE)
+    cmd.append('-R')
+    cmd.append(repo)
+    cmd.append('--local-as-revs')
+    cmd.append(to_revsets(left))
+    cmd.append('--remote-as-revs')
+    cmd.append(to_revsets(right))
+    cmd.extend(variant)
+    s = subprocess.Popen(cmd, stdout=subprocess.PIPE)
+    out, err = s.communicate()
+    return json.loads(out)[0]
+
+
+if __name__ == '__main__':
+    argv = sys.argv[:]
+
+    kwargs = {}
+    # primitive arg parsing
+    if '--no-header' in argv:
+        kwargs['display_header'] = False
+        argv = [a for a in argv if a != '--no-header']
+    if '--no-case' in argv:
+        kwargs['display_case'] = False
+        argv = [a for a in argv if a != '--no-case']
+
+    if len(argv) != 4:
+        usage = f'USAGE: {script_name} REPO LOCAL_CASE REMOTE_CASE'
+        print(usage, file=sys.stderr)
+        sys.exit(128)
+    repo = argv[1]
+    local_case = parse_case(argv[2])
+    remote_case = parse_case(argv[3])
+    sys.exit(compare(repo, local_case, remote_case, **kwargs))

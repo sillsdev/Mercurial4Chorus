@@ -5,6 +5,7 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
 
 import collections
 import contextlib
@@ -18,6 +19,7 @@ import socket
 import subprocess
 import sys
 import traceback
+import typing
 
 from typing import (
     Any,
@@ -36,10 +38,6 @@ from typing import (
 
 from .i18n import _
 from .node import hex
-from .pycompat import (
-    getattr,
-    open,
-)
 
 from . import (
     color,
@@ -47,14 +45,15 @@ from . import (
     configitems,
     encoding,
     error,
+    extensions,
     formatter,
     loggingutil,
     progress,
     pycompat,
-    rcutil,
     scmutil,
     util,
 )
+from .configuration import rcutil
 from .utils import (
     dateutil,
     procutil,
@@ -231,7 +230,7 @@ _reqexithandlers: List = []
 
 
 class ui:
-    def __init__(self, src: Optional["ui"] = None) -> None:
+    def __init__(self, src: Optional[ui] = None) -> None:
         """Create a fresh new ui object if no src given
 
         Use uimod.ui.load() to create a ui which knows global and user configs.
@@ -263,6 +262,8 @@ class ui:
         self.logblockedtimes = False
         # color mode: see mercurial/color.py for possible value
         self._colormode = None
+        # readline prompt: is this currently for a readline prompt?
+        self._readlineprompt = False
         self._terminfoparams = {}
         self._styles = {}
         self._uninterruptible = False
@@ -336,7 +337,7 @@ class ui:
         """Create a ui and load global and user configs"""
         u = cls()
         # we always trust global config files and environment variables
-        for t, f in rcutil.rccomponents():
+        for _lvl, t, f in rcutil.rccomponents():
             if t == b'path':
                 u.readconfig(f, trust=True)
             elif t == b'resource':
@@ -465,7 +466,7 @@ class ui:
     ) -> None:
         try:
             fp = resourceutil.open_resource(name[0], name[1])
-        except IOError:
+        except OSError:
             if not sections:  # ignore unless we were looking for something
                 return
             raise
@@ -479,7 +480,7 @@ class ui:
     ) -> None:
         try:
             fp = open(filename, 'rb')
-        except IOError:
+        except OSError:
             if not sections:  # ignore unless we were looking for something
                 return
             raise
@@ -658,6 +659,12 @@ class ui:
         value = itemdefault = default
         item = self._knownconfig.get(section, {}).get(name)
         alternates = [(section, name)]
+
+        if item is not None and item.in_core_extension is not None:
+            # Only return the default for an in-core extension item if said
+            # extension is enabled
+            if item.in_core_extension in extensions.extensions(self):
+                item = None
 
         if item is not None:
             alternates.extend(item.alias)
@@ -975,8 +982,7 @@ class ui:
     def walkconfig(self, untrusted=False, all_known=False):
         defined = self._walk_config(untrusted)
         if not all_known:
-            for d in defined:
-                yield d
+            yield from defined
             return
         known = self._walk_known()
         current_defined = next(defined, None)
@@ -1256,7 +1262,7 @@ class ui:
                     label = opts.get('label', b'')
                     msg = self.label(msg, label)
                 dest.write(msg)
-        except IOError as err:
+        except OSError as err:
             raise error.StdioError(err)
         finally:
             self._blockedtimes[b'stdio_blocked'] += (
@@ -1305,7 +1311,7 @@ class ui:
             # including stdout.
             if dest is self._ferr and not getattr(dest, 'closed', False):
                 dest.flush()
-        except IOError as err:
+        except OSError as err:
             if dest is self._ferr and err.errno in (
                 errno.EPIPE,
                 errno.EIO,
@@ -1345,13 +1351,13 @@ class ui:
         try:
             try:
                 self._fout.flush()
-            except IOError as err:
+            except OSError as err:
                 if err.errno not in (errno.EPIPE, errno.EIO, errno.EBADF):
                     raise error.StdioError(err)
             finally:
                 try:
                     self._ferr.flush()
-                except IOError as err:
+                except OSError as err:
                     if err.errno not in (errno.EPIPE, errno.EIO, errno.EBADF):
                         raise error.StdioError(err)
         finally:
@@ -1460,7 +1466,7 @@ class ui:
         self.flush()
 
         wasformatted = self.formatted()
-        if util.safehasattr(signal, b"SIGPIPE"):
+        if hasattr(signal, "SIGPIPE"):
             signal.signal(signal.SIGPIPE, _catchterm)
         if self._runpager(pagercmd, pagerenv):
             self.pageractive = True
@@ -1531,8 +1537,9 @@ class ui:
             raise
 
         # back up original file descriptors
-        stdoutfd = os.dup(procutil.stdout.fileno())
-        stderrfd = os.dup(procutil.stderr.fileno())
+        if pycompat.sysplatform != b'OpenVMS':
+            stdoutfd = os.dup(procutil.stdout.fileno())
+            stderrfd = os.dup(procutil.stderr.fileno())
 
         os.dup2(pager.stdin.fileno(), procutil.stdout.fileno())
         if self._isatty(procutil.stderr):
@@ -1540,9 +1547,11 @@ class ui:
 
         @self.atexit
         def killpager():
-            if util.safehasattr(signal, b"SIGINT"):
+            if hasattr(signal, "SIGINT"):
                 signal.signal(signal.SIGINT, signal.SIG_IGN)
             # restore original fds, closing pager.stdin copies in the process
+            if pycompat.sysplatform == b'OpenVMS':
+                pager.kill()
             os.dup2(stdoutfd, procutil.stdout.fileno())
             os.dup2(stderrfd, procutil.stderr.fileno())
             pager.stdin.close()
@@ -1734,7 +1743,12 @@ class ui:
             self.flush()
             prompt = b' '
         else:
-            prompt = self.label(prompt, b'ui.prompt') + b' '
+            wasreadlineprompt = self._readlineprompt
+            try:
+                self._readlineprompt = True
+                prompt = self.label(prompt, b'ui.prompt') + b' '
+            finally:
+                self._readlineprompt = wasreadlineprompt
 
         # prompt ' ' must exist; otherwise readline may delete entire line
         # - http://bugs.python.org/issue12833
@@ -1757,7 +1771,7 @@ class ui:
 
         return line
 
-    if pycompat.TYPE_CHECKING:
+    if typing.TYPE_CHECKING:
 
         @overload
         def prompt(self, msg: bytes, default: bytes) -> bytes:
@@ -1773,7 +1787,7 @@ class ui:
         """
         return self._prompt(msg, default=default)
 
-    if pycompat.TYPE_CHECKING:
+    if typing.TYPE_CHECKING:
 
         @overload
         def _prompt(
@@ -1999,8 +2013,7 @@ class ui:
                 blockedtag=b'editor',
             )
 
-            with open(name, 'rb') as f:
-                t = util.fromnativeeol(f.read())
+            t = util.fromnativeeol(util.readfile(name))
         finally:
             os.unlink(name)
 
@@ -2085,6 +2098,9 @@ class ui:
             # command. Proof: `vi -c ':unknown' -c ':qa'; echo $?` produces 1,
             # while s/vi/vim/ doesn't.
             editor = b'vim'
+        elif pycompat.iswindows:
+            # vi isn't installed by on Windows, while notepad.exe is.
+            editor = b'notepad.exe'
         else:
             editor = b'vi'
         return encoding.environ.get(b"HGEDITOR") or self.config(

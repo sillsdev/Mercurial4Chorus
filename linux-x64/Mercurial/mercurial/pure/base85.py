@@ -5,6 +5,7 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
 
 import struct
 
@@ -23,7 +24,7 @@ def _mkb85dec():
         _b85dec[c] = i
 
 
-def b85encode(text, pad=False):
+def b85encode(text: bytes, pad: bool = False) -> bytes:
     """encode text in base85 format"""
     l = len(text)
     r = l % 4
@@ -50,13 +51,15 @@ def b85encode(text, pad=False):
     return out[:olen]
 
 
-def b85decode(text):
+def b85decode(text: bytes) -> bytes:
     """decode base85-encoded text"""
     if not _b85dec:
         _mkb85dec()
 
     l = len(text)
     out = []
+    acc = 0
+
     for i in range(0, len(text), 5):
         chunk = text[i : i + 5]
         chunk = pycompat.bytestr(chunk)

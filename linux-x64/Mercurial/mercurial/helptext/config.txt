@@ -418,6 +418,12 @@ Supported arguments:
 If no suitable authentication entry is found, the user is prompted
 for credentials as usual if required by the remote.
 
+``censor``
+----------
+
+``policy``
+    :config-doc:`censor.policy`
+
 ``cmdserver``
 -------------
 
@@ -1438,6 +1444,12 @@ be ``$HG_HOOKTYPE=incoming`` and ``$HG_HOOKNAME=incoming.email``.
   parent is in ``$HG_PARENT2``. If the update succeeded, ``$HG_ERROR=0``. If the
   update failed (e.g. because conflicts were not resolved), ``$HG_ERROR=1``.
 
+``prelock``
+  run before the store lock is taken, mostly used for test and debug.
+
+``prewlock``
+  run before the working copy lock is taken, mostly used for test and debug.
+
 .. note::
 
    It is generally better to use standard hooks rather than the
@@ -1514,20 +1526,22 @@ The following options control default behavior for all hosts.
     This option requires Python 2.7.
 
 ``minimumprotocol``
-    Defines the minimum channel encryption protocol to use.
+    Defines the minimum channel encryption protocol to use in the client.
 
     By default, the highest version of TLS supported by both client and server
     is used.
 
-    Allowed values are: ``tls1.0``, ``tls1.1``, ``tls1.2``.
+    Allowed values are: ``tls1.0``, ``tls1.1``, ``tls1.2``, ``tls1.3``.
 
-    When running on an old Python version, only ``tls1.0`` is allowed since
-    old versions of Python only support up to TLS 1.0.
+    Depending on the version of Python being used, not all of these values may
+    be available.  See ``hg debuginstall`` for the values supported by the
+    current installation.
 
     When running a Python that supports modern TLS versions, the default is
-    ``tls1.1``. ``tls1.0`` can still be used to allow TLS 1.0. However, this
-    weakens security and should only be used as a feature of last resort if
-    a server does not support TLS 1.1+.
+    ``tls1.2``. ``tls1.0`` and ``tls1.1`` can still be used to allow TLS 1.0
+    or TLS 1.1 respectively, if supported by Python. However, this weakens
+    security and should only be used as a feature of last resort if a server
+    does not support TLS 1.2+.
 
 Options in the ``[hostsecurity]`` section can have the form
 ``hostname``:``setting``. This allows multiple settings to be defined on a
@@ -2034,6 +2048,9 @@ statistical text report generated from the profiling data.
       Use a statistical profiler, statprof. This profiler is most
       useful for profiling commands that run for longer than about 0.1
       seconds.
+    ``py-spy``
+      use the py-spy profiler. A external py-spy executable must be available.
+      (Make sure to check `profiling.output` config to write the result.)
 
 ``format``
     Profiling format.  Specific to the ``ls`` instrumenting profiler.
@@ -2308,6 +2325,12 @@ The pure Rust fast-path for Mercurial. See `rust/README.rst` in the Mercurial re
 Control the strategy Mercurial uses internally to store history. Options in this
 category impact performance and repository size.
 
+``all-slow-path``
+    :config-doc:`storage.all-slow-path`
+
+``revlog.dirstate-v2.slow-path``
+    :config-doc:`storage.dirstate-v2.slow-path`
+
 ``revlog.issue6528.fix-incoming``
     Version 5.8 of Mercurial had a bug leading to altering the parent of file
     revision with copy information (or any other metadata) on exchange. This
@@ -2338,6 +2361,17 @@ category impact performance and repository size.
         you do, consider talking with the mercurial developer community about your
         repositories.
 
+``revlog.mmap.index``
+    Whether to use the Operating System "memory mapping" feature (when
+    possible) to access the revlog index. This improves performance
+    and reduces memory pressure.
+
+.. container:: verbose
+
+    ``revlog.mmap.index:size-threshold``
+
+        The size of index above which to use the "memory mapping" feature.
+
 ``revlog.optimize-delta-parent-choice``
     When storing a merge revision, both parents will be equally considered as
     a possible delta base. This results in better delta selection and improved
@@ -2357,16 +2391,7 @@ category impact performance and repository size.
     :hg:`help config.format.use-persistent-nodemap`.
 
 ``revlog.persistent-nodemap.slow-path``
-    Control the behavior of Merucrial when using a repository with "persistent"
-    nodemap with an installation of Mercurial without a fast implementation for
-    the feature:
-
-    ``allow``: Silently use the slower implementation to access the repository.
-    ``warn``: Warn, but use the slower implementation to access the repository.
-    ``abort``: Prevent access to such repositories. (This is the default)
-
-    For details on the "persistent-nodemap" feature, see:
-    :hg:`help config.format.use-persistent-nodemap`.
+    :config-doc:`storage.revlog.persistent-nodemap.slow-path`
 
 ``revlog.reuse-external-delta-parent``
     Control the order in which delta parents are considered when adding new
@@ -2992,6 +3017,80 @@ User interface controls.
 
 ``verbose``
     Increase the amount of output printed. (default: False)
+
+
+``usage``
+---------
+
+``repository-role``
+    What this repository is used for.
+
+    This is used to adjust behavior and performance to best fit the repository purpose.
+
+    Currently recognised values are:
+
+    - ``default``: an all purpose repository
+
+``resources``
+    How aggressive Mercurial can be with resource usage:
+
+    Currently recognised values are:
+
+    - ``default``: the default value currently is equivalent to medium,
+
+    - ``high``: allows for higher cpu, memory and disk-space usage to improve
+      performance of some operations.
+
+    - ``medium``: aims at a moderate resource usage,
+
+    - ``low``: reduces resources usage when possible, decreasing overall
+      performance.
+
+    For finer configuration, see also `usage.resources.cpu`,
+    `usage.resources.disk` and `usage.resources.memory`.
+
+``resources.cpu``
+    How aggressive Mercurial can be in terms of cpu usage:
+
+    Currently recognised values are:
+
+    - ``default``: the default value, inherits the value from `usage.resources`,
+
+    - ``high``: allows for more aggressive cpu usage, improving storage quality
+      and the performance of some operations at the expense of machine load
+
+    - `medium`:  aims at a moderate cpu usage,
+
+    - `low`:  reduces cpu usage when possible, potentially at the expense of
+      slower operations, increased storage and exchange payload.
+
+``resources.disk``
+    How aggressive Mercurial can be in terms of disk usage:
+
+    Currently recognised values are::
+    - ``default``: the default value, inherits the value from `usage.resources`,
+
+    - ``high``: allows for more disk space usage where it can improve performance,
+
+    - ``medium``:  aims at a moderate disk usage,
+
+    - ``low``:  reduces disk usage when possible, decreasing performance in some
+      occasion.
+
+``resources.memory``
+    How aggressive Mercurial can be in terms of memory usage:
+
+    Currently recognised values are::
+
+    - ``default``: the default value, inherits the value from `usage.resources`,
+
+    - ``high``: allows for more aggressive memory usage to improve overall
+      performance,
+
+    - ``medium``:  aims at a moderate memory usage,
+
+    - ``low``: reduces memory usage when possible at the cost of overall
+      performance.
 
 
 ``command-templates``

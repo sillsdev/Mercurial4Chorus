@@ -6,12 +6,20 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
 
 # import wsgiref.validate
 
+import typing
+
 from ..thirdparty import attr
+
+# Force pytype to use the non-vendored package
+if typing.TYPE_CHECKING:
+    # noinspection PyPackageRequirements
+    import attr
+
 from .. import (
-    encoding,
     error,
     pycompat,
     util,
@@ -167,13 +175,7 @@ def parserequestfromenv(env, reponame=None, altbaseurl=None, bodyfh=None):
     def tobytes(s):
         if not isinstance(s, str):
             return s
-        if pycompat.iswindows:
-            # This is what mercurial.encoding does for os.environ on
-            # Windows.
-            return encoding.strtolocal(s)
-        else:
-            # This is what is documented to be used for os.environ on Unix.
-            return pycompat.fsencode(s)
+        return s.encode('iso8859-1')
 
     env = {tobytes(k): tobytes(v) for k, v in env.items()}
 

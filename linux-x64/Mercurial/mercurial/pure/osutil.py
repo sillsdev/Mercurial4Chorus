@@ -5,13 +5,13 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
 
 import ctypes
 import ctypes.util
 import os
 import stat as statmod
 
-from ..pycompat import getattr
 from .. import (
     encoding,
     pycompat,
@@ -119,7 +119,7 @@ else:
 
     def _raiseioerror(name):
         err = ctypes.WinError()  # pytype: disable=module-attr
-        raise IOError(
+        raise OSError(
             err.errno, '%s: %s' % (encoding.strfromlocal(name), err.strerror)
         )
 

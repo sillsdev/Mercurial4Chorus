@@ -1,0 +1,710 @@
+# Don't run pipelines on branch "merge", since we're fast-forward only.
+# Gitlab sees a new branch (since e.g. `topic/stable/my-topic` becomes
+# `branch/stable`), but the hash hasn't changed. There is no reason to
+# re-run the CI in our case, since we haven't built up any specific automation.
+# Right now it's just wasted CI and developer time.
+# One can still run the pipeline manually via the web interface,
+# like in the case of releases, to make *extra* sure that the actual branch
+# has succeeded.
+workflow:
+  rules:
+    - if: ($CI_COMMIT_BRANCH =~ /^branch\/.*/ || $CI_COMMIT_TAG) && $CI_PIPELINE_SOURCE !~ "/web|schedule/"
+      when: never
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      when: never
+    - if: $CI_PIPELINE_SOURCE == "push"
+      when: always
+    - if: $CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS
+      when: never
+    - if: $CI_COMMIT_BRANCH
+      when: always
+
+stages:
+  - nightly-trigger
+  - build
+  - checks
+  - tests
+  - platform-compat
+  - py-version-compat
+  - upload
+
+
+image: registry.heptapod.net/mercurial/ci-images/mercurial-core:$HG_CI_IMAGE_TAG
+
+variables:
+    # to debug use:
+    #
+    #   RE_BRANCH: '/^topic/.+/.+$/'
+    #   RE_TOPIC: '/^xxx/'
+    #
+    # Instead of the two following lines:
+    RE_BRANCH: '/^branch/.+$/'
+    RE_TOPIC: '/^topic/.+/.+$/'
+    PYTHON: python
+    HG_CI_IMAGE_TAG: "v2.1"
+    # a directory dedicated to creating files and temporary clone
+    # with shell runner, its content is not cleaned from one call to the next,
+    # so plan for it.
+    TMP_WORK_DIR: "${CI_PROJECT_DIR}/../.."
+
+.all:
+  # help changing all job at once when debugging
+  when: on_success
+  # make sure jobs from later steps does not wait for anything implicit before
+  # starting.
+  needs: []
+
+# dummy job that serve dependencies purpose
+.dummy:
+  # smallest I know of
+  image: busybox
+  variables:
+    GIT_STRATEGY: none
+    CI_CLEVER_CLOUD_FLAVOR: "XS"
+  script:
+    - echo 'nothing to see here'
+
+
+# a dummy job that only serve to trigger others
+#
+# This is useful for two reasons:
+# - the UX around parallel jobs is awful so manually starting them is unpractical
+# - manual starting job cannot make the pipeline "fails" and block a merge,
+#   while "on_success" job depending on manual trigger works fine in that regard.
+.trigger:
+  extends:
+    - .all
+    - .dummy
+  when: manual
+
+
+trigger-nightly-build:
+  extends: .trigger
+  stage: nightly-trigger
+  rules:
+    - if: ($CI_COMMIT_BRANCH =~ $RE_BRANCH || $CI_COMMIT_TAG)  && $CI_PIPELINE_SOURCE == "schedule"
+      when: always
+    - if: ($CI_COMMIT_BRANCH =~ $RE_BRANCH || $CI_COMMIT_TAG)
+      when: manual
+      allow_failure: true
+    - if: $CI_COMMIT_BRANCH =~ $RE_TOPIC
+      when: never
+
+.build-wheel:
+  extends: .all
+  image: "registry.heptapod.net/mercurial/ci-images/core-wheel-x86_64-c:v3.0"
+  stage: build
+  variables:
+    WHEEL_TYPE: ""
+    FLAVOR: ""
+    CI_CLEVER_CLOUD_FLAVOR: "XS"
+  script:
+    - PLATFORM=`/opt/python/cp313-cp313/bin/python -c 'import sys; print(sys.platform)'`
+    - echo $WHEEL_TYPE
+    - test -n "$WHEEL_TYPE"
+    - echo $FLAVOR
+    - mkdir -p wheels/$PLATFORM/$WHEEL_TYPE/$BUILD_PY_ID
+    - contrib/build-one-linux-wheel.sh $BUILD_PY_ID wheels/$PLATFORM/$WHEEL_TYPE/$BUILD_PY_ID $WHEEL_TYPE
+  artifacts:
+    paths:
+      - wheels/
+    expire_in: 1 week
+
+
+# build linux wheel for amd64
+build-c-wheel:
+  extends: .build-wheel
+  variables:
+    WHEEL_TYPE: "c"
+  parallel:
+    matrix:
+      - BUILD_PY_ID:
+          - cp311-cp311
+          - cp38-cp38
+          - cp39-cp39
+          - cp310-cp310
+          - cp312-cp312
+          - cp313-cp313
+
+build-rust-wheel:
+  image: "registry.heptapod.net:443/mercurial/ci-images/core-wheel-x86_64-rust:v3.0"
+  extends: build-c-wheel
+  variables:
+    WHEEL_TYPE: "rust"
+
+.wheel-trigger:
+  extends: .trigger
+  stage: build
+  rules:
+  - if: ($CI_COMMIT_BRANCH =~ $RE_BRANCH || $CI_COMMIT_TAG)
+    when: never
+  - if: $CI_COMMIT_BRANCH =~ $RE_TOPIC
+    when: manual
+    allow_failure: true
+
+.extra-c-wheel:
+  extends: build-c-wheel
+  rules:
+  - if: ($CI_COMMIT_BRANCH =~ $RE_BRANCH || $CI_COMMIT_TAG)
+    needs:
+      - trigger-nightly-build
+  - if: $CI_COMMIT_BRANCH =~ $RE_TOPIC
+    needs:
+      - "trigger-wheel-musl"
+
+trigger-wheel-musl:
+  extends: .wheel-trigger
+
+build-c-wheel-musl:
+  extends: .extra-c-wheel
+  image: "registry.heptapod.net/mercurial/ci-images/core-wheel-x86_64-musl-c:v3.0"
+
+trigger-wheel-i686:
+  extends: .wheel-trigger
+
+build-c-wheel-i686:
+  extends: .extra-c-wheel
+  image: "registry.heptapod.net/mercurial/ci-images/core-wheel-i686-c:v3.0"
+
+trigger-wheel-i686-musl:
+  extends: .wheel-trigger
+
+build-c-wheel-i686-musl:
+  extends: .extra-c-wheel
+  image: "registry.heptapod.net/mercurial/ci-images/core-wheel-i686-musl-c:v3.0"
+
+trigger-wheel-arm64:
+  extends: .wheel-trigger
+
+build-c-wheel-arm64:
+  extends: .extra-c-wheel
+  image: "registry.heptapod.net/mercurial/ci-images/core-wheel-arm64-c:v3.0"
+  tags:
+    - arm64
+
+trigger-wheel-arm64-musl:
+  extends: .wheel-trigger
+
+build-c-wheel-arm64-musl:
+  extends: .extra-c-wheel
+  image: "registry.heptapod.net/mercurial/ci-images/core-wheel-arm64-musl-c:v3.0"
+  tags:
+    - arm64
+
+.runtests:
+    extends: .all
+    stage: tests
+    variables:
+      SHOW_VERSION_OF: "$PYTHON"
+      TEST_HGTESTS_ALLOW_NETIO: "0"
+      FILTER: ""
+      FLAVOR: ""
+      RUNTEST_ARGS: ""
+    # The runner made a clone as root.
+    # We make a new clone owned by user used to run the step.
+    before_script:
+      - echo "python used, $PYTHON"
+      - for tool in $SHOW_VERSION_OF ; do echo '#' version of $tool; $tool --version; done
+      - rm -rf "${TMP_WORK_DIR}"/mercurial-ci/  # Clean slate if not using containers
+      - hg clone . "${TMP_WORK_DIR}"/mercurial-ci/ --noupdate --config phases.publish=no
+      - hg -R "${TMP_WORK_DIR}"/mercurial-ci/ update `hg log --rev '.' --template '{node}'`
+      - cd "${TMP_WORK_DIR}"/mercurial-ci/
+      - ls -1 tests/test-check-*.* tests/test-contrib-check-*.t > "${TMP_WORK_DIR}"/check-tests.txt
+    script:
+        - echo "$TEST_HGTESTS_ALLOW_NETIO"
+        - echo "$RUNTEST_ARGS"
+        - echo "$FILTER"
+        - echo "$FLAVOR"
+        - echo "$WHEEL_TYPE"
+        - PORT_START=`expr 19051 + 1009 '*' $CI_CONCURRENT_ID`
+        - PORT_ARG="--port $PORT_START"
+        - echo $PORT_ARG
+        - PLATFORM=`$PYTHON -c 'import sys; print(sys.platform)'`
+        - echo $PLATFORM
+        - WHEEL_ARG=""
+        - SHARDING_ARGS=""
+        - if test -n "$WHEEL_TYPE"; then
+             PY_TAG=`$PYTHON -c 'import sys; v=sys.version_info; t=f"cp{v.major}{v.minor}"; print(f"{t}-{t}")'`;
+             echo "$PY_TAG";
+             test -n "PY_TAG";
+             WHEEL="`ls -1 $CI_PROJECT_DIR/wheels/$PLATFORM/$WHEEL_TYPE/$PY_TAG/*.whl`";
+             test -n "$WHEEL";
+             echo installing from $WHEEL;
+             WHEEL_ARG="--hg-wheel $WHEEL";
+             if [[ -n "$FLAVOR"  ]] && [[ "$FLAVOR" != "--rust" ]]; then
+               echo disabling flavor '"'$FLAVOR'"' as this is currently incompatible with '"--hg-wheel"';
+               FLAVOR="";
+             fi
+          else
+            echo installing from source;
+          fi;
+        - if [ -n "$CI_NODE_INDEX" ]; then
+            echo "Running the test in multiple shard - [$CI_NODE_INDEX/$CI_NODE_TOTAL]";
+            SHARDING_ARGS="--shard-index $CI_NODE_INDEX --shard-total $CI_NODE_TOTAL";
+            echo "sharding... $SHARDING_ARGS";
+          fi
+        - echo HGTESTS_ALLOW_NETIO="$TEST_HGTESTS_ALLOW_NETIO" "$PYTHON" tests/run-tests.py
+            --color=always --tail-report $PORT_ARG $WHEEL_ARG $FLAVOR $SHARDING_ARGS $FILTER $RUNTEST_ARGS;
+        - HGTESTS_ALLOW_NETIO="$TEST_HGTESTS_ALLOW_NETIO"
+          "$PYTHON" tests/run-tests.py
+            --color=always
+            --tail-report
+            $PORT_ARG
+            $WHEEL_ARG
+            $FLAVOR
+            $SHARDING_ARGS
+            $FILTER
+            $RUNTEST_ARGS;
+
+checks:
+    extends: .runtests
+    stage: checks
+    variables:
+        SHOW_VERSION_OF: "$PYTHON black clang-format"
+        RUNTEST_ARGS: "--time"
+        FILTER: "--test-list ${TMP_WORK_DIR}/check-tests.txt"
+        CI_CLEVER_CLOUD_FLAVOR: S
+
+rust-cargo-test:
+    extends: .all
+    stage: checks
+    script:
+        - make rust-tests
+        - make cargo-clippy
+    variables:
+        CI_CLEVER_CLOUD_FLAVOR: S
+
+.runtests-no-check:
+  extends: .runtests
+  variables:
+      FILTER: "--blacklist ${TMP_WORK_DIR}/check-tests.txt"
+      TEST_HGTESTS_ALLOW_NETIO: "1"
+
+.test-c:
+    extends: .runtests-no-check
+    variables:
+        FLAVOR: "--no-rust"
+
+test-c:
+    extends: .test-c
+    needs:
+      - job: build-c-wheel
+        parallel:
+          matrix:
+            - BUILD_PY_ID: "cp311-cp311"
+    variables:
+        WHEEL_TYPE: "c"
+
+test-pure:
+    extends: .runtests-no-check
+    variables:
+        FLAVOR: "--pure"
+
+.test-rust:
+    extends: .runtests-no-check
+    variables:
+        HGWITHRUSTEXT: "cpython"
+        FLAVOR: "--rust"
+
+test-rust:
+    extends: .test-rust
+    variables:
+        HGWITHRUSTEXT: "cpython"
+        FLAVOR: "--rust"
+    needs:
+      - job: build-rust-wheel
+        parallel:
+          matrix:
+            - BUILD_PY_ID: "cp311-cp311"
+    variables:
+        WHEEL_TYPE: "rust"
+
+test-rhg:
+    extends: .runtests-no-check
+    variables:
+        HGWITHRUSTEXT: "cpython"
+        FLAVOR: "--rust --rhg"
+
+test-chg:
+    extends: .runtests-no-check
+    variables:
+        FLAVOR: "--chg"
+
+
+trigger-pycompat:
+  extends: .trigger
+  stage: py-version-compat
+  rules:
+  - if: ($CI_COMMIT_BRANCH =~ $RE_BRANCH || $CI_COMMIT_TAG)
+    when: on_success
+    needs:
+      - trigger-nightly-build
+  - if: $CI_COMMIT_BRANCH =~ $RE_TOPIC
+    when: manual
+    allow_failure: true
+
+.test-c-pycompat:
+    extends: .test-c
+    stage: py-version-compat
+    variables:
+        WHEEL_TYPE: "c"
+
+# note: we should probably get a full matrix for flavor × py-version, but this
+# is a simple start to be able to check if we break the lowest supported
+# version (and 3.12 have been giving us various troubles)
+test-3.8-c:
+    extends: .test-c-pycompat
+    variables:
+        PYTHON: python3.8
+    needs:
+      - job: trigger-pycompat
+      - job: build-c-wheel
+        parallel:
+          matrix:
+            - BUILD_PY_ID: "cp38-cp38"
+
+test-3.12-c:
+    extends: .test-c-pycompat
+    variables:
+        PYTHON: python3.12
+    needs:
+      - job: trigger-pycompat
+      - job: build-c-wheel
+        parallel:
+          matrix:
+            - BUILD_PY_ID: "cp312-cp312"
+
+test-3.12-rust:
+    extends: .test-rust
+    stage: py-version-compat
+    needs:
+      - trigger-pycompat
+    variables:
+        PYTHON: python3.12
+
+test-3.13-c:
+    extends: .test-c-pycompat
+    variables:
+        PYTHON: python3.13
+    needs:
+      - job: trigger-pycompat
+      - job: build-c-wheel
+        parallel:
+          matrix:
+            - BUILD_PY_ID: "cp313-cp313"
+
+test-3.13-rust:
+    extends: .test-rust
+    stage: py-version-compat
+    needs:
+      - trigger-pycompat
+    variables:
+        PYTHON: python3.13
+
+check-pytype:
+    extends: .test-rust
+    stage: checks
+    before_script:
+      - export PATH="/home/ci-runner/vendor/pyenv/pyenv-2.4.7-adf3c2bccf09cdb81febcfd15b186711a33ac7a8/shims:/home/ci-runner/vendor/pyenv/pyenv-2.4.7-adf3c2bccf09cdb81febcfd15b186711a33ac7a8/bin:$PATH"
+      - echo "PATH, $PATH"
+      - hg clone . "${TMP_WORK_DIR}"/mercurial-ci/ --noupdate --config phases.publish=no
+      - hg -R "${TMP_WORK_DIR}"/mercurial-ci/ update `hg log --rev '.' --template '{node}'`
+      - cd "${TMP_WORK_DIR}"/mercurial-ci/
+      - echo $HGWITHRUSTEXT
+      # We need to unset HGWITHRUSTEXT since editable install is broken with Rust
+      - unset HGWITHRUSTEXT
+      - make local PYTHON=$PYTHON
+      - ./contrib/setup-pytype.sh
+    script:
+      - echo "Entering script section"
+      - bash contrib/check-pytype.sh
+
+# `sh.exe --login` sets a couple of extra environment variables that are defined
+# in the MinGW shell, but switches CWD to /home/$username.  The previous value
+# is stored in OLDPWD.  Of the added variables, MSYSTEM is crucial to running
+# run-tests.py- it is needed to make run-tests.py generate a `python3` script
+# that satisfies the various shebang lines and delegates to `py -3`.
+
+.windows:
+    extends: .all
+    when: manual  # we don't have any Windows runners anymore at the moment
+    tags:
+      - windows
+    before_script:
+      - C:/hgdev/MinGW/msys/1.0/bin/sh.exe --login -c 'cd "$OLDPWD" && ls -1 tests/test-check-*.* > "${TMP_WORK_DIR}"/check-tests.txt'
+      # TODO: find/install cvs, bzr, perforce, gpg, sqlite3
+    variables:
+        PYTHON: C:/hgdev/venvs/python39-x64/Scripts/python.exe
+
+# a dummy job that only serve to trigger the wider windows build
+trigger-wheel-windows:
+  extends: .trigger
+  stage: build
+  rules:
+  - if: ($CI_COMMIT_BRANCH =~ $RE_BRANCH || $CI_COMMIT_TAG)
+    when: never
+  - if: $CI_COMMIT_BRANCH =~ $RE_TOPIC
+    when: manual
+    allow_failure: true
+
+build-c-wheel-windows:
+    extends: .windows
+    stage: build
+    # wait for someone to click on "trigger-wheel-windows"
+    when: on_success
+    needs:
+    rules:
+    - if: ($CI_COMMIT_BRANCH =~ $RE_BRANCH || $CI_COMMIT_TAG)
+      needs:
+        - trigger-nightly-build
+    - if: $CI_COMMIT_BRANCH =~ $RE_TOPIC
+      needs:
+        - "trigger-wheel-windows"
+    script:
+        - echo "Entering script section"
+        - echo "python used, $Env:PYTHON"
+        - Invoke-Expression "$Env:PYTHON -V"
+        - echo "$Env:RUNTEST_ARGS"
+        - echo "$Env:TMP"
+        - echo "$Env:TEMP"
+        - "C:/hgdev/venvs/python39-x64/Scripts/python.exe -m cibuildwheel --output-dir wheels/win32"
+    artifacts:
+      paths:
+        - wheels
+      expire_in: 1 week
+    parallel:
+      matrix:
+        # "cp39" is first as it unlock the tests
+        - CIBW_BUILD:
+          - "cp39-*"
+          - "cp38-*"
+          - "cp310-*"
+          - "cp311-*"
+          - "cp312-*"
+          - "cp313-*"
+          CIBW_ARCHS:
+          - "AMD64"
+          - "x86"
+        - CIBW_BUILD:
+          - "cp311-*"
+          - "cp312-*"
+          - "cp313-*"
+          CIBW_ARCHS:
+          - "ARM64"
+
+
+.windows-runtests:
+    extends: .windows
+    stage: platform-compat
+    # the UX for manual parallel jobs is quite awful, and the job que depends
+    # upon are manual anyway, so we can make this start automatically once the
+    # associated wheel is ready.
+    when: on_success
+    parallel: 20
+    script:
+        - echo "Entering script section"
+        - echo "python used, $Env:PYTHON"
+        - Invoke-Expression "$Env:PYTHON -V"
+        - echo "$Env:HGTESTS_ALLOW_NETIO"
+        - echo "$Env:WHEEL_ARG"
+        - echo "$Env:FLAVOR"
+        - echo "$Env:FILTER"
+        - echo "$Env:RUNTEST_ARGS"
+        - echo "$Env:TMP"
+        - echo "$Env:TEMP"
+        # This test is hanging the worker and not that important, so lets skip
+        # it for now
+        - C:/hgdev/MinGW/msys/1.0/bin/sh.exe -c 'cd "$OLDPWD" && echo tests/test-clonebundles-autogen.t > $TMP_WORK_DIR/windows-skip.txt'
+
+        - C:/hgdev/MinGW/msys/1.0/bin/sh.exe
+          --login -c 'cd "$OLDPWD"
+            && HGTESTS_ALLOW_NETIO="$TEST_HGTESTS_ALLOW_NETIO"
+               $PYTHON tests/run-tests.py
+               --color=always
+               --tail-report
+               $WHEEL_ARG
+               $FLAVOR
+               --port `expr 19051 + 1009 "*" $CI_CONCURRENT_ID`
+               --shard-index $CI_NODE_INDEX --shard-total $CI_NODE_TOTAL
+               $FILTER
+               $RUNTEST_ARGS;
+          '
+    variables:
+      WHEEL_ARG: ""
+      RUNTEST_ARGS: ""
+      FLAVOR: ""
+      FILTER: "--blacklist ${TMP_WORK_DIR}/check-tests.txt --blacklist ${TMP_WORK_DIR}/windows-skip.txt"
+
+windows:
+    extends: .windows-runtests
+    variables:
+        RUNTEST_ARGS: ""
+        WHEEL_ARG: "--hg-wheel wheels/win32/mercurial-*-cp39-cp39-win_amd64.whl"
+    needs:
+      - job: build-c-wheel-windows
+        parallel:
+          matrix:
+            - CIBW_BUILD: "cp39-*"
+              CIBW_ARCHS: "AMD64"
+
+windows-pyox:
+    extends: .windows-runtests
+    when: manual
+    variables:
+        RUNTEST_ARGS: ""
+        WHEEL_ARG: ""
+        FLAVOR: "--pyoxidized"
+
+macos:
+    extends: .test-c
+    stage: platform-compat
+    # run the test in multiple shard to help spread the load between concurrent
+    # MR as the macos runner is a shell runner there is not startup overhead
+    # for tests.
+    parallel: 10
+    tags:
+      - macos
+    variables:
+        WHEEL_TYPE: "c"
+    needs:
+      - build-c-wheel-macos
+
+# We could use CIBW_BUILD="cp310-*" to only build the Python 3.10 wheel for now as
+# this is the only one we need to test. However testing that build work on all
+# version is useful and match what we do with Linux.
+#
+# The weird directory structure match the one we use for Linux to deal with the
+# multiple jobs. (all this might be unnecessary)
+build-c-wheel-macos:
+    rules:
+    - if: ($CI_COMMIT_BRANCH =~ $RE_BRANCH || $CI_COMMIT_TAG)
+      needs:
+        - trigger-nightly-build
+    - if: $CI_COMMIT_BRANCH =~ $RE_TOPIC
+      when: manual  # avoid overloading the CI by default
+      allow_failure: true
+    stage: build
+    variables:
+        # TODO: drop this when CI system is updated to support arm64 builds
+        CIBW_ARCHS: "x86_64"
+    tags:
+      - macos
+    script:
+      - sh -c 'which "$PYTHON"'
+      - sh -c '"$PYTHON" -V'
+      - sh -c 'which cibuildwheel'
+      - PLATFORM=`$PYTHON -c 'import sys; print(sys.platform)'`
+      - rm -rf tmp-wheels
+      - cibuildwheel --output-dir tmp-wheels/
+      - for py_version in $(cibuildwheel --print-build-identifiers | egrep -o 'cp[0-9]+' | sort | uniq); do
+          py_version="${py_version}-${py_version}";
+          mkdir -p wheels/$PLATFORM/c/$py_version/;
+          mv tmp-wheels/*$py_version*.whl wheels/$PLATFORM/c/$py_version/;
+        done
+      - rm -rf tmp-wheels
+    artifacts:
+      paths:
+        - wheels
+      expire_in: 1 week
+
+
+.nightly_build_step:
+  extends: .all
+  stage: upload
+  rules:
+    - if: ($CI_COMMIT_BRANCH =~ $RE_BRANCH || $CI_COMMIT_TAG)
+      # note that at the time of writing this, this job depends on multiple
+      # manual one. So it will not run by default, but will automatically run
+      # if the manual jobs are triggered.
+      #
+      # Also beware that "on_success" will ignore failure of manual test we
+      # directly depends on. This currently relevant for the "test-3.x-c"
+      # tests.
+      when: on_success
+    - if: '$CI_COMMIT_BRANCH =~ $RE_TOPIC'
+      when: never
+
+# a dummy job that gather greatly parallel object into one.
+#
+# It exists because gitlab-ci has a "50 jobs" limit on "needs" entries.
+# (yes, this is sad)
+#
+.sink:
+  extends:
+    - .nightly_build_step
+    - .dummy
+
+test-result-linux:
+  extends: .sink
+  needs:
+    - test-c
+    - test-3.8-c
+    - test-3.12-c
+    - test-3.13-c
+
+test-result-macos:
+  extends: .sink
+  needs:
+    - macos
+
+test-result-windows:
+  extends: .sink
+  needs:
+    - windows
+
+wheel-result-linux:
+  extends: .sink
+  needs:
+    - build-c-wheel
+    - build-c-wheel-musl
+    - build-c-wheel-i686
+    - build-c-wheel-i686-musl
+    - build-c-wheel-arm64
+    - build-c-wheel-arm64-musl
+  artifacts:
+      paths:
+        - wheels
+      expire_in: 1 week
+
+wheel-result-windows:
+  extends: .sink
+  needs:
+    - build-c-wheel-windows
+  artifacts:
+      paths:
+        - wheels
+      expire_in: 1 week
+
+# Upload nightly build wheel on the heptapod registry on test success
+#
+# At the time this task is added, since the mac wheels are built on shell
+# runner, those nightly are not be considered fully secured.
+#
+# In addition, since any job can upload package, pretty much anyone with CI
+# access can upload anything pretending to be any version. To fix it we would
+# have to prevent the CI token to upload to the registry and have dedicated
+# credential accessible only from protected branches.
+upload-wheel-nightly:
+  extends: .nightly_build_step
+  image: "registry.heptapod.net/mercurial/ci-images/twine:v3.0"
+  # because we don't want to upload only half of a wheel
+  interruptible: false
+  needs:
+    - wheel-result-linux
+    - wheel-result-windows
+    - build-c-wheel-macos
+    - test-result-linux
+    - test-result-macos
+    - test-result-windows
+  # It would be nice to be able to restrict that a bit to protected branch only
+  variables:
+    TWINE_USERNAME: gitlab-ci-token
+    TWINE_PASSWORD: $CI_JOB_TOKEN
+  script:
+    - twine
+      upload
+      --verbose
+      --repository-url ${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/pypi
+      --skip-existing
+      wheels/*/*/*/*.whl
+      wheels/*/*.whl

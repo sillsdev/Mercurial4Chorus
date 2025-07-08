@@ -24,6 +24,7 @@ The threshold at which a file is considered a move can be set with the
 #
 # See http://markmail.org/thread/5pxnljesvufvom57 for context.
 
+from __future__ import annotations
 
 from mercurial.i18n import _
 from mercurial import (
@@ -56,9 +57,8 @@ def extsetup(ui):
 
 def mvcheck(orig, ui, repo, *pats, **opts):
     """Hook to check for moves at commit time"""
-    opts = pycompat.byteskwargs(opts)
     renames = None
-    disabled = opts.pop(b'no_automv', False)
+    disabled = opts.pop('no_automv', False)
     with repo.wlock():
         if not disabled:
             threshold = ui.configint(b'automv', b'similarity')
@@ -67,7 +67,9 @@ def mvcheck(orig, ui, repo, *pats, **opts):
                     _(b'automv.similarity must be between 0 and 100')
                 )
             if threshold > 0:
-                match = scmutil.match(repo[None], pats, opts)
+                match = scmutil.match(
+                    repo[None], pats, pycompat.byteskwargs(opts)
+                )
                 added, removed = _interestingfiles(repo, match)
                 uipathfn = scmutil.getuipathfn(repo, legacyrelativevalue=True)
                 renames = _findrenames(
@@ -82,7 +84,7 @@ def mvcheck(orig, ui, repo, *pats, **opts):
                 # current extension structure, and this is not worse than what
                 # happened before.
                 scmutil._markchanges(repo, (), (), renames)
-        return orig(ui, repo, *pats, **pycompat.strkwargs(opts))
+        return orig(ui, repo, *pats, **opts)
 
 
 def _interestingfiles(repo, matcher):

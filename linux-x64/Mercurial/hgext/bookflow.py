@@ -1,18 +1,20 @@
 """implements bookmark-based branching (EXPERIMENTAL)
 
- - Disables creation of new branches (config: enable_branches=False).
- - Requires an active bookmark on commit (config: require_bookmark=True).
- - Doesn't move the active bookmark on update, only on commit.
- - Requires '--rev' for moving an existing bookmark.
- - Protects special bookmarks (config: protect=@).
+- Disables creation of new branches (config: enable_branches=False).
+- Requires an active bookmark on commit (config: require_bookmark=True).
+- Doesn't move the active bookmark on update, only on commit.
+- Requires '--rev' for moving an existing bookmark.
+- Protects special bookmarks (config: protect=@).
 
- flow related commands
+flow related commands
 
     :hg book NAME: create a new bookmark
     :hg book NAME -r REV: move bookmark to revision (fast-forward)
     :hg up|co NAME: switch to bookmark
     :hg push -B .: push active bookmark
 """
+
+from __future__ import annotations
 
 from mercurial.i18n import _
 from mercurial import (
@@ -117,8 +119,8 @@ def cwd_at_bookmark(repo, mark):
 
 
 def uisetup(ui):
-    extensions.wrapfunction(bookmarks, b'update', bookmarks_update)
-    extensions.wrapfunction(bookmarks, b'addbookmarks', bookmarks_addbookmarks)
+    extensions.wrapfunction(bookmarks, 'update', bookmarks_update)
+    extensions.wrapfunction(bookmarks, 'addbookmarks', bookmarks_addbookmarks)
     extensions.wrapcommand(commands.table, b'commit', commands_commit)
     extensions.wrapcommand(commands.table, b'pull', commands_pull)
     if not ui.configbool(MY_NAME, b'enable-branches'):

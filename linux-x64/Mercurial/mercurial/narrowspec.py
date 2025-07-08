@@ -5,10 +5,11 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
+
 import weakref
 
 from .i18n import _
-from .pycompat import getattr
 from . import (
     error,
     match as matchmod,
@@ -67,10 +68,25 @@ def _validatepattern(pat):
     if _numlines(pat) > 1:
         raise error.Abort(_(b'newlines are not allowed in narrowspec paths'))
 
+    # patterns are stripped on load (see sparse.parseconfig),
+    # so a pattern ending in whitespace doesn't work correctly
+    if pat.strip() != pat:
+        raise error.Abort(
+            _(
+                b'leading or trailing whitespace is not allowed '
+                b'in narrowspec paths'
+            )
+        )
+
     components = pat.split(b'/')
     if b'.' in components or b'..' in components:
         raise error.Abort(
             _(b'"." and ".." are not allowed in narrowspec paths')
+        )
+
+    if pat != b'' and b'' in components:
+        raise error.Abort(
+            _(b'empty path components are not allowed in narrowspec paths')
         )
 
 
@@ -226,7 +242,6 @@ def copytoworkingcopy(repo):
         m = "changing narrow spec outside of a transaction"
         raise error.ProgrammingError(m)
     else:
-
         reporef = weakref.ref(repo)
 
         def clean_pending(tr):

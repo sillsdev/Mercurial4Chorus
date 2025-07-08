@@ -1,6 +1,23 @@
 Mercurial can be augmented with Rust extensions for speeding up certain
 operations.
 
+Word of Caution
+===============
+
+Using the Rust extension might result in the use of various repository formats
+that are not supported by non-Rust mercurial. When using a Mercurial
+without Rust support on the same repositories, you might need to downgrade your
+repository formats and/or activate cripplingly slow paths for compatibility.
+For details, see:
+
+    - :hg:`help config.format.use-persistent-nodemap`
+    - :hg:`help config.format.use-dirstate-v2`
+
+In addition, while the tests are run with the Rust code, there might be
+subtle undetected divergences from the historical non-Rust code. So keep
+your eyes open and report any oddity. Rust is not considered a first class
+citizen to the project yet.
+
 Compatibility
 =============
 
@@ -8,6 +25,9 @@ Though the Rust extensions are only tested by the project under Linux, users of
 MacOS, FreeBSD and other UNIX-likes have been using the Rust extensions. Your
 mileage may vary, but by all means do give us feedback or signal your interest
 for better support.
+
+For compatibility with non-Rust version of Mercurial check the previous "Word of
+Caution" section.
 
 No Rust extensions are available for Windows at this time.
 
@@ -47,15 +67,16 @@ version to use.
 Using pip
 ---------
 
-Users of `pip` can install the Rust extensions with the following command::
+Users of `pip` can install the Rust extensions with the following commands::
 
-  $ pip install mercurial --global-option --rust --no-use-pep517
+  $ pip cache remove mercurial
+  $ pip install mercurial -v \
+        --config-settings --global-option=--rust \
+        --no-binary mercurial --force
 
-`--no-use-pep517` is here to tell `pip` to preserve backwards compatibility with
-the legacy `setup.py` system. Mercurial has not yet migrated its complex setup
-to the new system, so we still need this to add compiled extensions.
-
-This might take a couple of minutes because you're compiling everything.
+`pip cache remove` and `--no-binary` are there to tell pip to not use the
+pre-compiled wheels that are missing rust support. This might take a couple
+of minutes because you're compiling everything.
 
 See the "Checking for Rust" section to see if the install succeeded.
 

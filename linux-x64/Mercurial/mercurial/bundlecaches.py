@@ -3,9 +3,15 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
+
 import collections
+import re
+import typing
 
 from typing import (
+    Dict,
+    Union,
     cast,
 )
 
@@ -13,22 +19,27 @@ from .i18n import _
 
 from .thirdparty import attr
 
+# Force pytype to use the non-vendored package
+if typing.TYPE_CHECKING:
+    # noinspection PyPackageRequirements
+    import attr
+
 from . import (
     error,
     requirements as requirementsmod,
     sslutil,
+    url as urlmod,
     util,
 )
 from .utils import stringutil
 
 urlreq = util.urlreq
 
-BUNDLE_CACHE_DIR = b'bundle-cache'
 CB_MANIFEST_FILE = b'clonebundles.manifest'
 CLONEBUNDLESCHEME = b"peer-bundle-cache://"
 
 
-def get_manifest(repo):
+def get_manifest(repo) -> bytes:
     """get the bundle manifest to be served to a client from a server"""
     raw_text = repo.vfs.tryread(CB_MANIFEST_FILE)
     entries = [e.split(b' ', 1) for e in raw_text.splitlines()]
@@ -44,7 +55,7 @@ def get_manifest(repo):
     return b''.join(new_lines)
 
 
-def alter_bundle_url(repo, url):
+def alter_bundle_url(repo, url: bytes) -> bytes:
     """a function that exist to help extension and hosting to alter the url
 
     This will typically be used to inject authentication information in the url
@@ -91,8 +102,12 @@ class bundlespec:
 
     def as_spec(self):
         parts = [b"%s-%s" % (self.compression, self.version)]
-        for param in sorted(self._explicit_params.items()):
-            parts.append(b'%s=%s' % param)
+        for param, raw_value in sorted(self._explicit_params.items()):
+            if isinstance(raw_value, bool):
+                value = b"yes" if raw_value else b"no"
+            else:
+                value = raw_value
+            parts.append(b'%s=%s' % (param, value))
         return b';'.join(parts)
 
 
@@ -106,7 +121,7 @@ _bundlespeccgversions = {
 }
 
 # Maps bundle version with content opts to choose which part to bundle
-_bundlespeccontentopts = {
+_bundlespeccontentopts: Dict[bytes, Dict[bytes, Union[bool, bytes]]] = {
     b'v1': {
         b'changegroup': True,
         b'cg.version': b'01',
@@ -136,7 +151,7 @@ _bundlespeccontentopts = {
         b'cg.version': b'02',
         b'obsolescence': False,
         b'phases': False,
-        b"streamv2": True,
+        b"stream": b"v2",
         b'tagsfnodescache': False,
         b'revbranchcache': False,
     },
@@ -145,7 +160,7 @@ _bundlespeccontentopts = {
         b'cg.version': b'03',
         b'obsolescence': False,
         b'phases': False,
-        b"streamv3-exp": True,
+        b"stream": b"v3-exp",
         b'tagsfnodescache': False,
         b'revbranchcache': False,
     },
@@ -157,8 +172,6 @@ _bundlespeccontentopts = {
     },
 }
 _bundlespeccontentopts[b'bundle2'] = _bundlespeccontentopts[b'v2']
-
-_bundlespecvariants = {b"streamv2": {}}
 
 # Compression engines allowed in version 1. THIS SHOULD NEVER CHANGE.
 _bundlespecv1compengines = {b'gzip', b'bzip2', b'none'}
@@ -179,6 +192,9 @@ bundle_spec_param_processing = {
     b"obsolescence": param_bool,
     b"obsolescence-mandatory": param_bool,
     b"phases": param_bool,
+    b"changegroup": param_bool,
+    b"tagsfnodescache": param_bool,
+    b"revbranchcache": param_bool,
 }
 
 
@@ -305,16 +321,23 @@ def parsebundlespec(repo, spec, strict=True):
             % compression
         )
 
-    # The specification for packed1 can optionally declare the data formats
+    # The specification for stream bundles can optionally declare the data formats
     # required to apply it. If we see this metadata, compare against what the
     # repo supports and error if the bundle isn't compatible.
-    if version == b'packed1' and b'requirements' in params:
+    if b'requirements' in params:
         requirements = set(cast(bytes, params[b'requirements']).split(b','))
-        missingreqs = requirements - requirementsmod.STREAM_FIXED_REQUIREMENTS
-        if missingreqs:
+        relevant_reqs = (
+            requirements - requirementsmod.STREAM_IGNORABLE_REQUIREMENTS
+        )
+        # avoid cycle (not great for pytype)
+        from . import localrepo
+
+        supported_req = localrepo.gathersupportedrequirements(repo.ui)
+        missing_reqs = relevant_reqs - supported_req
+        if missing_reqs:
             raise error.UnsupportedBundleSpecification(
                 _(b'missing support for repository features: %s')
-                % b', '.join(sorted(missingreqs))
+                % b', '.join(sorted(missing_reqs))
             )
 
     # Compute contentopts based on the version
@@ -388,14 +411,14 @@ def isstreamclonespec(bundlespec):
     if (
         bundlespec.wirecompression == b'UN'
         and bundlespec.wireversion == b'02'
-        and (
-            bundlespec.contentopts.get(b'streamv2')
-            or bundlespec.contentopts.get(b'streamv3-exp')
-        )
+        and bundlespec.contentopts.get(b'stream', None) in (b"v2", b"v3-exp")
     ):
         return True
 
     return False
+
+
+digest_regex = re.compile(b'^[a-z0-9]+:[0-9a-f]+(,[a-z0-9]+:[0-9a-f]+)*$')
 
 
 def filterclonebundleentries(
@@ -471,6 +494,43 @@ def filterclonebundleentries(
                     b'filtering %s as it needs more than 2/3 of system memory\n'
                     % url
                 )
+                continue
+
+        if b'DIGEST' in entry:
+            if not digest_regex.match(entry[b'DIGEST']):
+                repo.ui.debug(
+                    b'filtering %s due to a bad DIGEST attribute\n' % url
+                )
+                continue
+            supported = 0
+            seen = {}
+            for digest_entry in entry[b'DIGEST'].split(b','):
+                algo, digest = digest_entry.split(b':')
+                if algo not in seen:
+                    seen[algo] = digest
+                elif seen[algo] != digest:
+                    repo.ui.debug(
+                        b'filtering %s due to conflicting %s digests\n'
+                        % (url, algo)
+                    )
+                    supported = 0
+                    break
+                digester = urlmod.digesthandler.digest_algorithms.get(algo)
+                if digester is None:
+                    continue
+                if len(digest) != digester().digest_size * 2:
+                    repo.ui.debug(
+                        b'filtering %s due to a bad %s digest\n' % (url, algo)
+                    )
+                    supported = 0
+                    break
+                supported += 1
+            else:
+                if supported == 0:
+                    repo.ui.debug(
+                        b'filtering %s due to lack of supported digest\n' % url
+                    )
+            if supported == 0:
                 continue
 
         newentries.append(entry)

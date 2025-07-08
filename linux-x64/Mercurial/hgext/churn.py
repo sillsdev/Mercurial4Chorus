@@ -8,13 +8,13 @@
 
 '''command to display statistics about repository history'''
 
+from __future__ import annotations
 
 import datetime
 import os
 import time
 
 from mercurial.i18n import _
-from mercurial.pycompat import open
 from mercurial import (
     cmdutil,
     encoding,
@@ -52,18 +52,17 @@ def changedlines(ui, repo, ctx1, ctx2, fmatch):
 
 def countrate(ui, repo, amap, *pats, **opts):
     """Calculate stats"""
-    opts = pycompat.byteskwargs(opts)
-    if opts.get(b'dateformat'):
+    if opts.get('dateformat'):
 
         def getkey(ctx):
             t, tz = ctx.date()
             date = datetime.datetime(*time.gmtime(float(t) - tz)[:6])
             return encoding.strtolocal(
-                date.strftime(encoding.strfromlocal(opts[b'dateformat']))
+                date.strftime(encoding.strfromlocal(opts['dateformat']))
             )
 
     else:
-        tmpl = opts.get(b'oldtemplate') or opts.get(b'template')
+        tmpl = opts.get('oldtemplate') or opts.get('template')
         tmpl = logcmdutil.maketemplater(ui, repo, tmpl)
 
         def getkey(ctx):
@@ -80,7 +79,7 @@ def countrate(ui, repo, amap, *pats, **opts):
         rev = ctx.rev()
         key = getkey(ctx).strip()
         key = amap.get(key, key)  # alias remap
-        if opts.get(b'changesets'):
+        if opts.get('changesets'):
             rate[key] = (rate.get(key, (0,))[0] + 1, 0)
         else:
             parents = ctx.parents()
@@ -96,11 +95,11 @@ def countrate(ui, repo, amap, *pats, **opts):
 
     wopts = logcmdutil.walkopts(
         pats=pats,
-        opts=opts,
-        revspec=opts[b'rev'],
-        date=opts[b'date'],
-        include_pats=opts[b'include'],
-        exclude_pats=opts[b'exclude'],
+        opts=pycompat.byteskwargs(opts),
+        revspec=opts['rev'],
+        date=opts['date'],
+        include_pats=opts['include'],
+        exclude_pats=opts['exclude'],
     )
     revs, makefilematcher = logcmdutil.makewalker(repo, wopts)
     for ctx in scmutil.walkchangerevs(repo, revs, makefilematcher, prep):
@@ -207,15 +206,16 @@ def churn(ui, repo, *pats, **opts):
     if not aliases and os.path.exists(repo.wjoin(b'.hgchurn')):
         aliases = repo.wjoin(b'.hgchurn')
     if aliases:
-        for l in open(aliases, b"rb"):
-            try:
-                alias, actual = l.rsplit(b'=' in l and b'=' or None, 1)
-                amap[alias.strip()] = actual.strip()
-            except ValueError:
-                l = l.strip()
-                if l:
-                    ui.warn(_(b"skipping malformed alias: %s\n") % l)
-                continue
+        with open(aliases, "rb") as fp:
+            for l in fp:
+                try:
+                    alias, actual = l.rsplit(b'=' in l and b'=' or None, 1)
+                    amap[alias.strip()] = actual.strip()
+                except ValueError:
+                    l = l.strip()
+                    if l:
+                        ui.warn(_(b"skipping malformed alias: %s\n") % l)
+                    continue
 
     rate = list(countrate(ui, repo, amap, *pats, **opts).items())
     if not rate:

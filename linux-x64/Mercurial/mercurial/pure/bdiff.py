@@ -5,14 +5,21 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
 
 import difflib
 import re
 import struct
+import typing
 
 from typing import (
     List,
+    Optional,
     Tuple,
+)
+
+from ..interfaces import (
+    modules as intmod,
 )
 
 
@@ -106,3 +113,11 @@ def fixws(text: bytes, allws: bool) -> bytes:
         text = re.sub(b'[ \t\r]+', b' ', text)
         text = text.replace(b' \n', b'\n')
     return text
+
+
+# In order to adhere to the module protocol, these functions must be visible to
+# the type checker, though they aren't actually implemented by this
+# implementation of the module protocol.  Callers are responsible for
+# checking that the implementation is available before using them.
+if typing.TYPE_CHECKING:
+    xdiffblocks: Optional[intmod.BDiffBlocksFnc] = None

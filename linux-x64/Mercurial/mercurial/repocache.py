@@ -5,6 +5,7 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
 
 import collections
 import gc
@@ -119,7 +120,8 @@ def _warmupcache(repo):
     repo.obsstore.children
     for name in obsolete.cachefuncs:
         obsolete.getrevs(repo, name)
-    repo._phasecache.loadphaserevs(repo)
+    # ensure the phase cache is fully initialized
+    repo._phasecache.phase(repo, repo.changelog.tiprev())
 
 
 # TODO: think about proper API of attaching preloaded attributes
@@ -129,7 +131,7 @@ def copycache(srcrepo, destrepo):
     srcfilecache = srcrepo._filecache
     if b'changelog' in srcfilecache:
         destfilecache[b'changelog'] = ce = srcfilecache[b'changelog']
-        ce.obj.opener = ce.obj._realopener = destrepo.svfs
+        ce.obj.opener = ce.obj._inner.opener = destrepo.svfs
     if b'obsstore' in srcfilecache:
         destfilecache[b'obsstore'] = ce = srcfilecache[b'obsstore']
         ce.obj.svfs = destrepo.svfs

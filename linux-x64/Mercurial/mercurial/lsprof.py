@@ -1,14 +1,14 @@
+from __future__ import annotations
+
 import _lsprof
 import sys
-
-from .pycompat import getattr
 
 Profiler = _lsprof.Profiler
 
 # PyPy doesn't expose profiler_entry from the module.
 profiler_entry = getattr(_lsprof, 'profiler_entry', None)
 
-__all__ = [b'profile', b'Stats']
+__all__ = ['profile', 'Stats']
 
 
 def profile(f, *args, **kwds):

@@ -81,12 +81,19 @@ needed files, so running the external diff program will actually be
 pretty fast (at least faster than having to compare the entire tree).
 '''
 
+from __future__ import annotations
 
 import os
 import re
 import shutil
 import stat
 import subprocess
+import typing
+from typing import (
+    List,
+    Optional,
+    Tuple,
+)
 
 from mercurial.i18n import _
 from mercurial.node import (
@@ -110,6 +117,12 @@ from mercurial.utils import (
     procutil,
     stringutil,
 )
+
+if typing.TYPE_CHECKING:
+    from mercurial import (
+        localrepo,
+        ui as uimod,
+    )
 
 cmdtable = {}
 command = registrar.command(cmdtable)
@@ -150,7 +163,14 @@ configitem(
 testedwith = b'ships-with-hg-core'
 
 
-def snapshot(ui, repo, files, node, tmproot, listsubrepos):
+def snapshot(
+    ui: uimod.ui,
+    repo: localrepo.localrepository,
+    files,
+    node: Optional[bytes],
+    tmproot: bytes,
+    listsubrepos: bool,
+) -> Tuple[bytes, List[Tuple[bytes, bytes, os.stat_result]]]:
     """snapshot files as of some revision
     if not using snapshot, -I/-X does not work and recursive diff
     in tools like kdiff3 and meld displays too many files."""
@@ -405,7 +425,6 @@ def diffrevs(
     guitool,
     opts,
 ):
-
     subrepos = opts.get(b'subrepos')
 
     # calculate list of files changed between both revs
@@ -710,16 +729,24 @@ class savedcmd:
     to its parent.
     """
 
-    def __init__(self, path, cmdline, isgui):
+    def __init__(self, cmd, path, cmdline, isgui):
         # We can't pass non-ASCII through docstrings (and path is
         # in an unknown encoding anyway), but avoid double separators on
         # Windows
         docpath = stringutil.escapestr(path).replace(b'\\\\', b'\\')
         self.__doc__ %= {'path': pycompat.sysstr(stringutil.uirepr(docpath))}
+        self._name = cmd
         self._cmdline = cmdline
         self._isgui = isgui
 
     def __call__(self, ui, repo, *pats, **opts):
+        if self._isgui and not procutil.gui():
+            msg = _(b"tool '%s' requires a GUI") % self._name
+            hint = (
+                _(b"to override, use: --config diff-tools.%s.gui=False")
+                % self._name
+            )
+            raise error.Abort(msg, hint=hint)
         opts = pycompat.byteskwargs(opts)
         options = b' '.join(map(procutil.shellquote, opts[b'option']))
         if options:
@@ -779,9 +806,15 @@ def _gettooldetails(ui, cmd, path):
             args = ui.config(section, key)
             if args:
                 cmdline += b' ' + args
-                if isgui is None:
-                    isgui = ui.configbool(section, cmd + b'.gui') or False
                 break
+    if isgui is None:
+        key = cmd + b'.gui'
+        for section in (b'diff-tools', b'merge-tools'):
+            isgui = ui.configbool(section, key)
+            if isgui is not None:
+                break
+    if isgui is None:
+        isgui = False
     return cmd, path, cmdline, isgui
 
 
@@ -796,7 +829,7 @@ def uisetup(ui):
             _(b'hg %s [OPTION]... [FILE]...') % cmd,
             helpcategory=command.CATEGORY_FILE_CONTENTS,
             inferrepo=True,
-        )(savedcmd(path, cmdline, isgui))
+        )(savedcmd(cmd, path, cmdline, isgui))
 
 
 # tell hggettext to extract docstrings from these functions:

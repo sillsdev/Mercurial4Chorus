@@ -5,6 +5,8 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
+
 import collections
 import os
 import stat
@@ -12,7 +14,6 @@ import struct
 import tempfile
 
 from mercurial.i18n import _
-from mercurial.pycompat import open
 from mercurial.node import hex
 from mercurial import (
     error,
@@ -99,7 +100,7 @@ def sumdicts(*dicts):
 
     e.g. [{'a': 4', 'b': 2}, {'b': 3, 'c': 1}] -> {'a': 4, 'b': 5, 'c': 1}
     """
-    result = collections.defaultdict(lambda: 0)
+    result = collections.defaultdict(int)
     for dict in dicts:
         for k, v in dict.items():
             result[k] += v
@@ -320,18 +321,14 @@ def ancestormap(raw):
 
 
 def readfile(path):
-    f = open(path, b'rb')
-    try:
-        result = f.read()
+    result = util.readfile(path)
 
-        # we should never have empty files
-        if not result:
-            os.remove(path)
-            raise IOError(b"empty file: %s" % path)
+    # we should never have empty files
+    if not result:
+        os.remove(path)
+        raise OSError(b"empty file: %s" % path)
 
-        return result
-    finally:
-        f.close()
+    return result
 
 
 def unlinkfile(filepath):
@@ -477,7 +474,7 @@ def setstickygroupdir(path, gid, warn=None):
     try:
         os.chown(path, -1, gid)
         os.chmod(path, 0o2775)
-    except (IOError, OSError) as ex:
+    except OSError as ex:
         if warn:
             warn(_(b'unable to chown/chmod on %s: %s\n') % (path, ex))
 

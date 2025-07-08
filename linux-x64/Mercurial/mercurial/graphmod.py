@@ -17,9 +17,18 @@ context of the graph returned. Type is a constant specifying the node type.
 Data depends on type.
 """
 
+from __future__ import annotations
+
+import typing
 
 from .node import nullrev
 from .thirdparty import attr
+
+# Force pytype to use the non-vendored package
+if typing.TYPE_CHECKING:
+    # noinspection PyPackageRequirements
+    import attr
+
 from . import (
     dagop,
     smartset,
@@ -133,8 +142,7 @@ def colored(dag, repo):
     else:
         getconf = lambda rev: {}
 
-    for (cur, type, data, parents) in dag:
-
+    for cur, type, data, parents in dag:
         # Compute seen and next
         if cur not in seen:
             seen.append(cur)  # new head
@@ -244,7 +252,7 @@ def asciiedges(type, char, state, rev, parents):
 
 
 def _fixlongrightedges(edges):
-    for (i, (start, end)) in enumerate(edges):
+    for i, (start, end) in enumerate(edges):
         if end > start:
             edges[i] = (start, end + 1)
 
@@ -265,7 +273,7 @@ def _getnodelineedgestail(echars, idx, pidx, ncols, coldiff, pdiff, fix_tail):
 
 
 def _drawedges(echars, edges, nodeline, interline):
-    for (start, end) in edges:
+    for start, end in edges:
         if start == end + 1:
             interline[2 * end + 1] = b"/"
         elif start == end - 1:
@@ -381,7 +389,7 @@ def outputgraph(ui, graph):
     this function can be monkey-patched by extensions to alter graph display
     without needing to mimic all of the edge-fixup logic in ascii()
     """
-    for (ln, logstr) in graph:
+    for ln, logstr in graph:
         ui.write((ln + logstr).rstrip() + b"\n")
 
 

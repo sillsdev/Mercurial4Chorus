@@ -5,17 +5,13 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
 
 import collections
 import contextlib
 import os
 
 from mercurial.i18n import _
-from mercurial.pycompat import (
-    getattr,
-    open,
-    setattr,
-)
 from mercurial.node import (
     bin,
     hex,
@@ -39,6 +35,7 @@ from . import (
     error as faerror,
     revmap as revmapmod,
 )
+
 
 # given path, get filelog, cached
 @util.lrucachefunc
@@ -151,7 +148,10 @@ def encodedir(path):
 
 def hashdiffopts(diffopts):
     diffoptstr = stringutil.pprint(
-        sorted((k, getattr(diffopts, k)) for k in mdiff.diffopts.defaults)
+        sorted(
+            (k, getattr(diffopts, pycompat.sysstr(k)))
+            for k in mdiff.diffopts.defaults
+        )
     )
     return hex(hashutil.sha1(diffoptstr).digest())[:6]
 
@@ -167,18 +167,21 @@ class annotateopts:
     """
 
     defaults = {
-        b'diffopts': None,
-        b'followrename': True,
-        b'followmerge': True,
+        'diffopts': None,
+        'followrename': True,
+        'followmerge': True,
     }
 
+    diffopts: mdiff.diffopts
+    followrename: bool
+    followmerge: bool
+
     def __init__(self, **opts):
-        opts = pycompat.byteskwargs(opts)
         for k, v in self.defaults.items():
             setattr(self, k, opts.get(k, v))
 
     @util.propertycache
-    def shortstr(self):
+    def shortstr(self) -> bytes:
         """represent opts in a short string, suitable for a directory name"""
         result = b''
         if not self.followrename:
@@ -216,7 +219,7 @@ class _annotatecontext:
     def linelog(self):
         if self._linelog is None:
             if os.path.exists(self.linelogpath):
-                with open(self.linelogpath, b'rb') as f:
+                with open(self.linelogpath, 'rb') as f:
                     try:
                         self._linelog = linelogmod.linelog.fromdata(f.read())
                     except linelogmod.LineLogError:
@@ -236,7 +239,7 @@ class _annotatecontext:
             self._revmap.flush()
             self._revmap = None
         if self._linelog is not None:
-            with open(self.linelogpath, b'wb') as f:
+            with open(self.linelogpath, 'wb') as f:
                 f.write(self._linelog.encode())
             self._linelog = None
 
@@ -322,7 +325,7 @@ class _annotatecontext:
                     b'(resolved fctx: %s)\n'
                     % (
                         self.path,
-                        stringutil.pprint(util.safehasattr(revfctx, b'node')),
+                        stringutil.pprint(hasattr(revfctx, 'node')),
                     )
                 )
             return self.annotatedirectly(revfctx, showpath, showlines)

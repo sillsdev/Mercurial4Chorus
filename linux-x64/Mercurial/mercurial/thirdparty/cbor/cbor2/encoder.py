@@ -300,7 +300,7 @@ canonical_encoders = OrderedDict([
 ])
 
 
-class CBOREncoder(object):
+class CBOREncoder:
     """
     Serializes objects to a byte stream using Concise Binary Object Representation.
 

@@ -14,10 +14,11 @@ Transplanted patches are recorded in .hg/transplant/transplants, as a
 map from a changeset hash to its hash in the source repository.
 '''
 
+from __future__ import annotations
+
 import os
 
 from mercurial.i18n import _
-from mercurial.pycompat import open
 from mercurial.node import (
     bin,
     hex,
@@ -294,12 +295,12 @@ class transplanter:
         self.ui.status(_(b'filtering %s\n') % patchfile)
         user, date, msg = (changelog[1], changelog[2], changelog[4])
         fd, headerfile = pycompat.mkstemp(prefix=b'hg-transplant-')
-        fp = os.fdopen(fd, 'wb')
-        fp.write(b"# HG changeset patch\n")
-        fp.write(b"# User %s\n" % user)
-        fp.write(b"# Date %d %d\n" % date)
-        fp.write(msg + b'\n')
-        fp.close()
+
+        with os.fdopen(fd, 'wb') as fp:
+            fp.write(b"# HG changeset patch\n")
+            fp.write(b"# User %s\n" % user)
+            fp.write(b"# Date %d %d\n" % date)
+            fp.write(msg + b'\n')
 
         try:
             self.ui.system(
@@ -317,7 +318,9 @@ class transplanter:
                 errprefix=_(b'filter failed'),
                 blockedtag=b'transplant_filter',
             )
-            user, date, msg = self.parselog(open(headerfile, b'rb'))[1:4]
+
+            with open(headerfile, 'rb') as fp:
+                user, date, msg = self.parselog(fp)[1:4]
         finally:
             os.unlink(headerfile)
 

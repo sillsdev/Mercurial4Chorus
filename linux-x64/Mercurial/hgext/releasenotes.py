@@ -11,12 +11,12 @@ The :hg:`releasenotes` command provided by this extension makes the
 process simpler by automating it.
 """
 
+from __future__ import annotations
 
 import difflib
 import re
 
 from mercurial.i18n import _
-from mercurial.pycompat import open
 from mercurial.node import hex
 from mercurial import (
     cmdutil,
@@ -24,7 +24,6 @@ from mercurial import (
     error,
     logcmdutil,
     minirst,
-    pycompat,
     registrar,
     util,
 )
@@ -665,17 +664,16 @@ def releasenotes(ui, repo, file_=None, **opts):
     admonitions (if any).
     """
 
-    opts = pycompat.byteskwargs(opts)
     sections = releasenotessections(ui, repo)
 
-    cmdutil.check_incompatible_arguments(opts, b'list', [b'rev', b'check'])
+    cmdutil.check_incompatible_arguments(opts, 'list', ['rev', 'check'])
 
-    if opts.get(b'list'):
+    if opts.get('list'):
         return _getadmonitionlist(ui, sections)
 
-    rev = opts.get(b'rev')
+    rev = opts.get('rev')
     revs = logcmdutil.revrange(repo, [rev or b'not public()'])
-    if opts.get(b'check'):
+    if opts.get('check'):
         return checkadmonitions(ui, repo, sections.names(), revs)
 
     incoming = parsenotesfromrevisions(repo, sections.names(), revs)
@@ -685,15 +683,13 @@ def releasenotes(ui, repo, file_=None, **opts):
         return ui.write(serializenotes(sections, incoming))
 
     try:
-        with open(file_, b'rb') as fh:
-            notes = parsereleasenotesfile(sections, fh.read())
+        notes = parsereleasenotesfile(sections, util.readfile(file_))
     except FileNotFoundError:
         notes = parsedreleasenotes()
 
     notes.merge(ui, incoming)
 
-    with open(file_, b'wb') as fh:
-        fh.write(serializenotes(sections, notes))
+    util.writefile(file_, serializenotes(sections, notes))
 
 
 @command(b'debugparsereleasenotes', norepo=True)
@@ -702,8 +698,7 @@ def debugparsereleasenotes(ui, path, repo=None):
     if path == b'-':
         text = procutil.stdin.read()
     else:
-        with open(path, b'rb') as fh:
-            text = fh.read()
+        text = util.readfile(path)
 
     sections = releasenotessections(ui, repo)
 

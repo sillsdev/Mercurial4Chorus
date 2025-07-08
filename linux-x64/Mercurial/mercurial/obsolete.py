@@ -68,12 +68,13 @@ comment associated with each format for details.
 
 """
 
+from __future__ import annotations
+
 import binascii
 import struct
 import weakref
 
 from .i18n import _
-from .pycompat import getattr
 from .node import (
     bin,
     hex,
@@ -772,10 +773,11 @@ class obsstore:
             _addchildren(self.children, markers)
         _checkinvalidmarkers(self.repo, markers)
 
-    def relevantmarkers(self, nodes):
-        """return a set of all obsolescence markers relevant to a set of nodes.
+    def relevantmarkers(self, nodes=None, revs=None):
+        """return a set of all obsolescence markers relevant to a set of
+        nodes or revisions.
 
-        "relevant" to a set of nodes mean:
+        "relevant" to a set of nodes or revisions mean:
 
         - marker that use this changeset as successor
         - prune marker of direct children on this changeset
@@ -783,13 +785,33 @@ class obsstore:
           markers
 
         It is a set so you cannot rely on order."""
+        if nodes is None:
+            nodes = set()
+        if revs is None:
+            revs = set()
 
-        pendingnodes = set(nodes)
-        seenmarkers = set()
-        seennodes = set(pendingnodes)
+        tonode = self.repo.unfiltered().changelog.node
+        pendingnodes = set()
         precursorsmarkers = self.predecessors
         succsmarkers = self.successors
         children = self.children
+        for node in nodes:
+            if (
+                node in precursorsmarkers
+                or node in succsmarkers
+                or node in children
+            ):
+                pendingnodes.add(node)
+        for rev in revs:
+            node = tonode(rev)
+            if (
+                node in precursorsmarkers
+                or node in succsmarkers
+                or node in children
+            ):
+                pendingnodes.add(node)
+        seenmarkers = set()
+        seennodes = pendingnodes.copy()
         while pendingnodes:
             direct = set()
             for current in pendingnodes:
@@ -819,7 +841,7 @@ def makestore(ui, repo):
     store = obsstore(repo, repo.svfs, readonly=readonly, **kwargs)
     if store and readonly:
         ui.warn(
-            _(b'obsolete feature not enabled but %i markers found!\n')
+            _(b'"obsolete" feature not enabled but %i markers found!\n')
             % len(list(store))
         )
     return store
@@ -940,7 +962,7 @@ def clearobscaches(repo):
 
 def _mutablerevs(repo):
     """the set of mutable revision in the repository"""
-    return repo._phasecache.getrevset(repo, phases.mutablephases)
+    return repo._phasecache.getrevset(repo, phases.relevant_mutable_phases)
 
 
 @cachefor(b'obsolete')
@@ -994,7 +1016,8 @@ def _computephasedivergentset(repo):
     torev = cl.index.get_rev
     tonode = cl.node
     obsstore = repo.obsstore
-    for rev in repo.revs(b'(not public()) and (not obsolete())'):
+    candidates = sorted(_mutablerevs(repo) - getrevs(repo, b"obsolete"))
+    for rev in candidates:
         # We only evaluate mutable, non-obsolete revision
         node = tonode(rev)
         # (future) A cache of predecessors may worth if split is very common
@@ -1016,7 +1039,8 @@ def _computecontentdivergentset(repo):
     obsstore = repo.obsstore
     newermap = {}
     tonode = repo.changelog.node
-    for rev in repo.revs(b'(not public()) - obsolete()'):
+    candidates = sorted(_mutablerevs(repo) - getrevs(repo, b"obsolete"))
+    for rev in candidates:
         node = tonode(rev)
         mark = obsstore.predecessors.get(node, ())
         toprocess = set(mark)
@@ -1029,7 +1053,9 @@ def _computecontentdivergentset(repo):
             if prec not in newermap:
                 obsutil.successorssets(repo, prec, cache=newermap)
             newer = [n for n in newermap[prec] if n]
-            if len(newer) > 1:
+            # Strickly speaking, the len(newer) is not needed, but it speeds
+            # things up.
+            if len(newer) > 1 and any(n for n in newer if node not in n):
                 divergent.add(rev)
                 break
             toprocess.update(obsstore.predecessors.get(prec, ()))
@@ -1037,7 +1063,6 @@ def _computecontentdivergentset(repo):
 
 
 def makefoldid(relation, user):
-
     folddigest = hashutil.sha1(user)
     for p in relation[0] + relation[1]:
         folddigest.update(b'%d' % p.rev())

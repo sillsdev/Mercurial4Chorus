@@ -5,6 +5,7 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
 
 import errno
 import os
@@ -39,7 +40,7 @@ class state:
     def get(self):
         try:
             file = self._vfs(b'fsmonitor.state', b'rb')
-        except IOError as inst:
+        except OSError as inst:
             self._identity = util.filestat(None)
             if inst.errno != errno.ENOENT:
                 raise
@@ -121,7 +122,7 @@ class state:
             file = self._vfs(
                 b'fsmonitor.state', b'wb', atomictemp=True, checkambig=True
             )
-        except (IOError, OSError):
+        except OSError:
             self._ui.warn(_(b"warning: unable to write out fsmonitor state\n"))
             return
 

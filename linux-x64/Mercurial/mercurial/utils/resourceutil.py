@@ -7,12 +7,22 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
 
-import _imp
 import os
 import sys
+import typing
+
+from typing import Iterator
 
 from .. import pycompat
+
+
+if typing.TYPE_CHECKING:
+    from typing import (
+        BinaryIO,
+        Iterator,
+    )
 
 
 def mainfrozen():
@@ -22,9 +32,14 @@ def mainfrozen():
     (portable, not much used).
     """
     return (
-        pycompat.safehasattr(sys, "frozen")  # new py2exe
-        or pycompat.safehasattr(sys, "importers")  # old py2exe
-        or _imp.is_frozen("__main__")  # tools/freeze
+        hasattr(sys, "frozen")  # new py2exe
+        or hasattr(sys, "importers")  # old py2exe
+        or getattr(
+            getattr(sys.modules.get('__main__'), '__spec__', None),
+            'origin',
+            None,
+        )
+        == 'frozen'  # tools/freeze
     )
 
 
@@ -39,17 +54,16 @@ if mainfrozen() and getattr(sys, "frozen", None) != "macosx_app":
     # leading "mercurial." off of the package name, so that these
     # pseudo resources are found in their directory next to the
     # executable.
-    def _package_path(package):
+    def _package_path(package: bytes) -> bytes:
         dirs = package.split(b".")
         assert dirs[0] == b"mercurial"
         return os.path.join(_rootpath, *dirs[1:])
-
 
 else:
     datapath = os.path.dirname(os.path.dirname(pycompat.fsencode(__file__)))
     _rootpath = os.path.dirname(datapath)
 
-    def _package_path(package):
+    def _package_path(package: bytes) -> bytes:
         return os.path.join(_rootpath, *package.split(b"."))
 
 
@@ -59,7 +73,7 @@ try:
     from importlib import resources  # pytype: disable=import-error
 
     # Force loading of the resources module
-    if pycompat.safehasattr(resources, 'files'):
+    if hasattr(resources, 'files'):  # Introduced in Python 3.9
         resources.files  # pytype: disable=module-attr
     else:
         resources.open_binary  # pytype: disable=module-attr
@@ -72,30 +86,29 @@ except (ImportError, AttributeError):
     # importlib.resources was not found (almost definitely because we're on a
     # Python version before 3.7)
 
-    def open_resource(package, name):
+    def open_resource(package: bytes, name: bytes) -> BinaryIO:
         path = os.path.join(_package_path(package), name)
         return open(path, "rb")
 
-    def is_resource(package, name):
+    def is_resource(package: bytes, name: bytes) -> bool:
         path = os.path.join(_package_path(package), name)
 
         try:
             return os.path.isfile(pycompat.fsdecode(path))
-        except (IOError, OSError):
+        except OSError:
             return False
 
-    def contents(package):
+    def contents(package: bytes) -> Iterator[bytes]:
         path = pycompat.fsdecode(_package_path(package))
 
         for p in os.listdir(path):
             yield pycompat.fsencode(p)
 
-
 else:
     from .. import encoding
 
-    def open_resource(package, name):
-        if pycompat.safehasattr(resources, 'files'):
+    def open_resource(package: bytes, name: bytes) -> BinaryIO:
+        if hasattr(resources, 'files'):
             return (
                 resources.files(  # pytype: disable=module-attr
                     pycompat.sysstr(package)
@@ -108,13 +121,25 @@ else:
                 pycompat.sysstr(package), pycompat.sysstr(name)
             )
 
-    def is_resource(package, name):
-        return resources.is_resource(  # pytype: disable=module-attr
-            pycompat.sysstr(package), encoding.strfromlocal(name)
-        )
+    def is_resource(package: bytes, name: bytes) -> bool:
+        if hasattr(resources, 'files'):  # Introduced in Python 3.9
+            return (
+                resources.files(pycompat.sysstr(package))
+                .joinpath(encoding.strfromlocal(name))
+                .is_file()
+            )
+        else:
+            return resources.is_resource(  # pytype: disable=module-attr
+                pycompat.sysstr(package), encoding.strfromlocal(name)
+            )
 
-    def contents(package):
-        # pytype: disable=module-attr
-        for r in resources.contents(pycompat.sysstr(package)):
-            # pytype: enable=module-attr
-            yield encoding.strtolocal(r)
+    def contents(package: bytes) -> Iterator[bytes]:
+        if hasattr(resources, 'files'):  # Introduced in Python 3.9
+            for path in resources.files(pycompat.sysstr(package)).iterdir():
+                if path.is_file():
+                    yield encoding.strtolocal(path.name)
+        else:
+            # pytype: disable=module-attr
+            for r in resources.contents(pycompat.sysstr(package)):
+                # pytype: enable=module-attr
+                yield encoding.strtolocal(r)

@@ -5,6 +5,7 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
 
 import re
 
@@ -21,7 +22,6 @@ from . import (
     obsutil,
     revset,
     scmutil,
-    util,
 )
 
 
@@ -77,7 +77,7 @@ def precheck(repo, revs, action=b'rewrite', check_divergence=True):
         hint = _(b"no changeset checked out")
         raise error.InputError(msg, hint=hint)
 
-    if any(util.safehasattr(r, 'rev') for r in revs):
+    if any(hasattr(r, 'rev') for r in revs):
         repo.ui.develwarn(b"rewriteutil.precheck called with ctx not revs")
         revs = (r.rev() for r in revs)
 

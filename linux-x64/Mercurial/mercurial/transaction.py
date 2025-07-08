@@ -11,16 +11,34 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
+
 import errno
 import os
 
+from typing import (
+    Callable,
+    Collection,
+    List,
+    Optional,
+    Union,
+)
+
 from .i18n import _
+from .interfaces.types import (
+    CallbackCategoryT,
+    HgPathT,
+    TransactionT,
+    VfsKeyT,
+)
 from . import (
+    encoding,
     error,
     pycompat,
     util,
 )
 from .utils import stringutil
+from .interfaces import transaction as itxn
 
 version = 2
 
@@ -56,6 +74,11 @@ UNDO_FILES_MAY_NEED_CLEANUP = [
     # the process is interrupted.
     (b'store', b'%s'),
 ]
+
+
+def has_abandoned_transaction(repo):
+    """Return True if the repo has an abandoned transaction"""
+    return os.path.exists(repo.sjoin(b"journal"))
 
 
 def cleanup_undo_files(report, vfsmap, undo_prefix=b'undo'):
@@ -118,7 +141,7 @@ def _playback(
         try:
             util.copyfile(backuppath, filepath, checkambig=checkambig)
             backupfiles.append((vfs, b))
-        except IOError as exc:
+        except OSError as exc:
             e_msg = stringutil.forcebytestr(exc)
             report(_(b"failed to recover %s (%s)\n") % (f, e_msg))
             raise
@@ -161,7 +184,7 @@ def _playback(
                     )
                 fp.truncate(o)
                 fp.close()
-            except IOError:
+            except OSError:
                 report(_(b"failed to truncate %s\n") % f)
                 raise
         else:
@@ -198,7 +221,7 @@ def _playback(
                     # in both case, our target result (delete the file) is
                     # already achieved.
                     pass
-        except (IOError, OSError, error.Abort):
+        except (OSError, error.Abort):
             if not c:
                 raise
 
@@ -211,12 +234,12 @@ def _playback(
         for vfs, f in backupfiles:
             if vfs.exists(f):
                 vfs.unlink(f)
-    except (IOError, OSError, error.Abort):
+    except (OSError, error.Abort):
         # only pure backup file remains, it is sage to ignore any error
         pass
 
 
-class transaction(util.transactional):
+class transaction(util.transactional, itxn.ITransaction):
     def __init__(
         self,
         report,
@@ -229,7 +252,7 @@ class transaction(util.transactional):
         validator=None,
         releasefn=None,
         checkambigfiles=None,
-        name='<unnamed>',
+        name=b'<unnamed>',
     ):
         """Begin a new transaction
 
@@ -318,7 +341,7 @@ class transaction(util.transactional):
     def __repr__(self):
         name = b'/'.join(self._names)
         return '<transaction name=%s, count=%d, usages=%d>' % (
-            name,
+            encoding.strfromlocal(name),
             self._count,
             self._usages,
         )
@@ -328,11 +351,11 @@ class transaction(util.transactional):
             self._abort()
 
     @property
-    def finalized(self):
+    def finalized(self) -> bool:
         return self._finalizecallback is None
 
     @active
-    def startgroup(self):
+    def startgroup(self) -> None:
         """delay registration of file entry
 
         This is used by strip to delay vision of strip offset. The transaction
@@ -340,7 +363,7 @@ class transaction(util.transactional):
         self._queue.append([])
 
     @active
-    def endgroup(self):
+    def endgroup(self) -> None:
         """apply delayed registration of file entry.
 
         This is used by strip to delay vision of strip offset. The transaction
@@ -350,7 +373,7 @@ class transaction(util.transactional):
             self._addentry(f, o)
 
     @active
-    def add(self, file, offset):
+    def add(self, file: HgPathT, offset: int) -> None:
         """record the state of an append-only file before update"""
         if (
             file in self._newfiles
@@ -383,7 +406,13 @@ class transaction(util.transactional):
         self._file.flush()
 
     @active
-    def addbackup(self, file, hardlink=True, location=b'', for_offset=False):
+    def addbackup(
+        self,
+        file: HgPathT,
+        hardlink: bool = True,
+        location: VfsKeyT = b'',
+        for_offset: Union[bool, int] = False,
+    ) -> None:
         """Adds a backup of the file to the transaction
 
         Calling addbackup() creates a hardlink backup of the specified file
@@ -437,7 +466,7 @@ class transaction(util.transactional):
         self._backupsfile.flush()
 
     @active
-    def registertmp(self, tmpfile, location=b''):
+    def registertmp(self, tmpfile: HgPathT, location: VfsKeyT = b'') -> None:
         """register a temporary transaction file
 
         Such files will be deleted when the transaction exits (on both
@@ -449,13 +478,13 @@ class transaction(util.transactional):
     @active
     def addfilegenerator(
         self,
-        genid,
-        filenames,
-        genfunc,
-        order=0,
-        location=b'',
-        post_finalize=False,
-    ):
+        genid: bytes,
+        filenames: Collection[HgPathT],
+        genfunc: Callable,
+        order: int = 0,
+        location: VfsKeyT = b'',
+        post_finalize: bool = False,
+    ) -> None:
         """add a function to generates some files at transaction commit
 
         The `genfunc` argument is a function capable of generating proper
@@ -487,7 +516,7 @@ class transaction(util.transactional):
         self._filegenerators[genid] = entry
 
     @active
-    def removefilegenerator(self, genid):
+    def removefilegenerator(self, genid: bytes) -> None:
         """reverse of addfilegenerator, remove a file generator function"""
         if genid in self._filegenerators:
             del self._filegenerators[genid]
@@ -537,13 +566,13 @@ class transaction(util.transactional):
         return any
 
     @active
-    def findoffset(self, file):
+    def findoffset(self, file: HgPathT) -> Optional[int]:
         if file in self._newfiles:
             return 0
         return self._offsetmap.get(file)
 
     @active
-    def readjournal(self):
+    def readjournal(self) -> List[itxn.JournalEntryT]:
         self._file.seek(0)
         entries = []
         for l in self._file.readlines():
@@ -552,7 +581,7 @@ class transaction(util.transactional):
         return entries
 
     @active
-    def replace(self, file, offset):
+    def replace(self, file: HgPathT, offset: int) -> None:
         """
         replace can only replace already committed entries
         that are not pending in the queue
@@ -574,13 +603,13 @@ class transaction(util.transactional):
         self._file.flush()
 
     @active
-    def nest(self, name='<unnamed>'):
+    def nest(self, name: bytes = b'<unnamed>') -> TransactionT:
         self._count += 1
         self._usages += 1
         self._names.append(name)
         return self
 
-    def release(self):
+    def release(self) -> None:
         if self._count > 0:
             self._usages -= 1
         if self._names:
@@ -589,10 +618,14 @@ class transaction(util.transactional):
         if self._count > 0 and self._usages == 0:
             self._abort()
 
-    def running(self):
+    def running(self) -> bool:
         return self._count > 0
 
-    def addpending(self, category, callback):
+    def addpending(
+        self,
+        category: CallbackCategoryT,
+        callback: Callable[[TransactionT], None],
+    ) -> None:
         """add a callback to be called when the transaction is pending
 
         The transaction will be given as callback's first argument.
@@ -603,7 +636,7 @@ class transaction(util.transactional):
         self._pendingcallback[category] = callback
 
     @active
-    def writepending(self):
+    def writepending(self) -> bool:
         """write pending file to temporary version
 
         This is used to allow hooks to view a transaction before commit"""
@@ -616,12 +649,16 @@ class transaction(util.transactional):
         return self._anypending
 
     @active
-    def hasfinalize(self, category):
+    def hasfinalize(self, category: CallbackCategoryT) -> bool:
         """check is a callback already exist for a category"""
         return category in self._finalizecallback
 
     @active
-    def addfinalize(self, category, callback):
+    def addfinalize(
+        self,
+        category: CallbackCategoryT,
+        callback: Callable[[TransactionT], None],
+    ) -> None:
         """add a callback to be called when the transaction is closed
 
         The transaction will be given as callback's first argument.
@@ -632,7 +669,11 @@ class transaction(util.transactional):
         self._finalizecallback[category] = callback
 
     @active
-    def addpostclose(self, category, callback):
+    def addpostclose(
+        self,
+        category: CallbackCategoryT,
+        callback: Callable[[TransactionT], None],
+    ) -> None:
         """add or replace a callback to be called after the transaction closed
 
         The transaction will be given as callback's first argument.
@@ -643,12 +684,19 @@ class transaction(util.transactional):
         self._postclosecallback[category] = callback
 
     @active
-    def getpostclose(self, category):
+    def getpostclose(
+        self,
+        category: CallbackCategoryT,
+    ) -> Optional[Callable[[TransactionT], None]]:
         """return a postclose callback added before, or None"""
         return self._postclosecallback.get(category, None)
 
     @active
-    def addabort(self, category, callback):
+    def addabort(
+        self,
+        category: CallbackCategoryT,
+        callback: Callable[[TransactionT], None],
+    ) -> None:
         """add a callback to be called when the transaction is aborted.
 
         The transaction will be given as the first argument to the callback.
@@ -659,7 +707,11 @@ class transaction(util.transactional):
         self._abortcallback[category] = callback
 
     @active
-    def addvalidator(self, category, callback):
+    def addvalidator(
+        self,
+        category: CallbackCategoryT,
+        callback: Callable[[TransactionT], None],
+    ) -> None:
         """adds a callback to be called when validating the transaction.
 
         The transaction will be given as the first argument to the callback.
@@ -668,7 +720,7 @@ class transaction(util.transactional):
         self._validatecallback[category] = callback
 
     @active
-    def close(self):
+    def close(self) -> None:
         '''commit the transaction'''
         if self._count == 1:
             for category in sorted(self._validatecallback):
@@ -701,7 +753,7 @@ class transaction(util.transactional):
             if not f and b and vfs.exists(b):
                 try:
                     vfs.unlink(b)
-                except (IOError, OSError, error.Abort) as inst:
+                except (OSError, error.Abort) as inst:
                     if not c:
                         raise
                     # Abort may be raise by read only opener
@@ -729,7 +781,7 @@ class transaction(util.transactional):
             if b and vfs.exists(b):
                 try:
                     vfs.unlink(b)
-                except (IOError, OSError, error.Abort) as inst:
+                except (OSError, error.Abort) as inst:
                     if not c:
                         raise
                     # Abort may be raise by read only opener
@@ -750,14 +802,14 @@ class transaction(util.transactional):
         self._postclosecallback = None
 
     @active
-    def abort(self):
+    def abort(self) -> None:
         """abort the transaction (generally called on error, or when the
         transaction is not explicitly committed before going out of
         scope)"""
         self._abort()
 
     @active
-    def add_journal(self, vfs_id, path):
+    def add_journal(self, vfs_id: VfsKeyT, path: HgPathT) -> None:
         self._journal_files.append((vfs_id, path))
 
     def _writeundo(self):
@@ -867,7 +919,7 @@ class transaction(util.transactional):
                 self._vfsmap,
                 entries,
                 self._backupentries,
-                False,
+                unlink=True,
                 checkambigfiles=self._checkambigfiles,
             )
             self._report(_(b"rollback completed\n"))

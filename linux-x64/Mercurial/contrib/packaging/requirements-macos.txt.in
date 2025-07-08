@@ -1,0 +1,22 @@
+# Declare macOS-specific requirements for generating
+# the compiled (frozen) set of requirements in
+# ./requirements-macos.txt.
+# If run on Windows, it may be necessary to run dos2unix
+# on the output file to replace any CRLF newlines with LF.
+
+# TODO: dulwich, pygit2, and pytest-vcr are flagged as being
+#  incompatible with in-memory resources.  Maybe there's a
+#  way to bundle just them externally.
+
+docutils
+#dulwich
+
+# Needed by the release note tooling
+fuzzywuzzy
+
+keyring
+#pygit2
+pygments
+
+# Needed by the phabricator tests
+#pytest-vcr

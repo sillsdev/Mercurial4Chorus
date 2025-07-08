@@ -91,6 +91,7 @@ See :hg:`help patterns` for more information about the glob patterns
 used.
 """
 
+from __future__ import annotations
 
 import os
 import re
@@ -100,6 +101,7 @@ from mercurial import (
     error as errormod,
     extensions,
     match,
+    merge,
     pycompat,
     registrar,
     scmutil,
@@ -277,7 +279,7 @@ def parseeol(ui, repo, nodes):
                 else:
                     data = repo[node][b'.hgeol'].data()
                 return eolfile(ui, repo.root, data)
-            except (IOError, LookupError):
+            except (OSError, LookupError):
                 pass
     except errormod.ConfigError as inst:
         ui.warn(
@@ -375,6 +377,7 @@ def extsetup(ui):
 
 def reposetup(ui, repo):
     uisetup(repo.ui)
+    merge.MAYBE_USE_RUST_UPDATE = False
 
     if not repo.local():
         return
@@ -474,7 +477,7 @@ def reposetup(ui, repo):
                     raise errormod.Abort(
                         _(b"inconsistent newline style in %s\n") % f
                     )
-            return super(eolrepo, self).commitctx(ctx, error, origctx)
+            return super().commitctx(ctx, error, origctx)
 
     repo.__class__ = eolrepo
     repo._hgcleardirstate()

@@ -5,6 +5,7 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
 
 import gc
 import os
@@ -16,7 +17,6 @@ import struct
 import traceback
 
 from .i18n import _
-from .pycompat import getattr
 from . import (
     encoding,
     error,
@@ -332,7 +332,7 @@ class server:
             # any kind of interaction must use server channels, but chg may
             # replace channels by fully functional tty files. so nontty is
             # enforced only if cin is a channel.
-            if not util.safehasattr(self.cin, 'fileno'):
+            if not hasattr(self.cin, 'fileno'):
                 ui.setconfig(b'ui', b'nontty', b'true', b'commandserver')
 
         req = dispatch.request(
@@ -384,7 +384,7 @@ class server:
         if self.cmsg:
             hellomsg += b'message-encoding: %s\n' % self.cmsg.encoding
         hellomsg += b'pid: %d' % procutil.getpid()
-        if util.safehasattr(os, 'getpgid'):
+        if hasattr(os, 'getpgid'):
             hellomsg += b'\n'
             hellomsg += b'pgid: %d' % os.getpgid(0)
 
@@ -559,7 +559,7 @@ class unixforkingservice:
         self.ui = ui
         self.repo = repo
         self.address = opts[b'address']
-        if not util.safehasattr(socket, 'AF_UNIX'):
+        if not hasattr(socket, 'AF_UNIX'):
             raise error.Abort(_(b'unsupported platform'))
         if not self.address:
             raise error.Abort(_(b'no socket path specified with --address'))
@@ -588,7 +588,7 @@ class unixforkingservice:
         o = socket.socketpair(socket.AF_UNIX, socket.SOCK_DGRAM)
         self._mainipc, self._workeripc = o
         self._servicehandler.bindsocket(self._sock, self.address)
-        if util.safehasattr(procutil, 'unblocksignal'):
+        if hasattr(procutil, 'unblocksignal'):
             procutil.unblocksignal(signal.SIGCHLD)
         o = signal.signal(signal.SIGCHLD, self._sigchldhandler)
         self._oldsigchldhandler = o
@@ -721,10 +721,10 @@ class unixforkingservice:
 
         class unixcmdserverrepo(repo.__class__):
             def close(self):
-                super(unixcmdserverrepo, self).close()
+                super().close()
                 try:
                     self._cmdserveripc.send(self.root)
-                except socket.error:
+                except OSError:
                     self.ui.log(
                         b'cmdserver', b'failed to send repo root to master\n'
                     )

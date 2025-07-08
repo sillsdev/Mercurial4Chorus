@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-
 # Copyright (C) 2007 Daniel Holth <dholth@fastmail.fm>
 # This is a stripped-down version of the original bzr-svn transport.py,
 # Copyright (C) 2006 Jelmer Vernooij <jelmer@samba.org>
@@ -17,6 +15,8 @@
 # You should have received a copy of the GNU General Public License
 # along with this program; if not, see <http://www.gnu.org/licenses/>.
 
+from __future__ import annotations
+
 # pytype: disable=import-error
 import svn.client
 import svn.core
@@ -26,9 +26,6 @@ import svn.ra
 
 Pool = svn.core.Pool
 SubversionException = svn.core.SubversionException
-
-from mercurial.pycompat import getattr
-from mercurial import util
 
 # Some older versions of the Python bindings need to be
 # explicitly initialized. But what we want to do probably
@@ -63,7 +60,7 @@ def _create_auth_baton(pool):
                 if p:
                     providers.append(p)
     else:
-        if util.safehasattr(svn.client, b'get_windows_simple_provider'):
+        if hasattr(svn.client, 'get_windows_simple_provider'):
             providers.append(svn.client.get_windows_simple_provider(pool))
 
     return svn.core.svn_auth_open(providers, pool)
@@ -85,7 +82,7 @@ class SvnRaTransport:
         self.password = b''
 
         # Only Subversion 1.4 has reparent()
-        if ra is None or not util.safehasattr(svn.ra, b'reparent'):
+        if ra is None or not hasattr(svn.ra, 'reparent'):
             self.client = svn.client.create_context(self.pool)
             ab = _create_auth_baton(self.pool)
             self.client.auth_baton = ab

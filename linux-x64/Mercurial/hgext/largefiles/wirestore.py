@@ -5,6 +5,8 @@
 
 '''largefile store working over Mercurial's wire protocol'''
 
+from __future__ import annotations
+
 from . import (
     lfutil,
     remotestore,
@@ -20,7 +22,7 @@ class wirestore(remotestore.remotestore):
         if b'serve' not in storetypes:
             raise lfutil.storeprotonotcapable(storetypes)
         self.remote = remote
-        super(wirestore, self).__init__(ui, repo, remote.url())
+        super().__init__(ui, repo, remote.url())
 
     def _put(self, hash, fd):
         return self.remote.putlfile(hash, fd)

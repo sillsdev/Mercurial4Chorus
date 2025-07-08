@@ -1,4 +1,3 @@
-# -*- coding: UTF-8 -*-
 # beautifygraph.py - improve graph output by using Unicode characters
 #
 # Copyright 2018 John Stiles <johnstiles@gmail.com>
@@ -11,6 +10,7 @@
    A terminal with UTF-8 support and monospace narrow text are required.
 '''
 
+from __future__ import annotations
 
 from mercurial.i18n import _
 from mercurial import (
@@ -103,5 +103,5 @@ def extsetup(ui):
         )
         return
 
-    extensions.wrapfunction(graphmod, b'outputgraph', outputprettygraph)
-    extensions.wrapfunction(templatekw, b'getgraphnode', getprettygraphnode)
+    extensions.wrapfunction(graphmod, 'outputgraph', outputprettygraph)
+    extensions.wrapfunction(templatekw, 'getgraphnode', getprettygraphnode)

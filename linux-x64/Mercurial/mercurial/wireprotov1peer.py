@@ -5,6 +5,7 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
 
 import sys
 import weakref
@@ -12,10 +13,6 @@ import weakref
 from concurrent import futures
 from .i18n import _
 from .node import bin
-from .pycompat import (
-    getattr,
-    setattr,
-)
 from . import (
     bundle2,
     changegroup as changegroupmod,
@@ -28,7 +25,6 @@ from . import (
 )
 from .interfaces import (
     repository,
-    util as interfaceutil,
 )
 from .utils import hashutil
 
@@ -96,6 +92,8 @@ class unsentfuture(futures.Future):
     call ``sendcommands()``.
     """
 
+    _peerexecutor: peerexecutor
+
     def result(self, timeout=None):
         if self.done():
             return futures.Future.result(self, timeout)
@@ -108,8 +106,7 @@ class unsentfuture(futures.Future):
         return self.result(timeout)
 
 
-@interfaceutil.implementer(repository.ipeercommandexecutor)
-class peerexecutor:
+class peerexecutor(repository.ipeercommandexecutor):
     def __init__(self, peer):
         self._peer = peer
         self._sent = False
@@ -278,6 +275,9 @@ class peerexecutor:
         try:
             self._responsef.result()
         finally:
+            # Help pytype- this is initialized by self.sendcommands(), called
+            # above.
+            assert self._responseexecutor is not None
             self._responseexecutor.shutdown(wait=True)
             self._responsef = None
             self._responseexecutor = None
@@ -320,10 +320,9 @@ class peerexecutor:
                     f.set_result(result)
 
 
-@interfaceutil.implementer(
-    repository.ipeercommands, repository.ipeerlegacycommands
-)
-class wirepeer(repository.peer):
+class wirepeer(
+    repository.peer, repository.ipeercommands, repository.ipeerlegacycommands
+):
     """Client-side interface for communicating with a peer repository.
 
     Methods commonly call wire protocol commands of the same name.
@@ -352,8 +351,7 @@ class wirepeer(repository.peer):
         length = util.uvarintdecodestream(stream)
 
         # SSH streams will block if reading more than length
-        for chunk in util.filechunkiter(stream, limit=length):
-            yield chunk
+        yield from util.filechunkiter(stream, limit=length)
 
         self._finish_inline_clone_bundle(stream)
 
@@ -473,7 +471,7 @@ class wirepeer(repository.peer):
                 raise KeyError(b'unknown getbundle option type %s' % keytype)
             opts[key] = value
         f = self._callcompressable(b"getbundle", **pycompat.strkwargs(opts))
-        if any((cap.startswith(b'HG2') for cap in bundlecaps)):
+        if any(cap.startswith(b'HG2') for cap in bundlecaps):
             return bundle2.getunbundler(self.ui, f)
         else:
             return changegroupmod.cg1unpacker(f, b'UN')
@@ -499,7 +497,7 @@ class wirepeer(repository.peer):
         else:
             heads = wireprototypes.encodelist(heads)
 
-        if util.safehasattr(bundle, 'deltaheader'):
+        if hasattr(bundle, 'deltaheader'):
             # this a bundle10, do the old style call sequence
             ret, output = self._callpush(b"unbundle", bundle, heads=heads)
             if ret == b"":

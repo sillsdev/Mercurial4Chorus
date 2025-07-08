@@ -1,11 +1,11 @@
 # localrepo.py - read/write repository class for mercurial
-# coding: utf-8
 #
 # Copyright 2005-2007 Olivia Mackall <olivia@selenic.com>
 #
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
 
 import functools
 import os
@@ -13,11 +13,13 @@ import random
 import re
 import sys
 import time
+import typing
 import weakref
 
 from concurrent import futures
 from typing import (
     Optional,
+    Set,
 )
 
 from .i18n import _
@@ -27,10 +29,6 @@ from .node import (
     nullrev,
     sha1nodeconstants,
     short,
-)
-from .pycompat import (
-    delattr,
-    getattr,
 )
 from . import (
     bookmarks,
@@ -58,9 +56,9 @@ from . import (
     obsolete,
     pathutil,
     phases,
+    policy,
     pushkey,
     pycompat,
-    rcutil,
     repoview,
     requirements as requirementsmod,
     revlog,
@@ -78,9 +76,12 @@ from . import (
     wireprototypes,
 )
 
+from .branching import (
+    rev_cache as rev_branch_cache,
+)
+from .configuration import rcutil
 from .interfaces import (
     repository,
-    util as interfaceutil,
 )
 
 from .utils import (
@@ -122,17 +123,17 @@ class _basefilecache(scmutil.filecache):
             return unfi.__dict__[self.sname]
         except KeyError:
             pass
-        return super(_basefilecache, self).__get__(unfi, type)
+        return super().__get__(unfi, type)
 
     def set(self, repo, value):
-        return super(_basefilecache, self).set(repo.unfiltered(), value)
+        return super().set(repo.unfiltered(), value)
 
 
 class repofilecache(_basefilecache):
     """filecache for files in .hg but outside of .hg/store"""
 
     def __init__(self, *paths):
-        super(repofilecache, self).__init__(*paths)
+        super().__init__(*paths)
         for path in paths:
             _cachedfiles.add((path, b'plain'))
 
@@ -144,7 +145,7 @@ class storecache(_basefilecache):
     """filecache for files in the store"""
 
     def __init__(self, *paths):
-        super(storecache, self).__init__(*paths)
+        super().__init__(*paths)
         for path in paths:
             _cachedfiles.add((path, b''))
 
@@ -156,7 +157,7 @@ class changelogcache(storecache):
     """filecache for the changelog"""
 
     def __init__(self):
-        super(changelogcache, self).__init__()
+        super().__init__()
         _cachedfiles.add((b'00changelog.i', b''))
         _cachedfiles.add((b'00changelog.n', b''))
 
@@ -171,7 +172,7 @@ class manifestlogcache(storecache):
     """filecache for the manifestlog"""
 
     def __init__(self):
-        super(manifestlogcache, self).__init__()
+        super().__init__()
         _cachedfiles.add((b'00manifest.i', b''))
         _cachedfiles.add((b'00manifest.n', b''))
 
@@ -188,7 +189,7 @@ class mixedrepostorecache(_basefilecache):
     def __init__(self, *pathsandlocations):
         # scmutil.filecache only uses the path for passing back into our
         # join(), so we can safely pass a list of paths and locations
-        super(mixedrepostorecache, self).__init__(*pathsandlocations)
+        super().__init__(*pathsandlocations)
         _cachedfiles.update(pathsandlocations)
 
     def join(self, obj, fnameandlocation):
@@ -220,7 +221,7 @@ class unfilteredpropertycache(util.propertycache):
     def __get__(self, repo, type=None):
         unfi = repo.unfiltered()
         if unfi is repo:
-            return super(unfilteredpropertycache, self).__get__(unfi)
+            return super().__get__(unfi)
         return getattr(unfi, self.name)
 
 
@@ -257,8 +258,7 @@ moderncaps = {
 legacycaps = moderncaps.union({b'changegroupsubset'})
 
 
-@interfaceutil.implementer(repository.ipeercommandexecutor)
-class localcommandexecutor:
+class localcommandexecutor(repository.ipeercommandexecutor):
     def __init__(self, peer):
         self._peer = peer
         self._sent = False
@@ -303,14 +303,11 @@ class localcommandexecutor:
         self._closed = True
 
 
-@interfaceutil.implementer(repository.ipeercommands)
-class localpeer(repository.peer):
+class localpeer(repository.peer, repository.ipeercommands):
     '''peer for a local repo; reflects only the most recent API'''
 
     def __init__(self, repo, caps=None, path=None, remotehidden=False):
-        super(localpeer, self).__init__(
-            repo.ui, path=path, remotehidden=remotehidden
-        )
+        super().__init__(repo.ui, path=path, remotehidden=remotehidden)
 
         if caps is None:
             caps = moderncaps.copy()
@@ -340,13 +337,17 @@ class localpeer(repository.peer):
 
     # End of _basepeer interface.
 
+    # Begin of ipeercapabilities interface.
+
+    def capabilities(self) -> Set[bytes]:
+        return self._caps
+
+    # End of ipeercapabilities interface.
+
     # Begin of _basewirecommands interface.
 
     def branchmap(self):
         return self._repo.branchmap()
-
-    def capabilities(self):
-        return self._caps
 
     def get_cached_bundle_inline(self, path):
         # not needed with local peer
@@ -372,7 +373,7 @@ class localpeer(repository.peer):
         common=None,
         bundlecaps=None,
         remote_sidedata=None,
-        **kwargs
+        **kwargs,
     ):
         chunks = exchange.getbundlechunks(
             self._repo,
@@ -381,7 +382,7 @@ class localpeer(repository.peer):
             common=common,
             bundlecaps=bundlecaps,
             remote_sidedata=remote_sidedata,
-            **kwargs
+            **kwargs,
         )[1]
         cb = util.chunkbuffer(chunks)
 
@@ -419,7 +420,7 @@ class localpeer(repository.peer):
             try:
                 bundle = exchange.readbundle(self.ui, bundle, None)
                 ret = exchange.unbundle(self._repo, bundle, heads, b'push', url)
-                if util.safehasattr(ret, 'getchunks'):
+                if hasattr(ret, 'getchunks'):
                     # This is a bundle20 object, turn it into an unbundler.
                     # This little dance should be dropped eventually when the
                     # API is finally improved.
@@ -458,13 +459,12 @@ class localpeer(repository.peer):
     # End of peer interface.
 
 
-@interfaceutil.implementer(repository.ipeerlegacycommands)
-class locallegacypeer(localpeer):
+class locallegacypeer(localpeer, repository.ipeerlegacycommands):
     """peer extension which implements legacy methods too; used for tests with
     restricted capabilities"""
 
     def __init__(self, repo, path=None, remotehidden=False):
-        super(locallegacypeer, self).__init__(
+        super().__init__(
             repo, caps=legacycaps, path=path, remotehidden=remotehidden
         )
 
@@ -524,20 +524,6 @@ def _getsharedvfs(hgvfs, requirements):
             % sharedvfs.base
         )
     return sharedvfs
-
-
-def _readrequires(vfs, allowmissing):
-    """reads the require file present at root of this vfs
-    and return a set of requirements
-
-    If allowmissing is True, we suppress FileNotFoundError if raised"""
-    # requires file contains a newline-delimited list of
-    # features/capabilities the opener (us) must have in order to use
-    # the repository. This file was introduced in Mercurial 0.9.2,
-    # which means very old repositories may not have one. We assume
-    # a missing file translates to no requirements.
-    read = vfs.tryread if allowmissing else vfs.read
-    return set(read(b'requires').splitlines())
 
 
 def makelocalrepository(baseui, path: bytes, intents=None):
@@ -601,7 +587,7 @@ def makelocalrepository(baseui, path: bytes, intents=None):
 
         raise error.RepoError(_(b'repository %s not found') % path)
 
-    requirements = _readrequires(hgvfs, True)
+    requirements = scmutil.readrequires(hgvfs, True)
     shared = (
         requirementsmod.SHARED_REQUIREMENT in requirements
         or requirementsmod.RELATIVE_SHARED_REQUIREMENT in requirements
@@ -629,7 +615,7 @@ def makelocalrepository(baseui, path: bytes, intents=None):
         if (
             shared
             and requirementsmod.SHARESAFE_REQUIREMENT
-            not in _readrequires(sharedvfs, True)
+            not in scmutil.readrequires(sharedvfs, True)
         ):
             mismatch_warn = ui.configbool(
                 b'share', b'safe-mismatch.source-not-safe.warn'
@@ -673,9 +659,9 @@ def makelocalrepository(baseui, path: bytes, intents=None):
                     hint=hint,
                 )
         else:
-            requirements |= _readrequires(storevfs, False)
+            requirements |= scmutil.readrequires(storevfs, False)
     elif shared:
-        sourcerequires = _readrequires(sharedvfs, False)
+        sourcerequires = scmutil.readrequires(sharedvfs, False)
         if requirementsmod.SHARESAFE_REQUIREMENT in sourcerequires:
             mismatch_config = ui.config(b'share', b'safe-mismatch.source-safe')
             mismatch_warn = ui.configbool(
@@ -888,19 +874,19 @@ def loadhgrc(
         try:
             ui.readconfig(sharedvfs.join(b'hgrc'), root=sharedvfs.base)
             ret = True
-        except IOError:
+        except OSError:
             pass
 
     try:
         ui.readconfig(hgvfs.join(b'hgrc'), root=wdirvfs.base)
         ret = True
-    except IOError:
+    except OSError:
         pass
 
     try:
         ui.readconfig(hgvfs.join(b'hgrc-not-shared'), root=wdirvfs.base)
         ret = True
-    except IOError:
+    except OSError:
         pass
 
     return ret
@@ -1071,6 +1057,10 @@ def resolverevlogstorevfsoptions(ui, requirements, features):
     options = {}
     options[b'flagprocessors'] = {}
 
+    feature_config = options[b'feature-config'] = revlog.FeatureConfig()
+    data_config = options[b'data-config'] = revlog.DataConfig()
+    delta_config = options[b'delta-config'] = revlog.DeltaConfig()
+
     if requirementsmod.REVLOGV1_REQUIREMENT in requirements:
         options[b'revlogv1'] = True
     if requirementsmod.REVLOGV2_REQUIREMENT in requirements:
@@ -1086,18 +1076,23 @@ def resolverevlogstorevfsoptions(ui, requirements, features):
     # experimental config: format.chunkcachesize
     chunkcachesize = ui.configint(b'format', b'chunkcachesize')
     if chunkcachesize is not None:
-        options[b'chunkcachesize'] = chunkcachesize
+        data_config.chunk_cache_size = chunkcachesize
 
-    deltabothparents = ui.configbool(
+    memory_profile = scmutil.get_resource_profile(ui, b'memory')
+    if memory_profile >= scmutil.RESOURCE_MEDIUM:
+        data_config.uncompressed_cache_count = 10_000
+        data_config.uncompressed_cache_factor = 4
+        if memory_profile >= scmutil.RESOURCE_HIGH:
+            data_config.uncompressed_cache_factor = 10
+
+    delta_config.delta_both_parents = ui.configbool(
         b'storage', b'revlog.optimize-delta-parent-choice'
     )
-    options[b'deltabothparents'] = deltabothparents
-    dps_cgds = ui.configint(
+    delta_config.candidate_group_chunk_size = ui.configint(
         b'storage',
         b'revlog.delta-parent-search.candidate-group-chunk-size',
     )
-    options[b'delta-parent-search.candidate-group-chunk-size'] = dps_cgds
-    options[b'debug-delta'] = ui.configbool(b'debug', b'revlog.debug-delta')
+    delta_config.debug_delta = ui.configbool(b'debug', b'revlog.debug-delta')
 
     issue6528 = ui.configbool(b'storage', b'revlog.issue6528.fix-incoming')
     options[b'issue6528.fix-incoming'] = issue6528
@@ -1108,32 +1103,36 @@ def resolverevlogstorevfsoptions(ui, requirements, features):
         lazydeltabase = ui.configbool(
             b'storage', b'revlog.reuse-external-delta-parent'
         )
-    if lazydeltabase is None:
-        lazydeltabase = not scmutil.gddeltaconfig(ui)
-    options[b'lazydelta'] = lazydelta
-    options[b'lazydeltabase'] = lazydeltabase
+        if lazydeltabase is None:
+            lazydeltabase = not scmutil.gddeltaconfig(ui)
+    delta_config.lazy_delta = lazydelta
+    delta_config.lazy_delta_base = lazydeltabase
 
     chainspan = ui.configbytes(b'experimental', b'maxdeltachainspan')
     if 0 <= chainspan:
-        options[b'maxdeltachainspan'] = chainspan
+        delta_config.max_deltachain_span = chainspan
 
-    mmapindexthreshold = ui.configbytes(b'experimental', b'mmapindexthreshold')
-    if mmapindexthreshold is not None:
-        options[b'mmapindexthreshold'] = mmapindexthreshold
+    has_populate = util.has_mmap_populate()
+    if ui.configbool(b'storage', b'revlog.mmap.index', has_populate):
+        data_config.mmap_index_threshold = ui.configbytes(
+            b'storage',
+            b'revlog.mmap.index:size-threshold',
+        )
 
     withsparseread = ui.configbool(b'experimental', b'sparse-read')
     srdensitythres = float(
         ui.config(b'experimental', b'sparse-read.density-threshold')
     )
     srmingapsize = ui.configbytes(b'experimental', b'sparse-read.min-gap-size')
-    options[b'with-sparse-read'] = withsparseread
-    options[b'sparse-read-density-threshold'] = srdensitythres
-    options[b'sparse-read-min-gap-size'] = srmingapsize
+    data_config.with_sparse_read = withsparseread
+    data_config.sr_density_threshold = srdensitythres
+    data_config.sr_min_gap_size = srmingapsize
 
     sparserevlog = requirementsmod.SPARSEREVLOG_REQUIREMENT in requirements
-    options[b'sparse-revlog'] = sparserevlog
+    delta_config.sparse_revlog = sparserevlog
     if sparserevlog:
         options[b'generaldelta'] = True
+        data_config.with_sparse_read = True
 
     maxchainlen = None
     if sparserevlog:
@@ -1141,7 +1140,7 @@ def resolverevlogstorevfsoptions(ui, requirements, features):
     # experimental config: format.maxchainlen
     maxchainlen = ui.configint(b'format', b'maxchainlen', maxchainlen)
     if maxchainlen is not None:
-        options[b'maxchainlen'] = maxchainlen
+        delta_config.max_chain_len = maxchainlen
 
     for r in requirements:
         # we allow multiple compression engine requirement to co-exist because
@@ -1150,21 +1149,23 @@ def resolverevlogstorevfsoptions(ui, requirements, features):
         # The compression used for new entries will be "the last one"
         prefix = r.startswith
         if prefix(b'revlog-compression-') or prefix(b'exp-compression-'):
-            options[b'compengine'] = r.split(b'-', 2)[2]
+            feature_config.compression_engine = r.split(b'-', 2)[2]
 
-    options[b'zlib.level'] = ui.configint(b'storage', b'revlog.zlib.level')
-    if options[b'zlib.level'] is not None:
-        if not (0 <= options[b'zlib.level'] <= 9):
+    zlib_level = ui.configint(b'storage', b'revlog.zlib.level')
+    if zlib_level is not None:
+        if not (0 <= zlib_level <= 9):
             msg = _(b'invalid value for `storage.revlog.zlib.level` config: %d')
-            raise error.Abort(msg % options[b'zlib.level'])
-    options[b'zstd.level'] = ui.configint(b'storage', b'revlog.zstd.level')
-    if options[b'zstd.level'] is not None:
-        if not (0 <= options[b'zstd.level'] <= 22):
+            raise error.Abort(msg % zlib_level)
+    feature_config.compression_engine_options[b'zlib.level'] = zlib_level
+    zstd_level = ui.configint(b'storage', b'revlog.zstd.level')
+    if zstd_level is not None:
+        if not (0 <= zstd_level <= 22):
             msg = _(b'invalid value for `storage.revlog.zstd.level` config: %d')
-            raise error.Abort(msg % options[b'zstd.level'])
+            raise error.Abort(msg % zstd_level)
+    feature_config.compression_engine_options[b'zstd.level'] = zstd_level
 
     if requirementsmod.NARROW_REQUIREMENT in requirements:
-        options[b'enableellipsis'] = True
+        feature_config.enable_ellipsis = True
 
     if ui.configbool(b'experimental', b'rust.index'):
         options[b'rust.index'] = True
@@ -1172,10 +1173,10 @@ def resolverevlogstorevfsoptions(ui, requirements, features):
         slow_path = ui.config(
             b'storage', b'revlog.persistent-nodemap.slow-path'
         )
+        if slow_path == b'default':
+            slow_path = ui.config(b'storage', b'all-slow-path')
         if slow_path not in (b'allow', b'warn', b'abort'):
-            default = ui.config_default(
-                b'storage', b'revlog.persistent-nodemap.slow-path'
-            )
+            default = ui.config_default(b'storage', b'all-slow-path')
             msg = _(
                 b'unknown value for config '
                 b'"storage.revlog.persistent-nodemap.slow-path": "%s"\n'
@@ -1205,8 +1206,10 @@ def resolverevlogstorevfsoptions(ui, requirements, features):
         options[b'persistent-nodemap'] = True
     if requirementsmod.DIRSTATE_V2_REQUIREMENT in requirements:
         slow_path = ui.config(b'storage', b'dirstate-v2.slow-path')
+        if slow_path == b'default':
+            slow_path = ui.config(b'storage', b'all-slow-path')
         if slow_path not in (b'allow', b'warn', b'abort'):
-            default = ui.config_default(b'storage', b'dirstate-v2.slow-path')
+            default = ui.config_default(b'storage', b'all-slow-path')
             msg = _(b'unknown value for config "dirstate-v2.slow-path": "%s"\n')
             ui.warn(msg % slow_path)
             if not ui.quiet:
@@ -1242,8 +1245,7 @@ def makemain(**kwargs):
     return localrepository
 
 
-@interfaceutil.implementer(repository.ilocalrepositoryfilestorage)
-class revlogfilestorage:
+class revlogfilestorage(repository.ilocalrepositoryfilestorage):
     """File storage when using revlogs."""
 
     def file(self, path):
@@ -1258,8 +1260,7 @@ class revlogfilestorage:
         return filelog.filelog(self.svfs, path, try_split=try_split)
 
 
-@interfaceutil.implementer(repository.ilocalrepositoryfilestorage)
-class revlognarrowfilestorage:
+class revlognarrowfilestorage(repository.ilocalrepositoryfilestorage):
     """File storage when using revlogs and narrow files."""
 
     def file(self, path):
@@ -1296,9 +1297,16 @@ REPO_INTERFACES = [
     (repository.ilocalrepositoryfilestorage, lambda: makefilestorage),
 ]
 
+_localrepo_base_classes = object
 
-@interfaceutil.implementer(repository.ilocalrepositorymain)
-class localrepository:
+if typing.TYPE_CHECKING:
+    _localrepo_base_classes = [
+        repository.ilocalrepositorymain,
+        repository.ilocalrepositoryfilestorage,
+    ]
+
+
+class localrepository(_localrepo_base_classes):
     """Main class for representing local repositories.
 
     All local repositories are instances of this class.
@@ -1460,7 +1468,7 @@ class localrepository:
         if self.ui.configbool(b'devel', b'all-warnings') or self.ui.configbool(
             b'devel', b'check-locks'
         ):
-            if util.safehasattr(self.svfs, 'vfs'):  # this is filtervfs
+            if hasattr(self.svfs, 'vfs'):  # this is filtervfs
                 self.svfs.vfs.audit = self._getsvfsward(self.svfs.vfs.audit)
             else:  # standard vfs
                 self.svfs.audit = self._getsvfsward(self.svfs.audit)
@@ -1522,8 +1530,8 @@ class localrepository:
             repo = rref()
             if (
                 repo is None
-                or not util.safehasattr(repo, '_wlockref')
-                or not util.safehasattr(repo, '_lockref')
+                or not hasattr(repo, '_wlockref')
+                or not hasattr(repo, '_lockref')
             ):
                 return
             if mode in (None, b'r', b'rb'):
@@ -1571,7 +1579,7 @@ class localrepository:
         def checksvfs(path, mode=None):
             ret = origfunc(path, mode=mode)
             repo = rref()
-            if repo is None or not util.safehasattr(repo, '_lockref'):
+            if repo is None or not hasattr(repo, '_lockref'):
                 return
             if mode in (None, b'r', b'rb'):
                 return
@@ -2237,7 +2245,8 @@ class localrepository:
     @unfilteredmethod
     def revbranchcache(self):
         if not self._revbranchcache:
-            self._revbranchcache = branchmap.revbranchcache(self.unfiltered())
+            unfi = self.unfiltered()
+            self._revbranchcache = rev_branch_cache.revbranchcache(unfi)
         return self._revbranchcache
 
     def register_changeset(self, rev, changelogrevision):
@@ -2389,7 +2398,7 @@ class localrepository:
         data: bytes,
         flags: bytes,
         backgroundclose=False,
-        **kwargs
+        **kwargs,
     ) -> int:
         """write ``data`` into ``filename`` in the working directory
 
@@ -2572,7 +2581,7 @@ class localrepository:
                     repo.hook(
                         b'pretxnclose-bookmark',
                         throw=True,
-                        **pycompat.strkwargs(args)
+                        **pycompat.strkwargs(args),
                     )
             if hook.hashook(repo.ui, b'pretxnclose-phase'):
                 cl = repo.unfiltered().changelog
@@ -2584,7 +2593,7 @@ class localrepository:
                         repo.hook(
                             b'pretxnclose-phase',
                             throw=True,
-                            **pycompat.strkwargs(args)
+                            **pycompat.strkwargs(args),
                         )
 
             repo.hook(
@@ -2659,7 +2668,7 @@ class localrepository:
                         repo.hook(
                             b'txnclose-bookmark',
                             throw=False,
-                            **pycompat.strkwargs(args)
+                            **pycompat.strkwargs(args),
                         )
 
                 if hook.hashook(repo.ui, b'txnclose-phase'):
@@ -2675,7 +2684,7 @@ class localrepository:
                             repo.hook(
                                 b'txnclose-phase',
                                 throw=False,
-                                **pycompat.strkwargs(args)
+                                **pycompat.strkwargs(args),
                             )
 
                 repo.hook(
@@ -2804,7 +2813,7 @@ class localrepository:
                     b'repository tip rolled back to revision %d (undo %s)\n'
                 ) % (oldtip, desc)
             parentgone = any(self[p].rev() > oldtip for p in parents)
-        except IOError:
+        except OSError:
             msg = _(b'rolling back unknown transaction\n')
             desc = None
             parentgone = True
@@ -2909,27 +2918,19 @@ class localrepository:
 
         unfi = self.unfiltered()
 
-        if full:
-            msg = (
-                "`full` argument for `repo.updatecaches` is deprecated\n"
-                "(use `caches=repository.CACHE_ALL` instead)"
-            )
-            self.ui.deprecwarn(msg, b"5.9")
-            caches = repository.CACHES_ALL
-            if full == b"post-clone":
-                caches = repository.CACHES_POST_CLONE
-            caches = repository.CACHES_ALL
-        elif caches is None:
+        if caches is None:
             caches = repository.CACHES_DEFAULT
 
         if repository.CACHE_BRANCHMAP_SERVED in caches:
             if tr is None or tr.changes[b'origrepolen'] < len(self):
-                # accessing the 'served' branchmap should refresh all the others,
                 self.ui.debug(b'updating the branch cache\n')
-                self.filtered(b'served').branchmap()
-                self.filtered(b'served.hidden').branchmap()
-                # flush all possibly delayed write.
-                self._branchcaches.write_delayed(self)
+                dpt = repository.CACHE_BRANCHMAP_DETECT_PURE_TOPO in caches
+                served = self.filtered(b'served')
+                self._branchcaches.update_disk(served, detect_pure_topo=dpt)
+                served_hidden = self.filtered(b'served.hidden')
+                self._branchcaches.update_disk(
+                    served_hidden, detect_pure_topo=dpt
+                )
 
         if repository.CACHE_CHANGELOG_CACHE in caches:
             self.changelog.update_caches(transaction=tr)
@@ -2958,7 +2959,7 @@ class localrepository:
 
         if repository.CACHE_FILE_NODE_TAGS in caches:
             # accessing fnode cache warms the cache
-            tagsmod.fnoderevs(self.ui, unfi, unfi.changelog.revs())
+            tagsmod.warm_cache(self)
 
         if repository.CACHE_TAGS_DEFAULT in caches:
             # accessing tags warm the cache
@@ -2972,9 +2973,14 @@ class localrepository:
             # even if they haven't explicitly been requested yet (if they've
             # never been used by hg, they won't ever have been written, even if
             # they're a subset of another kind of cache that *has* been used).
+            dpt = repository.CACHE_BRANCHMAP_DETECT_PURE_TOPO in caches
+
             for filt in repoview.filtertable.keys():
                 filtered = self.filtered(filt)
-                filtered.branchmap().write(filtered)
+                self._branchcaches.update_disk(filtered, detect_pure_topo=dpt)
+
+        # flush all possibly delayed write.
+        self._branchcaches.write_dirty(self)
 
     def invalidatecaches(self):
         if '_tagscache' in vars(self):
@@ -3017,7 +3023,7 @@ class localrepository:
             if (
                 k == b'changelog'
                 and self.currenttransaction()
-                and self.changelog._delayed
+                and self.changelog.is_delaying
             ):
                 # The changelog object may store unwritten revisions. We don't
                 # want to lose them.
@@ -3027,7 +3033,11 @@ class localrepository:
             if clearfilecache:
                 del self._filecache[k]
             try:
-                delattr(unfiltered, k)
+                # XXX ideally, the key would be a unicode string to match the
+                # fact it refers to an attribut name. However changing this was
+                # a bit a scope creep compared to the series cleaning up
+                # del/set/getattr so we kept thing simple here.
+                delattr(unfiltered, pycompat.sysstr(k))
             except AttributeError:
                 pass
         self.invalidatecaches()
@@ -3061,6 +3071,7 @@ class localrepository:
         releasefn,
         acquirefn,
         desc,
+        steal_from=None,
     ):
         timeout = 0
         warntimeout = 0
@@ -3069,18 +3080,35 @@ class localrepository:
             warntimeout = self.ui.configint(b"ui", b"timeout.warn")
         # internal config: ui.signal-safe-lock
         signalsafe = self.ui.configbool(b'ui', b'signal-safe-lock')
+        sync_file = self.ui.config(b'devel', b'lock-wait-sync-file')
+        if not sync_file:
+            sync_file = None
 
-        l = lockmod.trylock(
-            self.ui,
-            vfs,
-            lockname,
-            timeout,
-            warntimeout,
-            releasefn=releasefn,
-            acquirefn=acquirefn,
-            desc=desc,
-            signalsafe=signalsafe,
-        )
+        if steal_from is None:
+            l = lockmod.trylock(
+                self.ui,
+                vfs,
+                lockname,
+                timeout,
+                warntimeout,
+                releasefn=releasefn,
+                acquirefn=acquirefn,
+                desc=desc,
+                signalsafe=signalsafe,
+                devel_wait_sync_file=sync_file,
+            )
+        else:
+            l = lockmod.steal_lock(
+                self.ui,
+                vfs,
+                lockname,
+                steal_from,
+                releasefn=releasefn,
+                acquirefn=acquirefn,
+                desc=desc,
+                signalsafe=signalsafe,
+            )
+
         return l
 
     def _afterlock(self, callback):
@@ -3096,18 +3124,29 @@ class localrepository:
         else:  # no lock have been found.
             callback(True)
 
-    def lock(self, wait=True):
+    def lock(self, wait=True, steal_from=None):
         """Lock the repository store (.hg/store) and return a weak reference
         to the lock. Use this before modifying the store (e.g. committing or
         stripping). If you are opening a transaction, get a lock as well.)
 
         If both 'lock' and 'wlock' must be acquired, ensure you always acquires
-        'wlock' first to avoid a dead-lock hazard."""
+        'wlock' first to avoid a dead-lock hazard.
+
+
+        The steal_from argument is  used during local clone when reloading a
+        repository. If we could remove the need for this during copy clone, we
+        could remove this function.
+        """
         l = self._currentlock(self._lockref)
         if l is not None:
+            if steal_from is not None:
+                msg = "cannot steal lock if already locked"
+                raise error.ProgrammingError(msg)
             l.lock()
             return l
 
+        if steal_from is None:
+            self.hook(b'prelock', throw=True)
         l = self._lock(
             vfs=self.svfs,
             lockname=b"lock",
@@ -3115,23 +3154,34 @@ class localrepository:
             releasefn=None,
             acquirefn=self.invalidate,
             desc=_(b'repository %s') % self.origroot,
+            steal_from=steal_from,
         )
         self._lockref = weakref.ref(l)
         return l
 
-    def wlock(self, wait=True):
+    def wlock(self, wait=True, steal_from=None):
         """Lock the non-store parts of the repository (everything under
         .hg except .hg/store) and return a weak reference to the lock.
 
         Use this before modifying files in .hg.
 
         If both 'lock' and 'wlock' must be acquired, ensure you always acquires
-        'wlock' first to avoid a dead-lock hazard."""
-        l = self._wlockref() if self._wlockref else None
-        if l is not None and l.held:
+        'wlock' first to avoid a dead-lock hazard.
+
+        The steal_from argument is  used during local clone when reloading a
+        repository. If we could remove the need for this during copy clone, we
+        could remove this function.
+        """
+        l = self._currentlock(self._wlockref)
+        if l is not None:
+            if steal_from is not None:
+                msg = "cannot steal wlock if already locked"
+                raise error.ProgrammingError(msg)
             l.lock()
             return l
 
+        if steal_from is None:
+            self.hook(b'prewlock', throw=True)
         # We do not need to check for non-waiting lock acquisition.  Such
         # acquisition would not cause dead-lock as they would just fail.
         if wait and (
@@ -3157,12 +3207,13 @@ class localrepository:
                 del unfi.__dict__['dirstate']
 
         l = self._lock(
-            self.vfs,
-            b"wlock",
-            wait,
-            unlock,
-            self.invalidatedirstate,
-            _(b'working directory of %s') % self.origroot,
+            vfs=self.vfs,
+            lockname=b"wlock",
+            wait=wait,
+            releasefn=unlock,
+            acquirefn=self.invalidatedirstate,
+            desc=_(b'working directory of %s') % self.origroot,
+            steal_from=steal_from,
         )
         self._wlockref = weakref.ref(l)
         return l
@@ -3360,7 +3411,7 @@ class localrepository:
         # dirty after committing. Then when we strip, the repo is invalidated,
         # causing those changes to disappear.
         if '_phasecache' in vars(self):
-            self._phasecache.write()
+            self._phasecache.write(self)
 
     @unfilteredmethod
     def destroyed(self):
@@ -3368,17 +3419,6 @@ class localrepository:
         Intended for use by strip and rollback, so there's a common
         place for anything that has to be done after destroying history.
         """
-        # When one tries to:
-        # 1) destroy nodes thus calling this method (e.g. strip)
-        # 2) use phasecache somewhere (e.g. commit)
-        #
-        # then 2) will fail because the phasecache contains nodes that were
-        # removed. We can either remove phasecache from the filecache,
-        # causing it to reload next time it is accessed, or simply filter
-        # the removed nodes now and write the updated cache.
-        self._phasecache.filterunknown(self)
-        self._phasecache.write()
-
         # refresh all repository caches
         self.updatecaches()
 
@@ -3763,7 +3803,13 @@ def newreporequirements(ui, createopts):
     if ui.configbool(b'format', b'bookmarks-in-store'):
         requirements.add(requirementsmod.BOOKMARKS_IN_STORE_REQUIREMENT)
 
-    if ui.configbool(b'format', b'use-persistent-nodemap'):
+    # The feature is disabled unless a fast implementation is available.
+    persistent_nodemap_default = (
+        policy.importrust('revlog', pyo3=True) is not None
+    )
+    if ui.configbool(
+        b'format', b'use-persistent-nodemap', persistent_nodemap_default
+    ):
         requirements.add(requirementsmod.NODEMAP_REQUIREMENT)
 
     # if share-safe is enabled, let's create the new repository with the new
@@ -3956,7 +4002,7 @@ def createrepository(ui, path: bytes, createopts=None, requirements=None):
             try:
                 sharedpath = os.path.relpath(sharedpath, hgvfs.base)
                 sharedpath = util.pconvert(sharedpath)
-            except (IOError, ValueError) as e:
+            except (OSError, ValueError) as e:
                 # ValueError is raised on Windows if the drive letters differ
                 # on each path.
                 raise error.Abort(

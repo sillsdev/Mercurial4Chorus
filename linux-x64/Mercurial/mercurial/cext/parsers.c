@@ -1232,6 +1232,15 @@ static int check_python_version(void)
 	 * should only occur in unusual circumstances (e.g. if sys.hexversion
 	 * is manually set to an invalid value). */
 	if ((hexversion == -1) || (hexversion >> 16 != PY_VERSION_HEX >> 16)) {
+		PyObject *sys = PyImport_ImportModule("sys"), *executable;
+		if (!sys) {
+			return -1;
+		}
+		executable = PyObject_GetAttrString(sys, "executable");
+		Py_DECREF(sys);
+		if (!executable) {
+			return -1;
+		}
 		PyErr_Format(PyExc_ImportError,
 		             "%s: The Mercurial extension "
 		             "modules were compiled with Python " PY_VERSION
@@ -1240,7 +1249,8 @@ static int check_python_version(void)
 		             "sys.hexversion=%ld: "
 		             "Python %s\n at: %s",
 		             versionerrortext, hexversion, Py_GetVersion(),
-		             Py_GetProgramFullPath());
+		             PyUnicode_AsUTF8(executable));
+		Py_DECREF(executable);
 		return -1;
 	}
 	return 0;

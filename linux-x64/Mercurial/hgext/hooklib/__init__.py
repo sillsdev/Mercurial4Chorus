@@ -13,6 +13,9 @@ implement them as individual hooks or merge them into the notify
 extension as option. The functionality itself is planned to be supported
 long-term.
 """
+
+from __future__ import annotations
+
 from . import (
     changeset_obsoleted,
     changeset_published,

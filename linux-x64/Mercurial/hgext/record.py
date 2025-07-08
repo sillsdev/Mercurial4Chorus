@@ -10,6 +10,7 @@
 The feature provided by this extension has been moved into core Mercurial as
 :hg:`commit --interactive`.'''
 
+from __future__ import annotations
 
 from mercurial.i18n import _
 from mercurial import (
@@ -136,7 +137,7 @@ def _qrecord(cmdsuggest, ui, repo, patch, *pats, **opts):
             False,
             cmdutil.recordfilter,
             *pats,
-            **opts
+            **opts,
         )
 
 

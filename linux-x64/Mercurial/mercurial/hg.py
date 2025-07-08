@@ -6,12 +6,13 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
 
 import os
 import posixpath
 import shutil
 import stat
-import weakref
+import typing
 
 from .i18n import _
 from .node import (
@@ -19,7 +20,6 @@ from .node import (
     sha1nodeconstants,
     short,
 )
-from .pycompat import getattr
 
 from . import (
     bookmarks,
@@ -58,6 +58,11 @@ from .utils import (
     urlutil,
 )
 
+if typing.TYPE_CHECKING:
+    from typing import (
+        List,
+        Tuple,
+    )
 
 release = lock.release
 
@@ -66,7 +71,7 @@ sharedbookmarks = b'bookmarks'
 
 
 def addbranchrevs(lrepo, other, branches, revs, remotehidden=False):
-    if util.safehasattr(other, 'peer'):
+    if hasattr(other, 'peer'):
         # a courtesy to callers using a localrepo for other
         peer = other.peer(remotehidden=remotehidden)
     else:
@@ -174,7 +179,7 @@ def islocal(repo):
             cls.instance  # make sure we load the module
         else:
             cls = LocalFactory
-        if util.safehasattr(cls, 'islocal'):
+        if hasattr(cls, 'islocal'):
             return cls.islocal(repo)  # pytype: disable=module-attr
         return False
     repo.ui.deprecwarn(b"use obj.local() instead of islocal(obj)", b"6.4")
@@ -254,7 +259,7 @@ def peer(
     '''return a repository peer for the specified path'''
     ui = getattr(uiorrepo, 'ui', uiorrepo)
     rui = remoteui(uiorrepo, opts)
-    if util.safehasattr(path, 'url'):
+    if hasattr(path, 'url'):
         # this is already a urlutil.path object
         peer_path = path
     else:
@@ -317,7 +322,7 @@ def sharedreposource(repo):
     if repo.sharedpath == repo.path:
         return None
 
-    if util.safehasattr(repo, 'srcrepo') and repo.srcrepo:
+    if hasattr(repo, 'srcrepo') and repo.srcrepo:
         return repo.srcrepo
 
     # the sharedpath always ends in the .hg; we want the path to the repo
@@ -340,7 +345,7 @@ def share(
     '''create a shared repository'''
 
     not_local_msg = _(b'can only share local repositories')
-    if util.safehasattr(source, 'local'):
+    if hasattr(source, 'local'):
         if source.local() is None:
             raise error.Abort(not_local_msg)
     elif not islocal(source):
@@ -729,7 +734,7 @@ def clone(
             branches = (src_path.branch, branch or [])
             source = src_path.loc
     else:
-        if util.safehasattr(source, 'peer'):
+        if hasattr(source, 'peer'):
             srcpeer = source.peer()  # in case we were called with a localrepo
         else:
             srcpeer = source
@@ -944,14 +949,16 @@ def clone(
             # important:
             #
             #    We still need to release that lock at the end of the function
-            destpeer.local()._lockref = weakref.ref(destlock)
-            destpeer.local()._wlockref = weakref.ref(destwlock)
-            # dirstate also needs to be copied because `_wlockref` has a reference
-            # to it: this dirstate is saved to disk when the wlock is released
-            destpeer.local().dirstate = destrepo.dirstate
+            if destrepo.dirstate._dirty:
+                msg = "dirstate dirty after stream clone"
+                raise error.ProgrammingError(msg)
+            destwlock = destpeer.local().wlock(steal_from=destwlock)
+            destlock = destpeer.local().lock(steal_from=destlock)
 
             srcrepo.hook(
-                b'outgoing', source=b'clone', node=srcrepo.nodeconstants.nullhex
+                b'outgoing',
+                source=b'clone',
+                node=srcrepo.nodeconstants.nullhex,
             )
         else:
             try:
@@ -1115,8 +1122,10 @@ def clone(
                     bookmarks.activate(destrepo, update)
             if destlock is not None:
                 release(destlock)
+                destlock = None
             if destwlock is not None:
-                release(destlock)
+                release(destwlock)
+                destwlock = None
             # here is a tiny windows were someone could end up writing the
             # repository before the cache are sure to be warm. This is "fine"
             # as the only "bad" outcome would be some slowness. That potential
@@ -1421,60 +1430,6 @@ def incoming(ui, repo, source, opts, subpath=None):
     )
 
 
-def _outgoing(ui, repo, dests, opts, subpath=None):
-    out = set()
-    others = []
-    for path in urlutil.get_push_paths(repo, ui, dests):
-        dest = path.loc
-        if subpath is not None:
-            subpath = urlutil.url(subpath)
-            if subpath.isabs():
-                dest = bytes(subpath)
-            else:
-                p = urlutil.url(dest)
-                if p.islocal():
-                    normpath = os.path.normpath
-                else:
-                    normpath = posixpath.normpath
-                p.path = normpath(b'%s/%s' % (p.path, subpath))
-                dest = bytes(p)
-        branches = path.branch, opts.get(b'branch') or []
-
-        ui.status(_(b'comparing with %s\n') % urlutil.hidepassword(dest))
-        revs, checkout = addbranchrevs(repo, repo, branches, opts.get(b'rev'))
-        if revs:
-            revs = [repo[rev].node() for rev in logcmdutil.revrange(repo, revs)]
-
-        other = peer(repo, opts, dest)
-        try:
-            outgoing = discovery.findcommonoutgoing(
-                repo, other, revs, force=opts.get(b'force')
-            )
-            o = outgoing.missing
-            out.update(o)
-            if not o:
-                scmutil.nochangesfound(repo.ui, repo, outgoing.excluded)
-            others.append(other)
-        except:  # re-raises
-            other.close()
-            raise
-    # make sure this is ordered by revision number
-    outgoing_revs = list(out)
-    cl = repo.changelog
-    outgoing_revs.sort(key=cl.rev)
-    return outgoing_revs, others
-
-
-def _outgoing_recurse(ui, repo, dests, opts):
-    ret = 1
-    if opts.get(b'subrepos'):
-        ctx = repo[None]
-        for subpath in sorted(ctx.substate):
-            sub = ctx.sub(subpath)
-            ret = min(ret, sub.outgoing(ui, dests, opts))
-    return ret
-
-
 def _outgoing_filter(repo, revs, opts):
     """apply revision filtering/ordering option for outgoing"""
     limit = logcmdutil.getlimit(opts)
@@ -1482,8 +1437,7 @@ def _outgoing_filter(repo, revs, opts):
     if opts.get(b'newest_first'):
         revs.reverse()
     if limit is None and not no_merges:
-        for r in revs:
-            yield r
+        yield from revs
         return
 
     count = 0
@@ -1498,37 +1452,100 @@ def _outgoing_filter(repo, revs, opts):
         yield n
 
 
+def _outgoing_recurse(ui, repo, dests, opts):
+    ret = 1
+    if opts.get(b'subrepos'):
+        ctx = repo[None]
+        for subpath in sorted(ctx.substate):
+            sub = ctx.sub(subpath)
+            ret = min(ret, sub.outgoing(ui, dests, opts))
+    return ret
+
+
+def display_outgoing_revs(ui, repo, o, opts):
+    # make sure this is ordered by revision number
+    cl = repo.changelog
+    o.sort(key=cl.rev)
+    if opts.get(b'graph'):
+        revdag = logcmdutil.graphrevs(repo, o, opts)
+        ui.pager(b'outgoing')
+        displayer = logcmdutil.changesetdisplayer(ui, repo, opts, buffered=True)
+        logcmdutil.displaygraph(
+            ui, repo, revdag, displayer, graphmod.asciiedges
+        )
+    else:
+        ui.pager(b'outgoing')
+        displayer = logcmdutil.changesetdisplayer(ui, repo, opts)
+        for n in _outgoing_filter(repo, o, opts):
+            displayer.show(repo[n])
+            displayer.close()
+
+
+_no_subtoppath = object()
+
+
 def outgoing(ui, repo, dests, opts, subpath=None):
     if opts.get(b'graph'):
         logcmdutil.checkunsupportedgraphflags([], opts)
-    o, others = _outgoing(ui, repo, dests, opts, subpath=subpath)
     ret = 1
-    try:
-        if o:
-            ret = 0
+    for path in urlutil.get_push_paths(repo, ui, dests):
+        dest = path.loc
+        prev_subtopath = getattr(repo, "_subtoppath", _no_subtoppath)
+        try:
+            repo._subtoppath = dest
+            if subpath is not None:
+                subpath = urlutil.url(subpath)
+                if subpath.isabs():
+                    dest = bytes(subpath)
+                else:
+                    p = urlutil.url(dest)
+                    if p.islocal():
+                        normpath = os.path.normpath
+                    else:
+                        normpath = posixpath.normpath
+                    p.path = normpath(b'%s/%s' % (p.path, subpath))
+                    dest = bytes(p)
+            branches = path.branch, opts.get(b'branch') or []
 
-            if opts.get(b'graph'):
-                revdag = logcmdutil.graphrevs(repo, o, opts)
-                ui.pager(b'outgoing')
-                displayer = logcmdutil.changesetdisplayer(
-                    ui, repo, opts, buffered=True
+            ui.status(_(b'comparing with %s\n') % urlutil.hidepassword(dest))
+            revs, checkout = addbranchrevs(
+                repo, repo, branches, opts.get(b'rev')
+            )
+            if revs:
+                revs = [
+                    repo[rev].node() for rev in logcmdutil.revrange(repo, revs)
+                ]
+
+            other = peer(repo, opts, dest)
+            try:
+                outgoing = discovery.findcommonoutgoing(
+                    repo, other, revs, force=opts.get(b'force')
                 )
-                logcmdutil.displaygraph(
-                    ui, repo, revdag, displayer, graphmod.asciiedges
-                )
+                o = outgoing.missing
+                if not o:
+                    scmutil.nochangesfound(repo.ui, repo, outgoing.excluded)
+                else:
+                    ret = 0
+                    display_outgoing_revs(ui, repo, o, opts)
+
+                cmdutil.outgoinghooks(ui, repo, other, opts, o)
+
+                # path.loc is used instead of dest because what we need to pass
+                # is the destination of the repository containing the
+                # subrepositories and not the destination of the current
+                # subrepository being processed. It will be used to discover
+                # subrepositories paths when using relative paths do map them
+                ret = min(ret, _outgoing_recurse(ui, repo, (path.loc,), opts))
+            except:  # re-raises
+                raise
+            finally:
+                other.close()
+        finally:
+            if prev_subtopath is _no_subtoppath:
+                del repo._subtoppath
             else:
-                ui.pager(b'outgoing')
-                displayer = logcmdutil.changesetdisplayer(ui, repo, opts)
-                for n in _outgoing_filter(repo, o, opts):
-                    displayer.show(repo[n])
-                displayer.close()
-        for oth in others:
-            cmdutil.outgoinghooks(ui, repo, oth, opts, o)
-            ret = min(ret, _outgoing_recurse(ui, repo, dests, opts))
-        return ret  # exit code is zero since we found outgoing changes
-    finally:
-        for oth in others:
-            oth.close()
+                repo._subtoppath = prev_subtopath
+    return ret
 
 
 def verify(repo, level=None):
@@ -1567,7 +1584,7 @@ def verify(repo, level=None):
 
 def remoteui(src, opts):
     """build a remote ui from ui or repo and opts"""
-    if util.safehasattr(src, 'baseui'):  # looks like a repository
+    if hasattr(src, 'baseui'):  # looks like a repository
         dst = src.baseui.copy()  # drop repo-specific config
         src = src.ui  # copy target options from repo
     else:  # assume it's a global ui object
@@ -1598,11 +1615,11 @@ def remoteui(src, opts):
 # Files of interest
 # Used to check if the repository has changed looking at mtime and size of
 # these files.
-foi = [
-    (b'spath', b'00changelog.i'),
-    (b'spath', b'phaseroots'),  # ! phase can change content at the same size
-    (b'spath', b'obsstore'),
-    (b'path', b'bookmarks'),  # ! bookmark can change content at the same size
+foi: List[Tuple[str, bytes]] = [
+    ('spath', b'00changelog.i'),
+    ('spath', b'phaseroots'),  # ! phase can change content at the same size
+    ('spath', b'obsstore'),
+    ('path', b'bookmarks'),  # ! bookmark can change content at the same size
 ]
 
 

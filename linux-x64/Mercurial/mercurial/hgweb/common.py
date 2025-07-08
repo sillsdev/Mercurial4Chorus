@@ -6,6 +6,7 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
 
 import base64
 import errno
@@ -14,10 +15,6 @@ import os
 import stat
 
 from ..i18n import _
-from ..pycompat import (
-    getattr,
-    open,
-)
 from .. import (
     encoding,
     pycompat,
@@ -222,8 +219,7 @@ def staticfile(templatepath, directory, fname, res):
     path = os.path.join(directory, fpath)
     try:
         os.stat(path)
-        with open(path, b'rb') as fh:
-            data = fh.read()
+        data = util.readfile(path)
     except TypeError:
         raise ErrorResponse(HTTP_SERVER_ERROR, b'illegal filename')
     except OSError as err:

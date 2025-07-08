@@ -5,13 +5,14 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
+
 import functools
 import os
 import pickle
 import re
 
 from mercurial.i18n import _
-from mercurial.pycompat import open
 from mercurial import (
     encoding,
     error,
@@ -148,12 +149,12 @@ def createlog(ui, directory=None, root=b"", rlog=True, cache=None):
 
         # Get the real directory in the repository
         try:
-            with open(os.path.join(b'CVS', b'Repository'), b'rb') as f:
+            with open(os.path.join(b'CVS', b'Repository'), 'rb') as f:
                 prefix = f.read().strip()
             directory = prefix
             if prefix == b".":
                 prefix = b""
-        except IOError:
+        except OSError:
             raise logerror(_(b'not a CVS sandbox'))
 
         if prefix and not prefix.endswith(pycompat.ossep):
@@ -161,8 +162,8 @@ def createlog(ui, directory=None, root=b"", rlog=True, cache=None):
 
         # Use the Root file in the sandbox, if it exists
         try:
-            root = open(os.path.join(b'CVS', b'Root'), b'rb').read().strip()
-        except IOError:
+            root = util.readfile(os.path.join(b'CVS', b'Root')).strip()
+        except OSError:
             pass
 
     if not root:
@@ -195,16 +196,17 @@ def createlog(ui, directory=None, root=b"", rlog=True, cache=None):
     if cache == b'update':
         try:
             ui.note(_(b'reading cvs log cache %s\n') % cachefile)
-            oldlog = pickle.load(open(cachefile, b'rb'))
-            for e in oldlog:
-                if not (
-                    util.safehasattr(e, b'branchpoints')
-                    and util.safehasattr(e, b'commitid')
-                    and util.safehasattr(e, b'mergepoint')
-                ):
-                    ui.status(_(b'ignoring old cache\n'))
-                    oldlog = []
-                    break
+            with open(cachefile, 'rb') as fp:
+                oldlog = pickle.load(fp)
+                for e in oldlog:
+                    if not (
+                        hasattr(e, 'branchpoints')
+                        and hasattr(e, 'commitid')
+                        and hasattr(e, 'mergepoint')
+                    ):
+                        ui.status(_(b'ignoring old cache\n'))
+                        oldlog = []
+                        break
 
             ui.note(_(b'cache has %d log entries\n') % len(oldlog))
         except Exception as e:
@@ -526,7 +528,9 @@ def createlog(ui, directory=None, root=b"", rlog=True, cache=None):
 
             # write the new cachefile
             ui.note(_(b'writing cvs log cache %s\n') % cachefile)
-            pickle.dump(log, open(cachefile, b'wb'))
+
+            with open(cachefile, 'wb') as fp:
+                pickle.dump(log, fp)
         else:
             log = oldlog
 
@@ -636,7 +640,6 @@ def createchangeset(ui, log, fuzz=60, mergefrom=None, mergeto=None):
     files = set()
     c = None
     for i, e in enumerate(log):
-
         # Check if log entry belongs to the current changeset or not.
 
         # Since CVS is file-centric, two different file revisions with
@@ -980,7 +983,6 @@ def debugcvsps(ui, *args, **opts):
     branches = {}  # latest version number in each branch
     ancestors = {}  # parent branch
     for cs in changesets:
-
         if opts[b"ancestors"]:
             if cs.branch not in branches and cs.parents and cs.parents[0].id:
                 ancestors[cs.branch] = (
@@ -1000,22 +1002,18 @@ def debugcvsps(ui, *args, **opts):
             # Note: trailing spaces on several lines here are needed to have
             #       bug-for-bug compatibility with cvsps.
             ui.write(b'---------------------\n')
-            ui.write((b'PatchSet %d \n' % cs.id))
-            ui.write(
-                (
-                    b'Date: %s\n'
-                    % dateutil.datestr(cs.date, b'%Y/%m/%d %H:%M:%S %1%2')
-                )
+            ui.writenoi18n(b'PatchSet %d \n' % cs.id)
+            ui.writenoi18n(
+                b'Date: %s\n'
+                % dateutil.datestr(cs.date, b'%Y/%m/%d %H:%M:%S %1%2')
             )
-            ui.write((b'Author: %s\n' % cs.author))
-            ui.write((b'Branch: %s\n' % (cs.branch or b'HEAD')))
-            ui.write(
-                (
-                    b'Tag%s: %s \n'
-                    % (
-                        [b'', b's'][len(cs.tags) > 1],
-                        b','.join(cs.tags) or b'(none)',
-                    )
+            ui.writenoi18n(b'Author: %s\n' % cs.author)
+            ui.writenoi18n(b'Branch: %s\n' % (cs.branch or b'HEAD'))
+            ui.writenoi18n(
+                b'Tag%s: %s \n'
+                % (
+                    [b'', b's'][len(cs.tags) > 1],
+                    b','.join(cs.tags) or b'(none)',
                 )
             )
             if cs.branchpoints:
@@ -1024,14 +1022,12 @@ def debugcvsps(ui, *args, **opts):
                 )
             if opts[b"parents"] and cs.parents:
                 if len(cs.parents) > 1:
-                    ui.write(
-                        (
-                            b'Parents: %s\n'
-                            % (b','.join([(b"%d" % p.id) for p in cs.parents]))
-                        )
+                    ui.writenoi18n(
+                        b'Parents: %s\n'
+                        % (b','.join([(b"%d" % p.id) for p in cs.parents]))
                     )
                 else:
-                    ui.write((b'Parent: %d\n' % cs.parents[0].id))
+                    ui.writenoi18n(b'Parent: %d\n' % cs.parents[0].id)
 
             if opts[b"ancestors"]:
                 b = cs.branch
@@ -1040,7 +1036,7 @@ def debugcvsps(ui, *args, **opts):
                     b, c = ancestors[b]
                     r.append(b'%s:%d:%d' % (b or b"HEAD", c, branches[b]))
                 if r:
-                    ui.write((b'Ancestors: %s\n' % (b','.join(r))))
+                    ui.writenoi18n(b'Ancestors: %s\n' % (b','.join(r)))
 
             ui.writenoi18n(b'Log:\n')
             ui.write(b'%s\n\n' % cs.comment)
