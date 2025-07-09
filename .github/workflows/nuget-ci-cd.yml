@@ -75,6 +75,7 @@ jobs:
         if-no-files-found: error
 
   build:
+    # Mercurial4Chorus build currently needs Mono, which is no longer available on ubuntu-24.04 GHA image
     runs-on: ubuntu-22.04
     needs: build-python
     steps:
