@@ -65,6 +65,10 @@ jobs:
     - name: Set executable bit on hg and chg binaries before upload
       run: chmod +x hg chg
       working-directory: hg
+    - name: Remove files that cause issues on ASP.NET projects
+      # -f option to rm means it won't fail even if file does not exist
+      run: rm -f contrib/vs2022-settings.json contrib/asv.conf.json
+      working-directory: hg
     - name: Upload Mercurial build results
       uses: actions/upload-artifact@1746f4ab65b179e0ea60a494b83293b640dd5bba # v4.3.2
       with:
