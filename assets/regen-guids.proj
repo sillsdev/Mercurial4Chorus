@@ -1,0 +1,86 @@
+<Project Sdk="Microsoft.NET.Sdk">
+<!-- Reallocates the MSI component GUIDs recorded in the Windows payload's
+     .guidsForInstaller.xml files.
+
+     Those files pin per-file MSI component identities, so a file the new
+     Mercurial adds needs a GUID allocating, while a file it drops keeps its old
+     entry for continuity. They are written by SIL.BuildTasks' MakeWixForDirTree,
+     which writes them into the directory tree it scans, so pointing
+     RootDirectory at the payload updates them in place.
+
+     Chorus drives the same task from the MakeWixForDistFiles target in
+     src/ChorusHub/ChorusHub.csproj, and THAT IS THE SOURCE OF TRUTH for the
+     parameters below: keep them in step. We invoke the task directly rather
+     than building Chorus because Chorus's target carries
+     DependsOnTargets="Compile", which drags in LibChorus and a net462 WinForms
+     build that MakeWixForDirTree does not need, since it only walks a directory.
+
+     Normally driven by build-windows-payload.py. By hand:
+
+         dotnet msbuild assets/regen-guids.proj -restore -t:RegenerateGuids
+
+     SIL.BuildTasks ships only lib/net472, which is why TargetFramework below
+     has to be net472 for restore to succeed. The task assembly itself loads
+     and runs fine under MSBuild on .NET, so plain `dotnet msbuild` works and
+     no full-framework MSBuild.exe is needed (verified against 3.0.0). -->
+
+  <PropertyGroup>
+    <!-- net472 matches the only lib/ the package ships; restore fails NU1202
+         otherwise. Nothing is ever compiled from this project, because
+         RegenerateGuids declares no DependsOnTargets. -->
+    <TargetFramework>net472</TargetFramework>
+    <IsPackable>false</IsPackable>
+    <!-- No sources, and no default globbing over assets/ either. Note
+         UseArtifactsOutput is inherited from Directory.Build.props and must NOT
+         be overridden here: the SDK reads it before the project body, and
+         flipping it late leaves output path properties empty, which makes the
+         default item globs expand to "/**" and enumerate the whole drive
+         (MSB5029). Intermediate output therefore lands under artifacts/. -->
+    <EnableDefaultItems>false</EnableDefaultItems>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Pinned to the version Chorus uses, so GUIDs are allocated identically.
+         The UsingTask for MakeWixForDirTree comes from this package's own
+         build/SIL.BuildTasks.props, which NuGet imports automatically. -->
+    <PackageReference Include="SIL.BuildTasks" Version="3.0.0" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <RepoRoot>$(MSBuildThisFileDirectory)..\</RepoRoot>
+    <PayloadDir Condition="'$(PayloadDir)'==''">$(RepoRoot)win\Mercurial</PayloadDir>
+    <!-- MakeWixForDirTree insists on writing a .wxs. Only the GUID files matter
+         here; Chorus keeps its own copy under src/Installer/ and regenerates it
+         there. build/ is gitignored. -->
+    <WxsOutputPath Condition="'$(WxsOutputPath)'==''">$(RepoRoot)build\wxs\GeneratedMercurial.wxs</WxsOutputPath>
+  </PropertyGroup>
+
+  <Target Name="RegenerateGuids">
+    <Error Condition="!Exists('$(PayloadDir)')"
+           Text="No payload at $(PayloadDir). Build it first." />
+
+    <MakeDir Directories="$([System.IO.Path]::GetDirectoryName('$(WxsOutputPath)'))" />
+
+    <!-- DirectoryReferenceId and ComponentGroupId are load-bearing: File Ids are
+         derived from DirectoryReferenceId, as in mercurial.lib.dulwich._pack.pyd,
+         so changing it appends a whole parallel set of Ids under fresh GUIDs and
+         breaks installer upgrade continuity. Copy Chorus's values verbatim.
+
+         The excluded files are the two that the SIL.Chorus.Mercurial targets
+         rewrite during a consumer's build; they must not become components.
+
+         MercurialExtensions is deliberately not scanned. It is not part of this
+         payload, its GUIDs only move when the extension files themselves change,
+         and its .guidsForInstaller.xml already carries a legacy unprefixed Id
+         scheme that a fresh run would silently append a second set to. -->
+    <MakeWixForDirTree
+      DirectoryReferenceId="mercurial"
+      ComponentGroupId="Mercurial"
+      RootDirectory="$(PayloadDir)"
+      OutputFilePath="$(WxsOutputPath)"
+      IgnoreRegExPattern="IGNOREME|\.gitignore"
+      Exclude="$(PayloadDir)\mercurial.ini;$(PayloadDir)\default.d\cacerts.rc"
+      MatchRegExPattern=".*" />
+  </Target>
+
+</Project>

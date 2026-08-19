@@ -24,3 +24,6 @@ To release a nuget package:
 dotnet pack /p:PreRelease=.
 dotnet nuget push artifacts/package/release/*.nupkg --source https://api.nuget.org/v3/index.json --api-key INSERT_NUGET_API_KEY_HERE
 ```
+
+See [README-Windows.md](/README-Windows.md) for tips on updating the `win/Mercurial` folder.
+The `linux-x64/Mercurial` folder is updated by GitHub Actions CI.
