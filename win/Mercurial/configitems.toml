@@ -172,6 +172,16 @@ default = false
 
 [[items]]
 section = "commands"
+name = "commit.report-head-changes"
+default = true
+experimental = true
+documentation = """
+When true (the default) commit reports creation of new named-branch's heads, or
+reopening of closed one.
+"""
+
+[[items]]
+section = "commands"
 name = "grep.all-files"
 default = false
 experimental = true
@@ -495,11 +505,30 @@ default = false
 
 [[items]]
 section = "devel"
+name = "debug.abort-transaction"
+default = ""
+documentation = """If set to one of the listed values, all transactions will
+abort. This is used to test transaction rollback and recovery. Possible values:
+- ``abort-post-finalize``: abort the transaction normally after finalization but
+  before closing the transaction, causing a rollback
+- ``kill-9-post-finalize``: like abort-post-finalize but kill the process with
+  SIGKILL (9), leaving an abandoned transaction on disk
+"""
+
+[[items]]
+section = "devel"
 name = "debug.abort-update"
 default = false
 documentation = """If true, then any merge with the working copy, \
 e.g. [hg update], will be aborted after figuring out what needs to be done, \
 but before spawning the parallel worker."""
+
+[[items]]
+section = "devel"
+name = "update.abort-on-dirstate-change"
+default = false
+documentation = """If true, then the dirstate state changes during an update \
+ will abort."""
 
 [[items]]
 section = "devel"
@@ -593,6 +622,27 @@ documentation = "Controls the initial size of the discovery for initial change."
 
 [[items]]
 section = "devel"
+name = "fileindex.vacuum-mode"
+default = "auto"
+experimental = true
+documentation = """Controls when to vacuum the file index tree file.
+Possible values:
+- ``auto`` (default): vacuum based on storage.fileindex.max-unused-percentage
+- ``never``: never vacuum
+- ``always``: always vacuum when writing the file index
+This config only has an effect if the operation writes the file index. For
+example, a commit that adds no files will never vacuum, even with ``always``.
+"""
+
+[[items]]
+section = "devel"
+name = "fileindex.garbage-timestamp"
+experimental = true
+documentation = """Controls the timestamp used when the file index creates a new
+garbage entry. When unset, the current time is used."""
+
+[[items]]
+section = "devel"
 name = "legacy.exchange"
 default-type = "list_type"
 
@@ -668,6 +718,15 @@ name = 'sync.dirstate.pre-read-file-timeout'
 default=20
 
 [[items]]
+section = 'devel'
+name = 'sync.fileindex.pre-read-data-files'
+
+[[items]]
+section = 'devel'
+name = 'sync.fileindex.pre-read-data-files-timeout'
+default = 20
+
+[[items]]
 section = "devel"
 name = "user.obsmarker"
 
@@ -692,7 +751,10 @@ default = false
 section = "diff"
 name = "merge"
 default = false
-experimental = true
+documentation = """Show a "merge diff" instead of defaulting to a diff against
+the working directory's first parent. A "merge diff" will diff against the
+conflict regions in the merge, which is very useful to make sense of what
+the merge commit itself has done."""
 
 [[items]]
 section = "email"
@@ -735,9 +797,7 @@ name = "auto-publish"
 default = "publish"
 
 
-# The current implementation of the filtering/injecting of topological heads is
-# naive and need proper benchmark and optimisation because we can envision
-# moving the the v3 of the branch-cache format out of experimental
+# Kept around for a few version in case it need to be disabled quickly
 [[items]]
 section = "experimental"
 name = "branch-cache-v3"
@@ -810,12 +870,12 @@ name = "bundlecompthreads.zstd"
 
 [[items]]
 section = "experimental"
-name = "changegroup3"
-default = true
+name = "changegroup4"
+default = false
 
 [[items]]
 section = "experimental"
-name = "changegroup4"
+name = "changegroup5"
 default = false
 
 # might remove rank configuration once the computation has no impact
@@ -1248,6 +1308,55 @@ name = "exp-use-copies-side-data-changeset"
 default = false
 experimental = true
 
+# Experimental feature TODO:
+#
+# The format is now frozen, but the feature is worth a bit more attention.
+#
+# * checking the performance without rust
+# * easily accessible fast upgrade
+# * updated delta strategie if relevant
+[[items]]
+section = "format"
+name = "use-delta-info-flags"
+default = false
+experimental = true
+documentation = """Store more information through flags in the revlog's index.
+
+These flags allow for more efficient data access, data exchange and
+data storage in general.
+
+In particular, one can expect better performance for the following categories of
+commands for repositories using this format can expect better performance than
+ones using older formats:
+
+- `hg status --copies --rev X`
+- `hg diff`
+- `hg merge`
+- `hg clone`
+- `hg pull`
+- `hg push`
+- `hg unbundle`
+"""
+
+# This will never get out of experimental and will be removed once the fileindex
+# is able to cover this usecase.
+[[items]]
+section = "format"
+name = "exp-use-very-fragile-and-unsafe-plain-store-encoding"
+experimental = true
+documentation = """Switch to an extremely simplified version of the store encoding used for filelogs.
+
+It only ensures that directories and filenames cannot collide. Any other filename
+weirdness is preserved as-is. This should not be used outside of specific
+server setups and it is very unlikely that you need it at all. If you think you
+should use it, please contact the Mercurial core developers.
+
+This feature currently implies the use of `store` and `fncache`. It is
+incompatible with the use of `dotencode`, so make sure you set `format.dotencode=no`.
+
+This is an experimental feature and its support might be removed in the future.
+"""
+
 [[items]]
 section = "format"
 name = "generaldelta"
@@ -1285,32 +1394,59 @@ default = true
 section = "format"
 name = "use-dirstate-tracked-hint"
 default = false
-experimental = true
+documentation = """Enable or disable the writing of "tracked key" file alongside
+the dirstate. (default to disabled)
+
+That "tracked-hint" can help external automations to detect changes to
+the set of tracked files. (i.e the result of 'hg files' or 'hg status
+-macd')
+
+The tracked-hint is written in a new '.hg/dirstate-tracked-hint'. That
+file contains two lines: - the first line is the file version
+(currently: 1), - the second line contains the "tracked-hint". That
+file is written right after the dirstate is written.
+
+The tracked-hint changes whenever the set of file tracked in the
+dirstate changes. The general idea is: - if the hint is identical, the
+set of tracked file SHOULD be identical, - if the hint is different,
+the set of tracked file MIGHT be different.
+
+The "hint is identical" case uses 'SHOULD' as the dirstate and the
+hint file are two distinct files and therefore that cannot be read or
+written to in an atomic way. If the key is identical, nothing
+garantees that the dirstate is not updated right after the hint file.
+This is considered a negligible limitation for the intended usecase.
+It is actually possible to prevent this race by taking the repository
+lock during read operations.
+
+They are two "ways" to use this feature:
+
+1) monitoring changes to the '.hg/dirstate-tracked-hint', if the file
+changes, the tracked set might have changed.
+
+2) storing the value and comparing it to a later value.
+"""
 
 [[items]]
 section = "format"
 name = "use-dirstate-tracked-hint.automatic-upgrade-of-mismatching-repositories"
 default = false
-experimental = true
 
 [[items]]
 section = "format"
 name = "use-dirstate-tracked-hint.automatic-upgrade-of-mismatching-repositories:quiet"
 default = false
-experimental = true
 
 [[items]]
 section = "format"
 name = "use-dirstate-tracked-hint.version"
 default = 1
-experimental = true
 
 [[items]]
 section = "format"
 name = "use-dirstate-v2"
 default = false
 alias = [["format", "exp-rc-dirstate-v2"]]
-experimental = true
 documentation = """Enables dirstate-v2 format *when creating a new repository*.
 Which format to use for existing repos is controlled by `.hg/requires`."""
 
@@ -1360,6 +1496,26 @@ experimental = true
 section = "format"
 name = "usefncache"
 default = true
+
+# Experimental todo's
+# - fix the windows mmap limitation?
+[[items]]
+section = "format"
+name = "use-fileindex-v1"
+default = false
+experimental = true
+documentation = """Use the `file-index` to store the set of files tracked in the
+repository store and efficiently manipulate these filenames.
+
+This format supersedes the `fncache` and is incompatible with it. The
+`file-index` provides overall improved performance especially when adding
+new files and more flexibility that other features rely on.
+
+This format impacts internal implementation details for the `store` and will not
+affect how a repository interracts with other repositories. It has no effect on
+the core information stored within the repository and doesn't affect the
+wire prototocol (neither at the changegroup nor stream clone level).
+"""
 
 [[items]]
 section = "format"
@@ -1810,6 +1966,21 @@ name = "output"
 
 [[items]]
 section = "profiling"
+name = "output-dir"
+documentation = """Directory in which profiling data or report should \
+be saved. The data will be written to a file with the naming scheme \
+"hg-profile-{TIMESTAMP}-{PID}.prof". If both ``output`` and ``output-dir`` \
+are specified, ``output`` will take precedence.
+"""
+
+[[items]]
+section = "profiling"
+name = "output-dir:create"
+default = false
+documentation = "Create output-dir if it doesn't already exist."
+
+[[items]]
+section = "profiling"
 name = "showmax"
 default = 0.999
 
@@ -1996,6 +2167,18 @@ default = true
 experimental = true
 documentation = """Whether to use the Rust fast-path when an update from null
 is detected. This config item is here to help users disable the fastpath in
+case one of their extensions is interfering with the update code. If you are
+one of these people, please reach out.
+"""
+
+[[items]]
+section = "rust"
+name = "update-from-clean"
+default = true
+experimental = true
+documentation = """Whether to use the Rust fast-path when an update from clean
+is detected. An update is "from clean" if no tracked files are affected.
+This config item is here to help users disable the fastpath in
 case one of their extensions is interfering with the update code. If you are
 one of these people, please reach out.
 """
@@ -2220,11 +2403,38 @@ See the individual "storage.*.slow-path" configs for details. These options can
 override the default.
 """
 
+
+[[items]]
+section = "storage"
+name = "delta-fold-estimate"
+default = "when-fast"
+experimental = true
+documentation = """Whenever possible use delta folding to estimate the size of
+a delta before computing it.
+
+Acceptable value:
+- always: always use
+- when-fast: use only if a fast implementation is available (default)
+- never: never use
+"""
+
+[[items]]
+section = "storage"
+name = "delta-fold-tolerance-percentage"
+default = 5
+experimental = true
+documentation = """The maximum extra size allowed when using folding. The value
+is expressed in percentage (5 means up to 105% of the original size, 50 means
+150% of the original size.)
+
+Negative value disable the use of delta folding.
+(the delta folding usage is only used for revlog using te delta-info-flags feature).
+"""
+
 [[items]]
 section = "storage"
 name = "dirstate-v2.slow-path"
 default = "default"
-experimental = true  # experimental as long as format.use-dirstate-v2 is.
 documentation = """Control the behavior of Mercurial when using a repository with the "dirstate-v2"
 feature with an installation of Mercurial without a fast implementation for
 the feature:
@@ -2253,6 +2463,24 @@ experimental = true
 section = "storage"
 name = "revlog.delta-parent-search.candidate-group-chunk-size"
 default = 20
+
+[[items]]
+section = "storage"
+name = "revlog.exchange-compressed-delta"
+default = true
+experimental = true
+documentation = """Controls whether the repository might emit or request
+compressed deltas in bundles.
+
+Exchanging deltas in their compressed form results in larger bundles and higher
+bandwidth usage, but reduces CPU usage on both ends and helps the main server
+to use agressive compression levels to share that benefit with ordinary clients
+pulling from them.
+
+Even when activated, the exchange of compressed deltas will only be used if the
+exchange uses a changegroup format that supports it (04 and above) and the
+receiving end supports it.
+"""
 
 [[items]]
 section = "storage"
@@ -2307,6 +2535,63 @@ section = "storage"
 name = "revlog.reuse-external-delta-parent"
 documentation = """This option is true unless `format.generaldelta` is set."""
 
+
+[[items]]
+section = "storage"
+name = "revlog.reuse-external-suspicious-delta-parent"
+default = false
+# This should likely be merged into `paths.*:pulled-delta-reuse-policy` instead
+# of existing on its own.
+experimental = true
+documentation = """When false, ignored suggested delta-parent if it does not
+seems to match an optimal base or a snapshot. Only apply to repository
+supporting sparse-revlog"""
+
+[[items]]
+section = "storage"
+name = "revlog.reuse-external-delta-compression"
+default = true
+documentation = """When true, reuse the compression of incoming deltas
+when receiving a compressed delta if its compression type is compatible
+with the one used by the revlog.
+"""
+
+[[items]]
+section = "storage"
+name = "revlog.record-delta-quality"
+default = true
+experimental = true
+documentation = """When set, record information about the quality of the stored
+delta compared to the delta we could obtain from the parent.
+
+Only affects revlogs using a format capable of storing such information (like a
+revlog using delta-info-flags).
+"""
+
+[[items]]
+section = "storage"
+name = "revlog.validate-delta-base"
+default = false
+documentation = """Validate the integrity of bases when computing deltas.
+
+Since the base of reused deltas is not validated either, we recommend using the
+`server.validate` option if you want to guarantee the integrity of inbound
+content."""
+experimental = true
+
+[[items]]
+section = "storage"
+name = "filelog.expected-max-compression-ratio"
+# Arbitrary value picked to help the delta searching algorithme, there might be
+# some data where compression works better, but 10 seems like a reasonably high
+# value that will help filter some cases.
+default = 10
+documentation = """the expected maximum compression ratio expected for a
+filelog. This is used to estimate the size of a delta before compressing it.
+
+Setting this to 0 will disable the use of such estimate."""
+experimental = true
+
 [[items]]
 section = "storage"
 name = "revlog.zlib.level"
@@ -2314,6 +2599,47 @@ name = "revlog.zlib.level"
 [[items]]
 section = "storage"
 name = "revlog.zstd.level"
+
+[[items]]
+section = "storage"
+name = "fileindex.max-unused-percentage"
+default = 50
+experimental = true
+documentation = """Maximum percentage of unreachable bytes / total bytes in the
+file index tree file. When this is exceeded, the tree is vacuumed."""
+
+[[items]]
+section = "storage"
+name = "fileindex.gc-retention-seconds"
+default = 86400
+experimental = true
+documentation = """File index garbage collection retention period in seconds.
+When the file index needs to rewrite one of its internal data files, it chooses
+a new filename and leaves the old file on disk. That old file will be eligible
+for garbage collection once the retention period has elapsed and a sufficient
+number of transactions have occurred.
+
+As a special case, if it is set to 0, then garbage collection is based solely on
+the number of transactions and is not influenced by the current time.
+"""
+
+[[items]]
+section = "storage"
+name = "fileindex.slow-path"
+default = "default"
+experimental = true  # experimental as long as format.use-fileindex-v1 is.
+documentation = """Control the behavior of Mercurial when using a repository
+with the "fileindex-v1" feature with an installation of Mercurial without a fast
+implementation for the feature:
+
+``allow``: Silently use the slower implementation to access the repository.
+``warn``: Warn, but use the slower implementation to access the repository.
+``default``: use value from the `storage.all-slow-path` value.
+``abort``: Prevent access to such repositories. (This is the default)
+
+For details on the "fileindex-v1" feature, see:
+:hg:`help config.format.use-fileindex-v1`.
+"""
 
 [[items]]
 section = "subrepos"
@@ -2693,6 +3019,20 @@ Currently recognised values are:
 - low:     reduces memory usage when possible at the cost of overall performance.
 """
 
+
+[[items]]
+section = "usage"
+name = "resources.bandwidth"
+default = "default"
+documentation = """How aggressive Mercurial can be in terms of bandwidth usage:
+
+Currently recognised values are:
+- default: the default value, inherits the value from `usage.resources`,
+- high:    allows for more aggressive bandwidth usage to improve overall performance,
+- medium:  aims at a moderate bandwidth usage,
+- low:     reduces bandwidth usage when possible at the cost of overall performance.
+"""
+
 [[items]]
 section = "verify"
 name = "skipflags"
@@ -2956,14 +3296,6 @@ section = "worker"
 name = "numcpus"
 
 
-# experimental until we are happy with the implementation and some sanity
-# checking has been done.
-#
-# At the time of the 7.0 freeze, the threaded code is faster is some case and
-# slower in some other. So it is not ready to be installed by default.
-#
-# The correct number of writers is hard to adjust as it strongly depends of the
-# OS, disk setup and number of CPU. so more tuning is needed.
 [[items]]
 section = "worker"
 name = "parallel-stream-bundle-processing"
@@ -2971,22 +3303,24 @@ default = false
 documentation="""
 Read, parse and write stream bundle in parallel speeding up the process.
 
+Also see `worker.parallel-stream-bundle-processing.memory-target` to control
+the memory usage of the buffers.
+
 Also see `worker.parallel-stream-bundle-processing.num-writer` to control the
 amount of concurrent writers.
 """
-experimental = true
 
 [[items]]
 section = "worker"
 name = "parallel-stream-bundle-processing.num-writer"
 default = 0
-experimental = true
 documentation="""
 Control the number of file being written concurrently when applying a stream
 bundle.
 
 When set to 0, the default, the value used depends on the value of the
 `usage.resources.cpu` configuration:
+
 - low:    1 writer
 - medium: 4 writers (default)
 - high:   8 writers
@@ -2996,14 +3330,15 @@ When set to 0, the default, the value used depends on the value of the
 section = "worker"
 name = "parallel-stream-bundle-processing.memory-target"
 default = 0
-experimental = true
 documentation="""Limit memory usage around this value. This is not a hard target a Mercurial will use a bit more, but this reduce the amount of buffered stream content that we read ahead.
 
 If set to a negative value, the amount of memory used will not be restricted.
 
-When set to 0, the default value depends on the `usage.resources.memory` value.
-- low:    100 MB,
-- medium: 500 MB,
+When set to 0, the default value depends on the value of the
+`usage.resources.memory` configuration:
+
+- low:    100 MB
+- medium: 500 MB (default)
 - high:     2 GB
 """
 
