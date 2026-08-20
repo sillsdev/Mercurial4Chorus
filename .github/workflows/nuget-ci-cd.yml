@@ -106,16 +106,8 @@ jobs:
         echo "PackageVersion=${{ needs.build-python.outputs.mercurial-version }}${RELEASE_SUFFIX}${{github.run_number}}"
         echo "PackageVersion=${{ needs.build-python.outputs.mercurial-version }}${RELEASE_SUFFIX}${{github.run_number}}" >> $GITHUB_ENV
 
-    - name: Clear the committed Linux payload before downloading the new one
-      # download-artifact overlays the directory rather than replacing it, so a
-      # file a newer Mercurial stops shipping would otherwise survive from the
-      # committed copy and end up in the package. mercurial.ini is ours rather
-      # than Mercurial's, and is the only file here the artifact does not carry.
-      run: |
-        mv linux-x64/Mercurial/mercurial.ini linux-x64/
-        rm -rf linux-x64/Mercurial
-        mkdir -p linux-x64/Mercurial
-        mv linux-x64/mercurial.ini linux-x64/Mercurial/
+    - name: Ensure build-only README.md does not get included in build
+      run: rm -f linux-x64/Mercurial/README.md
 
     - name: Download Mercurial builds
       uses: actions/download-artifact@v4
