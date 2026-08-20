@@ -44,7 +44,7 @@ jobs:
     - name: Install Python setuptools
       run: pip install setuptools
     - name: Checkout Mercurial
-      run: hg clone https://repo.mercurial-scm.org/hg
+      run: hg clone https://foss.heptapod.net/mercurial/mercurial-devel hg
     - name: Checkout hg version to build
       run: hg checkout "${VER}"
       working-directory: hg
