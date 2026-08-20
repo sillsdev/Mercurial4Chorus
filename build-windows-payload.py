@@ -2,9 +2,10 @@
 """Rebuild win/Mercurial by building TortoiseHg from source.
 
 MUST BE RUN ON WINDOWS for the build itself -- it drives py2exe through
-TortoiseHg's own packaging code, which needs MSVC and a Python 3.9 x64
-interpreter. The staging step afterwards is plain file copying and runs
-anywhere, which is what --from-stage exists for.
+TortoiseHg's own packaging code, which needs MSVC, a Python 3.9 x64
+interpreter, a POSIX make, and (since Mercurial 7.2) uv, which its `make local`
+target now uses in place of venv and pip. The staging step afterwards is plain
+file copying and runs anywhere, which is what --from-stage exists for.
 
 Why TortoiseHg and not Mercurial: TortoiseHg's Windows build is py2exe, which
 puts the whole pure-Python tree into a single lib/library.zip and leaves a flat
@@ -28,9 +29,10 @@ Usage::
     py -3 build-windows-payload.py --from-stage DIR      # reuse an existing staging tree
 
 The payload is assembled from the staging tree TortoiseHg's own
-stage_install() produces, which is also exactly what its MSI is built from, so
---from-stage can be pointed at an MSI extracted with `msiexec /a` to check the
-selection rules without running a build.
+stage_install() produces. Its MSI is built from that same tree through a WiX
+allowlist, so the tree is a superset of the MSI -- see DROP_FILES -- but close
+enough that --from-stage can be pointed at an MSI extracted with `msiexec /a`
+to check the selection rules without running a build.
 """
 
 from __future__ import annotations
@@ -45,10 +47,21 @@ import subprocess
 import sys
 import tempfile
 
-# TortoiseHg 7.0.1 bundled these. Pinning keeps a rebuild honest; pass --hg-tag
-# and --evolve-rev to move them.
-DEFAULT_HG_TAG = "7.0.1"
-DEFAULT_EVOLVE_REV = "62f31db54459"
+# What TortoiseHg 7.2.2 bundles. Upstream defaults both of these to a moving
+# branch, so both have to change for a different TortoiseHg tag; pass --hg-tag
+# and --evolve-rev to override without editing.
+#
+# The Mercurial tag tracks the TortoiseHg tag: mercurial/__version__.pyc inside
+# the 7.0.1 MSI's library.zip reads 7.0.1.
+#
+# The evolve revision is whatever evolve's stable branch held on the TortoiseHg
+# release date -- 2026-06-12 for 7.2.2, when stable was at the 12.0.0 tag.
+# Do NOT read it out of extension-versions.txt in the MSI. That file is
+# hand-maintained in thg-winbuild and has claimed evolve 10.5.1 since 2022,
+# while hgext3rd/evolve/metadata.pyc in the same 7.0.1 MSI reads 11.1.8. Only
+# metadata.pyc is evidence, and only for a release that already has an MSI.
+DEFAULT_HG_TAG = "7.2.2"
+DEFAULT_EVOLVE_REV = "12.0.0"
 
 PRESERVE = [
     "mercurial.ini",
@@ -104,6 +117,16 @@ DROP_ROOT_FILES = [
 # ThgShellx86.dll on x86, and the x64 installer ships both), so match the stem.
 DROP_ROOT_PREFIXES = ["ThgShell"]
 
+# Exact paths the staging tree holds that the MSI does not, and that therefore
+# no payload has ever shipped. The rules above were derived from the MSI, which
+# is built from a WiX allowlist rather than from the staging tree, so the tree
+# is the wider of the two; thgpackaging/py2exe.py stages contrib/mq.el with the
+# comment "not in thg/contrib.wsx". Everything else the allowlist leaves out
+# lands in doc/, i18n/ or helptext/, which DROP_DIRECTORIES already covers.
+DROP_FILES = [
+    "contrib/mq.el",
+]
+
 # Whole directories: the Qt plugin trees, TortoiseHg's icons and translations,
 # and the Mercurial data files Chorus has never shipped. templates/ and
 # helptext/ only matter for `hg log --style=X` and `hg help`; Chorus passes
@@ -151,6 +174,8 @@ STAGE_RENAMES = {
 
 def is_dropped(relative: str) -> bool:
     """Should this staging-tree path be left out of the payload?"""
+    if relative in DROP_FILES:
+        return True
     head = relative.split("/")[0]
     if head in DROP_DIRECTORIES:
         return True

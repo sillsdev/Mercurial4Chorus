@@ -32,8 +32,8 @@ by hand if you prefer.
    is importable from that interpreter's `site-packages`, because it would shadow the copy being
    bundled, and aborts with `Error: ... overrides included package 'mercurial'`.
 
-2. **`make` plus a POSIX userland.** Mercurial's `make local` target calls `env`, and its Makefile
-   also uses `rm`, `cp`, `test` and `find`, so a bare `make.exe` is not enough.
+2. **`make` plus a POSIX userland.** Mercurial's `make local` target calls `env`, `test` and
+   `ln`, and its Makefile also uses `rm`, `cp` and `find`, so a bare `make.exe` is not enough.
 
    ```powershell
    winget install MSYS2.MSYS2
@@ -44,7 +44,27 @@ by hand if you prefer.
    `C:\Program Files\Git\usr\bin` but has no `make`, so adding just `make` on top of that works
    too.)
 
-3. **Visual Studio Build Tools**, with the C++ workload — MSVC and the Windows SDK. Mercurial's C
+3. **`uv`.** Since Mercurial 7.2, `make local` builds through `uv venv` and `uv pip install`
+   rather than `venv` and `pip`, and fails outright without it.
+
+   ```powershell
+   winget install astral-sh.uv
+   ```
+
+   Then check `uv --version` **in the shell you will launch the build from**. An installer's `PATH`
+   edit does not reach shells that are already open: winget drops a shim into
+   `%LOCALAPPDATA%\Microsoft\WinGet\Links`, which is only already on `PATH` if you had used
+   winget before this shell started. To avoid opening a new one:
+
+   ```powershell
+   $env:Path = [Environment]::GetEnvironmentVariable('Path','Machine') + ';' +
+               [Environment]::GetEnvironmentVariable('Path','User')
+   ```
+
+   Mercurial's own `contrib/install-windows-dependencies.ps1` also installs `uv`, but only in
+   versions from 7.2 on — the 7.0.1 copy of that script predates the change.
+
+4. **Visual Studio Build Tools**, with the C++ workload — MSVC and the Windows SDK. Mercurial's C
    extensions are compiled during the build, and the packaging code shells out to `vswhere.exe`,
    `vcvars*.bat` and `dumpbin.exe`.
 
@@ -54,26 +74,26 @@ by hand if you prefer.
 
    Then add *Desktop development with C++* in the Visual Studio Installer.
 
-4. **Mercurial itself**, as a standalone program on `PATH` — the build clones five repositories
+5. **Mercurial itself**, as a standalone program on `PATH` — the build clones five repositories
    and runs `hg purge` and `hg archive`.
 
    ```powershell
    winget install Mercurial.Mercurial
    ```
 
-5. **.NET SDK**, for the installer-GUID step. Skip if you always pass `--no-regen-guids`.
+6. **.NET SDK**, for the installer-GUID step. Skip if you always pass `--no-regen-guids`.
 
    ```powershell
    winget install Microsoft.DotNet.SDK.8
    ```
 
-6. **A TortoiseHg checkout beside this one**, which is where `--thg-source` defaults to:
+7. **A TortoiseHg checkout beside this one**, which is where `--thg-source` defaults to:
 
    ```powershell
    hg clone https://foss.heptapod.net/mercurial/tortoisehg/thg ..\thg
    ```
 
-7. **Network access.** The build clones Mercurial, evolve, thg-shellext and thg-winbuild into
+8. **Network access.** The build clones Mercurial, evolve, thg-shellext and thg-winbuild into
    `..\thg\dependencies`, downloads gettext, and pip-installs PyQt5, py2exe and the rest from
    TortoiseHg's hash-pinned requirements.
 
@@ -84,21 +104,26 @@ that would need the first two, because the payload does not ship documentation.
 ## Building
 
 ```powershell
-py -3.9 build-windows-payload.py --tag 7.0.1
+py -3.9 build-windows-payload.py --tag 7.2.2
 ```
 
 `--tag` is the TortoiseHg tag to build. `--hg-tag` and `--evolve-rev` say which Mercurial and
-evolve to bundle; they default to what TortoiseHg 7.0.1 shipped, so **both need setting for any
+evolve to bundle; they default to what TortoiseHg 7.2.2 bundles, so **both need setting for any
 other tag**:
 
 ```powershell
-py -3.9 build-windows-payload.py --tag 7.2.2 --hg-tag 7.2.2 --evolve-rev <changeset>
+py -3.9 build-windows-payload.py --tag 7.3 --hg-tag 7.3 --evolve-rev <tag-or-changeset>
 ```
 
-The reliable source for a release's evolve changeset is the `extension-versions.txt` inside that
-release's official MSI. Expect the build to take tens of minutes; `--no-regen-guids` skips the
-only step needing the .NET SDK, and `--from-stage DIR` skips the build entirely and assembles the
-payload from an existing staging tree, which is much faster when iterating on the selection rules.
+The Mercurial tag tracks the TortoiseHg tag. For evolve, take whatever evolve's `stable` branch
+held on the TortoiseHg release date — TortoiseHg's release build passes `stable`, and evolve
+tags rarely enough that this is usually just the newest tag before that date. Do **not** use the
+`extension-versions.txt` inside the official MSI: it is a hand-maintained file in thg-winbuild,
+unchanged since 2022, and every MSI since then misreports evolve as 10.5.1.
+
+Expect the build to take tens of minutes; `--no-regen-guids` skips the only step needing the .NET
+SDK, and `--from-stage DIR` skips the build entirely and assembles the payload from an existing
+staging tree, which is much faster when iterating on the selection rules.
 
 ## After the build
 
@@ -110,6 +135,8 @@ payload from an existing staging tree, which is much faster when iterating on th
 
 2. Read the summary the script prints. `0 added, 0 removed` at the same tag is what you want; any
    added file at a new tag deserves a look, since a new TortoiseHg GUI file would show up there.
+   Read the list of newly allocated GUIDs too: an id that resembles a file the payload already has,
+   under a different name, is a rename that has just been handed a second installer identity.
 
 3. Stage it, remembering the hidden GUID files:
 

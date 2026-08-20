@@ -22,7 +22,7 @@ jobs:
     strategy:
       matrix:
         mercurial-version:
-          - "7.0.1"
+          - "7.2.2"
         python-version:
           - "3.9"
           - "3.10"
@@ -53,6 +53,10 @@ jobs:
     - name: Build chg
       run: make
       working-directory: hg/contrib/chg
+    - name: Install uv
+      # Since Mercurial 7.2, `make local` builds through `uv venv` and
+      # `uv pip install` rather than venv and pip, and fails without uv.
+      uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
     - name: Build Mercurial
       run: make local
       working-directory: hg
@@ -101,6 +105,17 @@ jobs:
       run: |
         echo "PackageVersion=${{ needs.build-python.outputs.mercurial-version }}${RELEASE_SUFFIX}${{github.run_number}}"
         echo "PackageVersion=${{ needs.build-python.outputs.mercurial-version }}${RELEASE_SUFFIX}${{github.run_number}}" >> $GITHUB_ENV
+
+    - name: Clear the committed Linux payload before downloading the new one
+      # download-artifact overlays the directory rather than replacing it, so a
+      # file a newer Mercurial stops shipping would otherwise survive from the
+      # committed copy and end up in the package. mercurial.ini is ours rather
+      # than Mercurial's, and is the only file here the artifact does not carry.
+      run: |
+        mv linux-x64/Mercurial/mercurial.ini linux-x64/
+        rm -rf linux-x64/Mercurial
+        mkdir -p linux-x64/Mercurial
+        mv linux-x64/mercurial.ini linux-x64/Mercurial/
 
     - name: Download Mercurial builds
       uses: actions/download-artifact@v4

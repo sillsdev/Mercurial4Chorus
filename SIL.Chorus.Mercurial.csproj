@@ -8,7 +8,7 @@
     <teamcity_agent_home_dir Condition="'$(teamcity_agent_home_dir)'=='' And '$(OS)'!='Windows_NT'">/var/lib/TeamCity/agent</teamcity_agent_home_dir>
     <BuildCounter Condition="'$(BuildCounter)' == ''">0</BuildCounter>
     <PreRelease Condition="'$(PreRelease)' == ''">-beta.</PreRelease>
-    <MercurialVersion Condition="'$(MercurialVersion)' == ''">7.0.1</MercurialVersion>
+    <MercurialVersion Condition="'$(MercurialVersion)' == ''">7.2.2</MercurialVersion>
     <PackageVersion Condition="'$(PackageVersion)' == ''">$(MercurialVersion)$(PreRelease)$(BuildCounter)</PackageVersion>
   </PropertyGroup>
 
@@ -32,6 +32,8 @@ v3.0.3: Allow specifying an alternate destination directory using `Mercurial4Cho
 v6.5.1: Upgrade to Mercurial 6.5.1
 
 v7.0.1: Upgrade to Mercurial 7.0.1 and remove requirement to depend directly on this package (just depend on Chorus or LibChorus)
+
+v7.2.2: Upgrade to Mercurial 7.2.2
     </PackageReleaseNotes>
     <PackageReadme>docs\README.md</PackageReadme>
   </PropertyGroup>
