@@ -1,4 +1,4 @@
-class CBORTag(object):
+class CBORTag:
     """
     Represents a CBOR semantic tag.
 
@@ -21,7 +21,7 @@ class CBORTag(object):
         return 'CBORTag({self.tag}, {self.value!r})'.format(self=self)
 
 
-class CBORSimpleValue(object):
+class CBORSimpleValue:
     """
     Represents a CBOR "simple value".
 
@@ -46,7 +46,7 @@ class CBORSimpleValue(object):
         return 'CBORSimpleValue({self.value})'.format(self=self)
 
 
-class UndefinedType(object):
+class UndefinedType:
     __slots__ = ()
 
 

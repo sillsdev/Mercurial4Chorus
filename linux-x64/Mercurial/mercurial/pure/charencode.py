@@ -5,13 +5,14 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
 
 import array
 
 from .. import pycompat
 
 
-def isasciistr(s):
+def isasciistr(s: bytes) -> bool:
     try:
         s.decode('ascii')
         return True
@@ -19,7 +20,7 @@ def isasciistr(s):
         return False
 
 
-def asciilower(s):
+def asciilower(s: bytes) -> bytes:
     """convert a string to lowercase if ASCII
 
     Raises UnicodeDecodeError if non-ASCII characters are found."""
@@ -27,7 +28,7 @@ def asciilower(s):
     return s.lower()
 
 
-def asciiupper(s):
+def asciiupper(s: bytes) -> bytes:
     """convert a string to uppercase if ASCII
 
     Raises UnicodeDecodeError if non-ASCII characters are found."""
@@ -52,7 +53,7 @@ _paranoidjsonmap[0x3E] = b'\\u003e'  # '>'
 _jsonmap.extend(pycompat.bytechr(x) for x in range(128, 256))
 
 
-def jsonescapeu8fast(u8chars, paranoid):
+def jsonescapeu8fast(u8chars: bytes, paranoid: bool) -> bytes:
     """Convert a UTF-8 byte string to JSON-escaped form (fast path)
 
     Raises ValueError if non-ASCII characters have to be escaped.
@@ -70,7 +71,7 @@ def jsonescapeu8fast(u8chars, paranoid):
 _utf8strict = r'surrogatepass'
 
 
-def jsonescapeu8fallback(u8chars, paranoid):
+def jsonescapeu8fallback(u8chars: bytes, paranoid: bool) -> bytes:
     """Convert a UTF-8 byte string to JSON-escaped form (slow path)
 
     Escapes all non-ASCII characters no matter if paranoid is False.

@@ -7,20 +7,28 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
 
 import ast
 import codecs
 import re as remod
 import textwrap
 import types
+import typing
 
 from typing import (
+    Iterator,
     Optional,
     overload,
 )
 
 from ..i18n import _
 from ..thirdparty import attr
+
+# Force pytype to use the non-vendored package
+if typing.TYPE_CHECKING:
+    # noinspection PyPackageRequirements
+    import attr
 
 from .. import (
     encoding,
@@ -65,7 +73,9 @@ def pprint(o, bprefix: bool = False, indent: int = 0, level: int = 0) -> bytes:
     return b''.join(pprintgen(o, bprefix=bprefix, indent=indent, level=level))
 
 
-def pprintgen(o, bprefix: bool = False, indent: int = 0, level: int = 0):
+def pprintgen(
+    o, bprefix: bool = False, indent: int = 0, level: int = 0
+) -> Iterator[bytes]:
     """Pretty print an object to a generator of atoms.
 
     ``bprefix`` is a flag influencing whether bytestrings are preferred with
@@ -100,10 +110,7 @@ def pprintgen(o, bprefix: bool = False, indent: int = 0, level: int = 0):
             yield b' ' * (level * indent)
 
         for i, a in enumerate(o):
-            for chunk in pprintgen(
-                a, bprefix=bprefix, indent=indent, level=level
-            ):
-                yield chunk
+            yield from pprintgen(a, bprefix=bprefix, indent=indent, level=level)
 
             if i + 1 < len(o):
                 if indent:
@@ -131,17 +138,11 @@ def pprintgen(o, bprefix: bool = False, indent: int = 0, level: int = 0):
             yield b' ' * (level * indent)
 
         for i, (k, v) in enumerate(sorted(o.items())):
-            for chunk in pprintgen(
-                k, bprefix=bprefix, indent=indent, level=level
-            ):
-                yield chunk
+            yield from pprintgen(k, bprefix=bprefix, indent=indent, level=level)
 
             yield b': '
 
-            for chunk in pprintgen(
-                v, bprefix=bprefix, indent=indent, level=level
-            ):
-                yield chunk
+            yield from pprintgen(v, bprefix=bprefix, indent=indent, level=level)
 
             if i + 1 < len(o):
                 if indent:
@@ -169,10 +170,7 @@ def pprintgen(o, bprefix: bool = False, indent: int = 0, level: int = 0):
             yield b' ' * (level * indent)
 
         for i, k in enumerate(sorted(o)):
-            for chunk in pprintgen(
-                k, bprefix=bprefix, indent=indent, level=level
-            ):
-                yield chunk
+            yield from pprintgen(k, bprefix=bprefix, indent=indent, level=level)
 
             if i + 1 < len(o):
                 if indent:
@@ -200,10 +198,7 @@ def pprintgen(o, bprefix: bool = False, indent: int = 0, level: int = 0):
             yield b' ' * (level * indent)
 
         for i, a in enumerate(o):
-            for chunk in pprintgen(
-                a, bprefix=bprefix, indent=indent, level=level
-            ):
-                yield chunk
+            yield from pprintgen(a, bprefix=bprefix, indent=indent, level=level)
 
             if i + 1 < len(o):
                 if indent:
@@ -243,10 +238,9 @@ def pprintgen(o, bprefix: bool = False, indent: int = 0, level: int = 0):
             except StopIteration:
                 last = True
 
-            for chunk in pprintgen(
+            yield from pprintgen(
                 current, bprefix=bprefix, indent=indent, level=level
-            ):
-                yield chunk
+            )
 
             if not last:
                 if indent:
@@ -574,7 +568,6 @@ def parsemailmap(mailmapcontent):
         return mailmap
 
     for line in mailmapcontent.splitlines():
-
         # Don't bother checking the line if it is a comment or
         # is an improperly formed author field
         if line.lstrip().startswith(b'#'):
@@ -719,7 +712,7 @@ def ellipsis(text: bytes, maxlength: int = 400) -> bytes:
 
 def escapestr(s: bytes) -> bytes:
     # "bytes" is also a typing shortcut for bytes, bytearray, and memoryview
-    if isinstance(s, memoryview):
+    if isinstance(s, (memoryview, bytearray)):
         s = bytes(s)
     # call underlying function of s.encode('string_escape') directly for
     # Python 3 compatibility
@@ -801,7 +794,6 @@ def _MBTextWrapper(**kwargs):
             chunks.reverse()
 
             while chunks:
-
                 # Start the list of chunks that will make up the current line.
                 # cur_len is just the length of all the chunks in cur_line.
                 cur_line = []

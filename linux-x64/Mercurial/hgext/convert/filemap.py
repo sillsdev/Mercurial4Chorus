@@ -4,8 +4,20 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
 
 import posixpath
+import typing
+
+from typing import (
+    Iterator,
+    Mapping,
+    MutableMapping,
+    Optional,
+    Set,
+    Tuple,
+    overload,
+)
 
 from mercurial.i18n import _
 from mercurial import (
@@ -14,10 +26,15 @@ from mercurial import (
 )
 from . import common
 
+if typing.TYPE_CHECKING:
+    from mercurial import (
+        ui as uimod,
+    )
+
 SKIPREV = common.SKIPREV
 
 
-def rpairs(path):
+def rpairs(path: bytes) -> Iterator[Tuple[bytes, bytes]]:
     """Yield tuples with path split at '/', starting with the full path.
     No leading, trailing or double '/', please.
     >>> for x in rpairs(b'foo/bar/baz'): print(x)
@@ -33,6 +50,17 @@ def rpairs(path):
     yield b'.', path
 
 
+if typing.TYPE_CHECKING:
+
+    @overload
+    def normalize(path: bytes) -> bytes:
+        pass
+
+    @overload
+    def normalize(path: None) -> None:
+        pass
+
+
 def normalize(path):
     """We use posixpath.normpath to support cross-platform path format.
     However, it doesn't handle None input. So we wrap it up."""
@@ -46,7 +74,10 @@ class filemapper:
     A name can be mapped to itself, a new name, or None (omit from new
     repository)."""
 
-    def __init__(self, ui, path=None):
+    rename: MutableMapping[bytes, bytes]
+    targetprefixes: Optional[Set[bytes]]
+
+    def __init__(self, ui: uimod.ui, path: Optional[bytes] = None) -> None:
         self.ui = ui
         self.include = {}
         self.exclude = {}
@@ -56,10 +87,10 @@ class filemapper:
             if self.parse(path):
                 raise error.Abort(_(b'errors in filemap'))
 
-    def parse(self, path):
+    def parse(self, path: Optional[bytes]) -> int:
         errs = 0
 
-        def check(name, mapping, listname):
+        def check(name: bytes, mapping, listname: bytes):
             if not name:
                 self.ui.warn(
                     _(b'%s:%d: path to %s is missing\n')
@@ -110,7 +141,9 @@ class filemapper:
             cmd = lex.get_token()
         return errs
 
-    def lookup(self, name, mapping):
+    def lookup(
+        self, name: bytes, mapping: Mapping[bytes, bytes]
+    ) -> Tuple[bytes, bytes, bytes]:
         name = normalize(name)
         for pre, suf in rpairs(name):
             try:
@@ -119,7 +152,7 @@ class filemapper:
                 pass
         return b'', name, b''
 
-    def istargetfile(self, filename):
+    def istargetfile(self, filename: bytes) -> bool:
         """Return true if the given target filename is covered as a destination
         of the filemap. This is useful for identifying what parts of the target
         repo belong to the source repo and what parts don't."""
@@ -143,7 +176,7 @@ class filemapper:
                 return True
         return False
 
-    def __call__(self, name):
+    def __call__(self, name: bytes) -> Optional[bytes]:
         if self.include:
             inc = self.lookup(name, self.include)[0]
         else:
@@ -165,7 +198,7 @@ class filemapper:
             return newpre
         return name
 
-    def active(self):
+    def active(self) -> bool:
         return bool(self.include or self.exclude or self.rename)
 
 
@@ -185,8 +218,10 @@ class filemapper:
 
 
 class filemap_source(common.converter_source):
-    def __init__(self, ui, baseconverter, filemap):
-        super(filemap_source, self).__init__(ui, baseconverter.repotype)
+    def __init__(
+        self, ui: uimod.ui, baseconverter, filemap: Optional[bytes]
+    ) -> None:
+        super().__init__(ui, baseconverter.repotype)
         self.base = baseconverter
         self.filemapper = filemapper(ui, filemap)
         self.commits = {}
@@ -206,10 +241,10 @@ class filemap_source(common.converter_source):
             b'convert', b'ignoreancestorcheck'
         )
 
-    def before(self):
+    def before(self) -> None:
         self.base.before()
 
-    def after(self):
+    def after(self) -> None:
         self.base.after()
 
     def setrevmap(self, revmap):
@@ -243,7 +278,7 @@ class filemap_source(common.converter_source):
         self.convertedorder = converted
         return self.base.setrevmap(revmap)
 
-    def rebuild(self):
+    def rebuild(self) -> bool:
         if self._rebuilt:
             return True
         self._rebuilt = True
@@ -276,7 +311,7 @@ class filemap_source(common.converter_source):
     def getheads(self):
         return self.base.getheads()
 
-    def getcommit(self, rev):
+    def getcommit(self, rev: bytes):
         # We want to save a reference to the commit objects to be able
         # to rewrite their parents later on.
         c = self.commits[rev] = self.base.getcommit(rev)
@@ -292,7 +327,7 @@ class filemap_source(common.converter_source):
             return self.commits[rev]
         return self.base.getcommit(rev)
 
-    def _discard(self, *revs):
+    def _discard(self, *revs) -> None:
         for r in revs:
             if r is None:
                 continue
@@ -304,7 +339,7 @@ class filemap_source(common.converter_source):
                 if self._rebuilt:
                     del self.children[r]
 
-    def wanted(self, rev, i):
+    def wanted(self, rev, i) -> bool:
         # Return True if we're directly interested in rev.
         #
         # i is an index selecting one of the parents of rev (if rev
@@ -332,7 +367,7 @@ class filemap_source(common.converter_source):
         # doesn't consider it significant, and this revision should be dropped.
         return not files and b'close' not in self.commits[rev].extra
 
-    def mark_not_wanted(self, rev, p):
+    def mark_not_wanted(self, rev, p) -> None:
         # Mark rev as not interesting and update data structures.
 
         if p is None:
@@ -347,7 +382,7 @@ class filemap_source(common.converter_source):
         self.parentmap[rev] = self.parentmap[p]
         self.wantedancestors[rev] = self.wantedancestors[p]
 
-    def mark_wanted(self, rev, parents):
+    def mark_wanted(self, rev, parents) -> None:
         # Mark rev ss wanted and update data structures.
 
         # rev will be in the restricted graph, so children of rev in
@@ -474,7 +509,7 @@ class filemap_source(common.converter_source):
 
         return files, ncopies, ncleanp2
 
-    def targetfilebelongstosource(self, targetfilename):
+    def targetfilebelongstosource(self, targetfilename: bytes) -> bool:
         return self.filemapper.istargetfile(targetfilename)
 
     def getfile(self, name, rev):
@@ -484,7 +519,7 @@ class filemap_source(common.converter_source):
     def gettags(self):
         return self.base.gettags()
 
-    def hasnativeorder(self):
+    def hasnativeorder(self) -> bool:
         return self.base.hasnativeorder()
 
     def lookuprev(self, rev):

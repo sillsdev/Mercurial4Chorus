@@ -5,6 +5,8 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
+
 import marshal
 import re
 
@@ -59,7 +61,7 @@ class p4_source(common.converter_source):
         # avoid import cycle
         from . import convcmd
 
-        super(p4_source, self).__init__(ui, repotype, path, revs=revs)
+        super().__init__(ui, repotype, path, revs=revs)
 
         if b"/" in path and not path.startswith(b'//'):
             raise common.NoRepo(

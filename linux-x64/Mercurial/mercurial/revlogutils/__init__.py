@@ -5,8 +5,17 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
+
+import typing
 
 from ..thirdparty import attr
+
+# Force pytype to use the non-vendored package
+if typing.TYPE_CHECKING:
+    # noinspection PyPackageRequirements
+    import attr
+
 from ..interfaces import repository
 
 # See mercurial.revlogutils.constants for doc
@@ -65,7 +74,7 @@ def entry(
 class revisioninfo:
     """Information about a revision that allows building its fulltext
     node:       expected hash of the revision
-    p1, p2:     parent revs of the revision
+    p1, p2:     parent revs of the revision (as node)
     btext:      built text cache consisting of a one-element list
     cachedelta: (baserev, uncompressed_delta, usage_mode) or None
     flags:      flags associated to the revision storage

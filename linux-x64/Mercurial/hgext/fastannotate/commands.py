@@ -5,8 +5,12 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
 
 import os
+from typing import (
+    Set,
+)
 
 from mercurial.i18n import _
 from mercurial import (
@@ -19,7 +23,6 @@ from mercurial import (
     pycompat,
     registrar,
     scmutil,
-    util,
 )
 
 from . import (
@@ -218,7 +221,7 @@ def fastannotate(ui, repo, *pats, **opts):
     paths = list(_matchpaths(repo, rev, pats, opts, aopts))
 
     # for client, prefetch from the server
-    if util.safehasattr(repo, 'prefetchfastannotate'):
+    if hasattr(repo, 'prefetchfastannotate'):
         repo.prefetchfastannotate(paths)
 
     for path in paths:
@@ -255,7 +258,7 @@ def fastannotate(ui, repo, *pats, **opts):
 
 
 _newopts = set()
-_knownopts = {
+_knownopts: Set[bytes] = {
     opt[1].replace(b'-', b'_')
     for opt in (fastannotatecommandargs['options'] + commands.globalopts)
 }
@@ -273,7 +276,7 @@ def _annotatewrapper(orig, ui, repo, *pats, **opts):
 
     # check if we need to do prefetch (client-side)
     rev = opts.get('rev')
-    if util.safehasattr(repo, 'prefetchfastannotate') and rev is not None:
+    if hasattr(repo, 'prefetchfastannotate') and rev is not None:
         paths = list(_matchpaths(repo, rev, pats, pycompat.byteskwargs(opts)))
         repo.prefetchfastannotate(paths)
 
@@ -320,7 +323,7 @@ def debugbuildannotatecache(ui, repo, *pats, **opts):
     ctx = logcmdutil.revsingle(repo, rev)
     m = scmutil.match(ctx, pats, opts)
     paths = list(ctx.walk(m))
-    if util.safehasattr(repo, 'prefetchfastannotate'):
+    if hasattr(repo, 'prefetchfastannotate'):
         # client
         if opts.get(b'REV'):
             raise error.Abort(_(b'--rev cannot be used for client'))

@@ -1,0 +1,14 @@
+[fix]
+clang-format:command = clang-format --style file
+clang-format:pattern = set:(**.c or **.cc or **.h) and not "include:contrib/clang-format-ignorelist"
+
+rustfmt:command = rustfmt +nightly
+rustfmt:pattern = set:"**.rs" - "mercurial/thirdparty/**"
+
+black:command = black --config=pyproject.toml -
+black:pattern = set:**.py - mercurial/thirdparty/**
+
+# Mercurial doesn't have any Go code, but if we did this is how we
+# would configure `hg fix` for Go:
+go:command = gofmt
+go:pattern = set:**.go

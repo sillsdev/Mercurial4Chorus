@@ -11,9 +11,12 @@
 allowing operations like diff and log with revsets.
 """
 
+from __future__ import annotations
+
+import contextlib
+import typing
 
 from .i18n import _
-from .pycompat import getattr
 
 from . import (
     changelog,
@@ -36,7 +39,9 @@ from .revlogutils import (
 
 
 class unionrevlog(revlog.revlog):
-    def __init__(self, opener, radix, revlog2, linkmapper):
+    def __init__(self, opener: typing.Any, radix, revlog2, linkmapper):
+        # TODO: figure out real type of opener
+        #
         # How it works:
         # To retrieve a revision, we just need to know the node id so we can
         # look it up in revlog2.
@@ -46,6 +51,10 @@ class unionrevlog(revlog.revlog):
         opener = vfsmod.readonlyvfs(opener)
         target = getattr(revlog2, 'target', None)
         if target is None:
+            # Help pytype- changelog and revlog are not possible here because
+            # they both have a 'target' attr.
+            assert not isinstance(revlog2, (changelog.changelog, revlog.revlog))
+
             # a revlog wrapper, eg: the manifestlog that is not an actual revlog
             target = revlog2._revlog.target
         revlog.revlog.__init__(self, opener, target=target, radix=radix)
@@ -113,9 +122,22 @@ class unionrevlog(revlog.revlog):
             self.bundlerevs.add(n)
             n += 1
 
-    def _chunk(self, rev, df=None):
+    @contextlib.contextmanager
+    def reading(self):
+        if 0 <= len(self.bundlerevs) < len(self.index):
+            read_1 = super().reading
+        else:
+            read_1 = util.nullcontextmanager
+        if 0 < len(self.bundlerevs):
+            read_2 = self.revlog2.reading
+        else:
+            read_2 = util.nullcontextmanager
+        with read_1(), read_2():
+            yield
+
+    def _chunk(self, rev):
         if rev <= self.repotiprev:
-            return revlog.revlog._chunk(self, rev)
+            return super()._inner._chunk(rev)
         return self.revlog2._chunk(self.node(rev))
 
     def revdiff(self, rev1, rev2):
@@ -126,11 +148,11 @@ class unionrevlog(revlog.revlog):
                 self.revlog2.rev(self.node(rev2)),
             )
         elif rev1 <= self.repotiprev and rev2 <= self.repotiprev:
-            return super(unionrevlog, self).revdiff(rev1, rev2)
+            return super().revdiff(rev1, rev2)
 
         return mdiff.textdiff(self.rawdata(rev1), self.rawdata(rev2))
 
-    def _revisiondata(self, nodeorrev, _df=None, raw=False):
+    def _revisiondata(self, nodeorrev, raw=False):
         if isinstance(nodeorrev, int):
             rev = nodeorrev
             node = self.node(rev)
@@ -143,8 +165,8 @@ class unionrevlog(revlog.revlog):
             revlog2 = getattr(self.revlog2, '_revlog', self.revlog2)
             func = revlog2._revisiondata
         else:
-            func = super(unionrevlog, self)._revisiondata
-        return func(node, _df=_df, raw=raw)
+            func = super()._revisiondata
+        return func(node, raw=raw)
 
     def addrevision(
         self,
@@ -190,7 +212,12 @@ class unionchangelog(unionrevlog, changelog.changelog):
 
 
 class unionmanifest(unionrevlog, manifest.manifestrevlog):
+    repotiprev: int
+    revlog2: manifest.manifestrevlog
+
     def __init__(self, nodeconstants, opener, opener2, linkmapper):
+        # XXX manifestrevlog is not actually a revlog , so mixing it with
+        # bundlerevlog is not a good idea.
         manifest.manifestrevlog.__init__(self, nodeconstants, opener)
         manifest2 = manifest.manifestrevlog(nodeconstants, opener2)
         unionrevlog.__init__(
@@ -199,6 +226,10 @@ class unionmanifest(unionrevlog, manifest.manifestrevlog):
 
 
 class unionfilelog(filelog.filelog):
+    _revlog: unionrevlog
+    repotiprev: int
+    revlog2: revlog.revlog
+
     def __init__(self, opener, path, opener2, linkmapper, repo):
         filelog.filelog.__init__(self, opener, path)
         filelog2 = filelog.filelog(opener2, path)
@@ -222,13 +253,20 @@ class unionpeer(localrepo.localpeer):
         return False
 
 
-class unionrepository:
+_union_repo_baseclass = object
+
+if typing.TYPE_CHECKING:
+    _union_repo_baseclass = localrepo.localrepository
+
+
+class unionrepository(_union_repo_baseclass):
     """Represents the union of data in 2 repositories.
 
     Instances are not usable if constructed directly. Use ``instance()``
     or ``makeunionrepository()`` to create a usable instance.
     """
 
+    # noinspection PyMissingConstructor
     def __init__(self, repo2, url):
         self.repo2 = repo2
         self._url = url

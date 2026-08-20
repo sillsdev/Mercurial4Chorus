@@ -6,6 +6,7 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
 
 import copy
 import weakref
@@ -14,11 +15,6 @@ from .i18n import _
 from .node import (
     hex,
     nullrev,
-)
-from .pycompat import (
-    delattr,
-    getattr,
-    setattr,
 )
 from . import (
     error,
@@ -165,7 +161,7 @@ def computeimpactable(repo, visibilityexceptions=None):
     firstmutable = len(cl)
     roots = repo._phasecache.nonpublicphaseroots(repo)
     if roots:
-        firstmutable = min(firstmutable, min(cl.rev(r) for r in roots))
+        firstmutable = min(firstmutable, min(roots))
     # protect from nullrev root
     firstmutable = max(0, firstmutable)
     return frozenset(range(firstmutable, len(cl)))
@@ -286,7 +282,7 @@ class filteredchangelogmixin:
 
     def revs(self, start=0, stop=None):
         """filtered version of revlog.revs"""
-        for i in super(filteredchangelogmixin, self).revs(start, stop):
+        for i in super().revs(start, stop):
             if i not in self.filteredrevs:
                 yield i
 
@@ -296,13 +292,12 @@ class filteredchangelogmixin:
         This returns a version of 'revs' to be used thereafter by the caller.
         In particular, if revs is an iterator, it is converted into a set.
         """
-        safehasattr = util.safehasattr
-        if safehasattr(revs, '__next__'):
+        if hasattr(revs, '__next__'):
             # Note that inspect.isgenerator() is not true for iterators,
             revs = set(revs)
 
         filteredrevs = self.filteredrevs
-        if safehasattr(revs, 'first'):  # smartset
+        if hasattr(revs, 'first'):  # smartset
             offenders = revs & filteredrevs
         else:
             offenders = filteredrevs.intersection(revs)
@@ -311,27 +306,28 @@ class filteredchangelogmixin:
             raise error.FilteredIndexError(rev)
         return revs
 
-    def headrevs(self, revs=None):
+    def _head_node_ids(self):
+        # no Rust fast path implemented yet, so just loop in Python
+        return [self.node(r) for r in self.headrevs()]
+
+    def headrevs(self, revs=None, stop_rev=None):
         if revs is None:
-            try:
-                return self.index.headrevsfiltered(self.filteredrevs)
-            # AttributeError covers non-c-extension environments and
-            # old c extensions without filter handling.
-            except AttributeError:
-                return self._headrevs()
+            return self.index.headrevs(self.filteredrevs, stop_rev)
+        # it is ignored from here, so better double check we passed the right argument
+        assert stop_rev is None
 
         revs = self._checknofilteredinrevs(revs)
-        return super(filteredchangelogmixin, self).headrevs(revs)
+        return super().headrevs(revs)
 
     def strip(self, *args, **kwargs):
         # XXX make something better than assert
         # We can't expect proper strip behavior if we are filtered.
         assert not self.filteredrevs
-        super(filteredchangelogmixin, self).strip(*args, **kwargs)
+        super().strip(*args, **kwargs)
 
     def rev(self, node):
         """filtered version of revlog.rev"""
-        r = super(filteredchangelogmixin, self).rev(node)
+        r = super().rev(node)
         if r in self.filteredrevs:
             raise error.FilteredLookupError(
                 hex(node), self.display_id, _(b'filtered node')
@@ -342,25 +338,25 @@ class filteredchangelogmixin:
         """filtered version of revlog.node"""
         if rev in self.filteredrevs:
             raise error.FilteredIndexError(rev)
-        return super(filteredchangelogmixin, self).node(rev)
+        return super().node(rev)
 
     def linkrev(self, rev):
         """filtered version of revlog.linkrev"""
         if rev in self.filteredrevs:
             raise error.FilteredIndexError(rev)
-        return super(filteredchangelogmixin, self).linkrev(rev)
+        return super().linkrev(rev)
 
     def parentrevs(self, rev):
         """filtered version of revlog.parentrevs"""
         if rev in self.filteredrevs:
             raise error.FilteredIndexError(rev)
-        return super(filteredchangelogmixin, self).parentrevs(rev)
+        return super().parentrevs(rev)
 
     def flags(self, rev):
         """filtered version of revlog.flags"""
         if rev in self.filteredrevs:
             raise error.FilteredIndexError(rev)
-        return super(filteredchangelogmixin, self).flags(rev)
+        return super().flags(rev)
 
 
 class repoview:
@@ -399,6 +395,9 @@ class repoview:
     """
 
     def __init__(self, repo, filtername, visibilityexceptions=None):
+        if filtername is None:
+            msg = "repoview should have a non-None filtername"
+            raise error.ProgrammingError(msg)
         object.__setattr__(self, '_unfilteredrepo', repo)
         object.__setattr__(self, 'filtername', filtername)
         object.__setattr__(self, '_clcachekey', None)
@@ -422,7 +421,7 @@ class repoview:
         with util.timedcm('repo filter for %s', self.filtername):
             revs = filterrevs(unfi, self.filtername, self._visibilityexceptions)
         cl = self._clcache
-        newkey = (unfilen, unfinode, hash(revs), unfichangelog._delayed)
+        newkey = (unfilen, unfinode, hash(revs), unfichangelog.is_delaying)
         # if cl.index is not unfiindex, unfi.changelog would be
         # recreated, and our clcache refers to garbage object
         if cl is not None and (

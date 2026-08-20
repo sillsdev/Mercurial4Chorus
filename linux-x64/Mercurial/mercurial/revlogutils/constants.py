@@ -7,6 +7,7 @@
 # GNU General Public License version 2 or any later version.
 """Helper class to compute deltas stored inside revlogs"""
 
+from __future__ import annotations
 
 import struct
 

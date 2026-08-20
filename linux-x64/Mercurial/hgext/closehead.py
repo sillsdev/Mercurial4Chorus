@@ -5,6 +5,7 @@
 
 '''close arbitrary heads without checking them out first'''
 
+from __future__ import annotations
 
 from mercurial.i18n import _
 from mercurial import (
@@ -54,19 +55,16 @@ def close_branch(ui, repo, *revs, **opts):
             text=message,
             files=[],
             filectxfn=None,
-            user=opts.get(b'user'),
-            date=opts.get(b'date'),
+            user=opts.get('user'),
+            date=opts.get('date'),
             extra=extra,
         )
-        tr = repo.transaction(b'commit')
-        ret = repo.commitctx(cctx, True)
-        bookmarks.update(repo, [rev, None], ret)
-        cctx.markcommitted(ret)
-        tr.close()
+        with repo.transaction(b'commit'):
+            ret = repo.commitctx(cctx, True)
+            bookmarks.update(repo, [rev, None], ret)
+            cctx.markcommitted(ret)
 
-    opts = pycompat.byteskwargs(opts)
-
-    revs += tuple(opts.get(b'rev', []))
+    revs += tuple(opts.get('rev', []))
     revs = logcmdutil.revrange(repo, revs)
 
     if not revs:
@@ -80,7 +78,7 @@ def close_branch(ui, repo, *revs, **opts):
         if rev not in heads:
             raise error.Abort(_(b'revision is not an open head: %d') % rev)
 
-    message = cmdutil.logmessage(ui, opts)
+    message = cmdutil.logmessage(ui, pycompat.byteskwargs(opts))
     if not message:
         raise error.Abort(_(b"no commit message specified with -l or -m"))
     extra = {b'close': b'1'}

@@ -1,4 +1,3 @@
-# coding: utf-8
 # metadata.py -- code related to various metadata computation and access.
 #
 # Copyright 2019 Google, Inc <martinvonz@google.com>
@@ -6,6 +5,8 @@
 #
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
+
+from __future__ import annotations
 
 import multiprocessing
 import struct
@@ -243,7 +244,7 @@ def compute_all_files_changes(ctx):
         return _process_linear(p1, ctx)
     elif p1.rev() == nullrev and p2.rev() != nullrev:
         # In the wild, one can encounter changeset where p1 is null but p2 is not
-        return _process_linear(p1, ctx, parent=2)
+        return _process_linear(p2, ctx, parent=2)
     elif p1.rev() == p2.rev():
         # In the wild, one can encounter such "non-merge"
         return _process_linear(p1, ctx)
@@ -433,14 +434,12 @@ def _process_merge(p1_ctx, p2_ctx, ctx):
     # Iteration over d1 content will deal with all cases, but the one in the
     # first column of the table.
     for filename, d1 in diff_p1.items():
-
         d2 = diff_p2.pop(filename, None)
 
         if d2 is None:
             # this deal with the first line of the table.
             _process_other_unchanged(md, mas, filename, d1)
         else:
-
             if d1[0][0] is None and d2[0][0] is None:
                 # case 🄼 — both deleted the file.
                 md.mark_added(filename)

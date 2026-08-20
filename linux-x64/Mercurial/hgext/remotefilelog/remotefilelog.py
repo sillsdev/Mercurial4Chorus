@@ -6,8 +6,13 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
+
 import collections
-import os
+
+from typing import (
+    Iterator,
+)
 
 from mercurial.node import bin
 from mercurial.i18n import _
@@ -17,12 +22,14 @@ from mercurial import (
     mdiff,
     revlog,
 )
+from mercurial.interfaces import (
+    repository,
+)
 from mercurial.utils import storageutil
 from mercurial.revlogutils import flagutil
 
 from . import (
     constants,
-    fileserverclient,
     shallowutil,
 )
 
@@ -43,8 +50,6 @@ class remotefilelognodemap:
 
 
 class remotefilelog:
-
-    _generaldelta = True
     _flagserrorclass = error.RevlogError
 
     def __init__(self, opener, path, repo):
@@ -300,7 +305,7 @@ class remotefilelog:
         deltamode=None,
         sidedata_helpers=None,
         debug_info=None,
-    ):
+    ) -> Iterator[repository.irevisiondelta]:
         # we don't use any of these parameters here
         del nodesorder, revisiondata, assumehaveparentrevisions, deltaprevious
         del deltamode
@@ -388,33 +393,6 @@ class remotefilelog:
     def rawdata(self, node):
         return self.revision(node, raw=False)
 
-    def _read(self, id):
-        """reads the raw file blob from disk, cache, or server"""
-        fileservice = self.repo.fileservice
-        localcache = fileservice.localcache
-        cachekey = fileserverclient.getcachekey(
-            self.repo.name, self.filename, id
-        )
-        try:
-            return localcache.read(cachekey)
-        except KeyError:
-            pass
-
-        localkey = fileserverclient.getlocalkey(self.filename, id)
-        localpath = os.path.join(self.localpath, localkey)
-        try:
-            return shallowutil.readfile(localpath)
-        except IOError:
-            pass
-
-        fileservice.prefetch([(self.filename, id)])
-        try:
-            return localcache.read(cachekey)
-        except KeyError:
-            pass
-
-        raise error.LookupError(id, self.filename, _(b'no node'))
-
     def ancestormap(self, node):
         return self.repo.metadatastore.getancestors(self.filename, node)
 
@@ -470,7 +448,7 @@ class remotefilelog:
         parentrevs = collections.defaultdict(list)
         revmap = {}
         queue = collections.deque(
-            ((None, n) for n in parentsmap if n not in allparents)
+            (None, n) for n in parentsmap if n not in allparents
         )
         while queue:
             prevrev, current = queue.pop()

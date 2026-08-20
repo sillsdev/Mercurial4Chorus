@@ -1,4 +1,3 @@
-# coding: utf8
 # copies.py - copy detection for Mercurial
 #
 # Copyright 2008 Olivia Mackall <olivia@selenic.com>
@@ -6,6 +5,7 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
 
 import collections
 import os
@@ -28,7 +28,7 @@ from .revlogutils import (
     sidedata as sidedatamod,
 )
 
-rustmod = policy.importrust("copy_tracing")
+rustmod = policy.importrust("copy_tracing", pyo3=True)
 
 
 def _filter(src, dst, t):
@@ -306,7 +306,7 @@ def _changesetforwardcopies(a, b, match):
         # revision that will be relevant for a edge of the graph. So if a
         # children has parent not in `children_count`, that edges should not be
         # processed.
-        children_count = dict((r, 0) for r in roots)
+        children_count = {r: 0 for r in roots}
         for r in revs:
             for p in cl.parentrevs(r):
                 if p == nullrev:
@@ -328,7 +328,7 @@ def _changesetforwardcopies(a, b, match):
     else:
         # When not using side-data, we will process the edges "from" the parent.
         # so we need a full mapping of the parent -> children relation.
-        children = dict((r, []) for r in roots)
+        children = {r: [] for r in roots}
         for r in revs:
             for p in cl.parentrevs(r):
                 if p == nullrev:
@@ -915,11 +915,14 @@ class branch_copies:
         self.movewithdir = {} if movewithdir is None else movewithdir
 
     def __repr__(self):
-        return '<branch_copies\n  copy=%r\n  renamedelete=%r\n  dirmove=%r\n  movewithdir=%r\n>' % (
-            self.copy,
-            self.renamedelete,
-            self.dirmove,
-            self.movewithdir,
+        return (
+            '<branch_copies\n  copy=%r\n  renamedelete=%r\n  dirmove=%r\n  movewithdir=%r\n>'
+            % (
+                self.copy,
+                self.renamedelete,
+                self.dirmove,
+                self.movewithdir,
+            )
         )
 
 

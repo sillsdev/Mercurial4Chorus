@@ -8,8 +8,9 @@
 
 '''store class for local filesystem'''
 
+from __future__ import annotations
+
 from mercurial.i18n import _
-from mercurial.pycompat import open
 from mercurial import util
 
 from . import (
@@ -25,7 +26,7 @@ class localstore(basestore.basestore):
 
     def __init__(self, ui, repo, remote):
         self.remote = remote.local()
-        super(localstore, self).__init__(ui, repo, self.remote.url())
+        super().__init__(ui, repo, self.remote.url())
 
     def put(self, source, hash):
         if lfutil.instore(self.remote, hash):
@@ -44,7 +45,7 @@ class localstore(basestore.basestore):
             raise basestore.StoreError(
                 filename, hash, self.url, _(b"can't get file locally")
             )
-        with open(path, b'rb') as fd:
+        with open(path, 'rb') as fd:
             return lfutil.copyandhash(util.filechunkiter(fd), tmpfile)
 
     def _verifyfiles(self, contents, filestocheck):

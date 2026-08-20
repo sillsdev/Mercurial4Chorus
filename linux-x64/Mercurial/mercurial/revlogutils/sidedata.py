@@ -30,6 +30,7 @@ This is a simple and effective format. It should be enough to experiment with
 the concept.
 """
 
+from __future__ import annotations
 
 import collections
 import struct

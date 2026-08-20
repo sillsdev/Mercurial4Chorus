@@ -1,0 +1,26 @@
+FROM rockylinux/rockylinux:9
+
+RUN groupadd -g %GID% build && \
+    useradd -u %UID% -g %GID% -s /bin/bash -d /build -m build
+
+RUN dnf install 'dnf-command(config-manager)' -y
+# crb repository is necessary for docutils
+RUN dnf config-manager --set-enabled crb
+
+RUN yum install -y \
+	gcc \
+	gettext \
+	make \
+	python3-devel \
+	python3-docutils \
+	rpm-build \
+	which
+
+# For creating repo meta data
+RUN yum install -y createrepo
+
+# For rust extensions
+RUN yum install -y cargo
+
+# avoid incorrect docker image permissions on /tmp preventing writes by non-root users
+RUN chmod 1777 /tmp

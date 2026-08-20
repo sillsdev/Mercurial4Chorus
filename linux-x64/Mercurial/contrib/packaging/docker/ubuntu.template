@@ -1,0 +1,21 @@
+FROM ubuntu:%CODENAME%
+
+RUN groupadd -g 1000 build && \
+    useradd -u 1000 -g 1000 -s /bin/bash -d /build -m build
+
+ARG DEBIAN_FRONTEND=noninteractive
+
+ENV TZ=%TZ%
+
+RUN apt-get update && apt-get install -y \
+  build-essential \
+  debhelper \
+  devscripts \
+  dh-python \
+  less \
+  python \
+  python3-all \
+  python3-all-dev \
+  python3-docutils \
+  unzip \
+  zip

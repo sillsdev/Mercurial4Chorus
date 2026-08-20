@@ -18,6 +18,7 @@ Remember to update https://mercurial-scm.org/wiki/HelpStyleGuide
 when adding support for new constructs.
 """
 
+from __future__ import annotations
 
 import re
 
@@ -510,7 +511,7 @@ def formatoption(block, width):
     colwidth = encoding.colwidth(block[b'optstr'])
     usablewidth = width - 1
     hanging = block[b'optstrwidth']
-    initindent = b'%s%s  ' % (block[b'optstr'], b' ' * ((hanging - colwidth)))
+    initindent = b'%s%s  ' % (block[b'optstr'], b' ' * (hanging - colwidth))
     hangindent = b' ' * (encoding.colwidth(initindent) + 1)
     return b' %s\n' % (
         stringutil.wrap(

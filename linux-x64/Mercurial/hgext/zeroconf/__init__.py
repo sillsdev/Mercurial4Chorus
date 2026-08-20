@@ -23,6 +23,8 @@ You can discover Zeroconf-enabled repositories by running
   zc-test = http://example.com:8000/test
 '''
 
+from __future__ import annotations
+
 import os
 import socket
 import time
@@ -34,9 +36,9 @@ from mercurial import (
     extensions,
     hg,
     pycompat,
-    rcutil,
     ui as uimod,
 )
+from mercurial.configuration import rcutil
 from mercurial.hgweb import server as servermod
 
 # Note for extension authors: ONLY specify testedwith = 'ships-with-hg-core' for
@@ -58,7 +60,7 @@ def getip():
         s.connect(('1.0.0.1', 0))
         ip = s.getsockname()[0]
         return ip
-    except socket.error:
+    except OSError:
         pass
 
     # Generic method, sometimes gives useless results
@@ -77,7 +79,7 @@ def getip():
         s.connect(('1.0.0.1', 1))
         ip = s.getsockname()[0]
         return ip
-    except socket.error:
+    except OSError:
         pass
 
     return dumbip
@@ -233,10 +235,10 @@ def cleanupafterdispatch(orig, ui, options, cmd, cmdfunc):
             server.close()
 
 
-extensions.wrapfunction(dispatch, b'_runcommand', cleanupafterdispatch)
+extensions.wrapfunction(dispatch, '_runcommand', cleanupafterdispatch)
 
-extensions.wrapfunction(uimod.ui, b'config', config)
-extensions.wrapfunction(uimod.ui, b'configitems', configitems)
-extensions.wrapfunction(uimod.ui, b'configsuboptions', configsuboptions)
-extensions.wrapfunction(hg, b'defaultdest', defaultdest)
-extensions.wrapfunction(servermod, b'create_server', zc_create_server)
+extensions.wrapfunction(uimod.ui, 'config', config)
+extensions.wrapfunction(uimod.ui, 'configitems', configitems)
+extensions.wrapfunction(uimod.ui, 'configsuboptions', configsuboptions)
+extensions.wrapfunction(hg, 'defaultdest', defaultdest)
+extensions.wrapfunction(servermod, 'create_server', zc_create_server)

@@ -40,6 +40,8 @@ You can override a predefined scheme by defining a new scheme with the
 same name.
 """
 
+from __future__ import annotations
+
 import os
 import re
 
@@ -159,7 +161,7 @@ def extsetup(ui):
         else:
             hg.repo_schemes[scheme] = ShortRepository(url, scheme, t)
 
-    extensions.wrapfunction(urlutil, b'hasdriveletter', hasdriveletter)
+    extensions.wrapfunction(urlutil, 'hasdriveletter', hasdriveletter)
 
 
 @command(b'debugexpandscheme', norepo=True)

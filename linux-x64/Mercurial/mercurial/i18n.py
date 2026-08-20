@@ -5,25 +5,23 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
 
 import gettext as gettextmod
 import locale
 import os
 import sys
 
-from .pycompat import getattr
+from typing import (
+    Dict,
+    List,
+)
+
 from .utils import resourceutil
 from . import (
     encoding,
     pycompat,
 )
-
-if pycompat.TYPE_CHECKING:
-    from typing import (
-        Callable,
-        List,
-    )
-
 
 # modelled after templater.templatepath:
 if getattr(sys, 'frozen', None) is not None:
@@ -65,11 +63,12 @@ except AttributeError:
     _ugettext = t.gettext
 
 
-_msgcache = {}  # encoding: {message: translation}
+_msgcache: Dict[
+    bytes, Dict[bytes, bytes]
+] = {}  # encoding: {message: translation}
 
 
-def gettext(message):
-    # type: (bytes) -> bytes
+def gettext(message: bytes) -> bytes:
     """Translate message.
 
     The message is looked up in the catalog to get a Unicode string,
@@ -87,14 +86,14 @@ def gettext(message):
     if message not in cache:
         if type(message) is str:
             # goofy unicode docstrings in test
-            paragraphs = message.split(u'\n\n')  # type: List[str]
+            paragraphs: List[str] = message.split('\n\n')
         else:
             # should be ascii, but we have unicode docstrings in test, which
             # are converted to utf-8 bytes on Python 3.
             paragraphs = [p.decode("utf-8") for p in message.split(b'\n\n')]
         # Be careful not to translate the empty string -- it holds the
         # meta data of the .po file.
-        u = u'\n\n'.join([p and _ugettext(p) or u'' for p in paragraphs])
+        u = '\n\n'.join([p and _ugettext(p) or '' for p in paragraphs])
         try:
             # encoding.tolocal cannot be used since it will first try to
             # decode the Unicode string. Calling u.decode(enc) really
@@ -120,6 +119,9 @@ def _plain():
 
 
 if _plain():
-    _ = lambda message: message  # type: Callable[[bytes], bytes]
+
+    def _(message: bytes) -> bytes:
+        return message
+
 else:
     _ = gettext

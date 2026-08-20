@@ -71,9 +71,9 @@ certain files::
   tools/tests/**
 """
 
+from __future__ import annotations
 
 from mercurial.i18n import _
-from mercurial.pycompat import setattr
 from mercurial import (
     cmdutil,
     commands,
@@ -146,7 +146,7 @@ def _setuplog(ui):
             revs = revs.filter(ctxmatch)
         return revs
 
-    extensions.wrapfunction(logcmdutil, b'_initialrevs', _initialrevs)
+    extensions.wrapfunction(logcmdutil, '_initialrevs', _initialrevs)
 
 
 def _clonesparsecmd(orig, ui, repo, *args, **opts):
@@ -170,7 +170,7 @@ def _clonesparsecmd(orig, ui, repo, *args, **opts):
             )
             return orig(ctx, *args, **kwargs)
 
-        extensions.wrapfunction(mergemod, b'update', clonesparse)
+        extensions.wrapfunction(mergemod, 'update', clonesparse)
     return orig(ui, repo, *args, **opts)
 
 
@@ -342,7 +342,7 @@ def debugsparse(ui, repo, **opts):
                 ui.status(
                     _(b"Temporarily Included Files (for merge/rebase):\n")
                 )
-                ui.status((b"\n".join(temporaryincludes) + b"\n"))
+                ui.statusnoi18n(b"\n".join(temporaryincludes) + b"\n")
             return
         else:
             raise error.Abort(
@@ -372,8 +372,7 @@ def debugsparse(ui, repo, **opts):
         sparse.clearrules(repo, force=force)
 
     if refresh:
-        try:
-            wlock = repo.wlock()
+        with repo.wlock():
             fcounts = pycompat.maplist(
                 len,
                 sparse.refreshwdir(
@@ -387,7 +386,5 @@ def debugsparse(ui, repo, **opts):
                 dropped=fcounts[1],
                 conflicting=fcounts[2],
             )
-        finally:
-            wlock.release()
 
     del repo._has_sparse

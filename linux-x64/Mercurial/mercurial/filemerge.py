@@ -5,6 +5,7 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
 
 import contextlib
 import os
@@ -15,9 +16,6 @@ from .i18n import _
 from .node import (
     hex,
     short,
-)
-from .pycompat import (
-    getattr,
 )
 
 from . import (
@@ -135,6 +133,9 @@ class absentfilectx:
     def isabsent(self):
         return True
 
+    def decodeddata(self):
+        return b""
+
 
 def _findtool(ui, tool):
     if tool in internals:
@@ -189,10 +190,6 @@ def _picktool(repo, ui, path, binary, symlink, changedelete):
             ui.warn(_(b"tool %s can't handle symlinks\n") % tmsg)
         elif binary and not hascapability(tool, b"binary", strictcheck):
             ui.warn(_(b"tool %s can't handle binary\n") % tmsg)
-        elif changedelete and not supportscd(tool):
-            # the nomerge tools are the only tools that support change/delete
-            # conflicts
-            pass
         elif not procutil.gui() and _toolbool(ui, tool, b"gui"):
             ui.warn(_(b"tool %s requires a GUI\n") % tmsg)
         else:
@@ -204,22 +201,16 @@ def _picktool(repo, ui, path, binary, symlink, changedelete):
     force = ui.config(b'ui', b'forcemerge')
     if force:
         toolpath = _findtool(ui, force)
-        if changedelete and not supportscd(toolpath):
-            return b":prompt", None
+        if toolpath:
+            return (force, _quotetoolpath(toolpath))
         else:
-            if toolpath:
-                return (force, _quotetoolpath(toolpath))
-            else:
-                # mimic HGMERGE if given tool not found
-                return (force, force)
+            # mimic HGMERGE if given tool not found
+            return (force, force)
 
     # HGMERGE takes next precedence
     hgmerge = encoding.environ.get(b"HGMERGE")
     if hgmerge:
-        if changedelete and not supportscd(hgmerge):
-            return b":prompt", None
-        else:
-            return (hgmerge, hgmerge)
+        return (hgmerge, hgmerge)
 
     # then patterns
 
@@ -257,10 +248,8 @@ def _picktool(repo, ui, path, binary, symlink, changedelete):
     )
     uimerge = ui.config(b"ui", b"merge")
     if uimerge:
-        # external tools defined in uimerge won't be able to handle
-        # change/delete conflicts
         if check(uimerge, path, symlink, binary, changedelete):
-            if uimerge not in names and not changedelete:
+            if uimerge not in names:
                 return (uimerge, uimerge)
             tools.insert(0, (None, uimerge))  # highest priority
     tools.append((None, b"hgmerge"))  # the old default, if found
@@ -270,7 +259,7 @@ def _picktool(repo, ui, path, binary, symlink, changedelete):
             return (t, _quotetoolpath(toolpath))
 
     # internal merge or prompt as last resort
-    if symlink or binary or changedelete:
+    if symlink or binary:
         if not changedelete and len(tools):
             # any tool is rejected by capability for symlink or binary
             ui.warn(_(b"no tool found to merge %s\n") % path)
@@ -483,6 +472,8 @@ def _merge(repo, local, other, base, mode):
     suppresses the markers."""
     ui = repo.ui
 
+    relaxed_sync = ui.configbool(b'experimental', b'relaxed-block-sync-merge')
+
     try:
         _verifytext(local, ui)
         _verifytext(base, ui)
@@ -491,7 +482,11 @@ def _merge(repo, local, other, base, mode):
         return True, True, False
     else:
         merged_text, conflicts = simplemerge.simplemerge(
-            local, base, other, mode=mode
+            local,
+            base,
+            other,
+            mode=mode,
+            relaxed_sync=relaxed_sync,
         )
         # fcd.flags() already has the merged flags (done in
         # mergestate.resolve())
@@ -834,12 +829,13 @@ def _xmerge(repo, mynode, local, other, base, toolconf, backup):
                 # avoid cycle cmdutil->merge->filemerge->extensions->cmdutil
                 from . import extensions
 
-                mod = extensions.loadpath(toolpath, b'hgmerge.%s' % tool)
+                mod_name = 'hgmerge.%s' % pycompat.sysstr(tool)
+                mod = extensions.loadpath(toolpath, mod_name)
             except Exception:
                 raise error.Abort(
                     _(b"loading python merge script failed: %s") % toolpath
                 )
-            mergefn = getattr(mod, scriptfn, None)
+            mergefn = getattr(mod, pycompat.sysstr(scriptfn), None)
             if mergefn is None:
                 raise error.Abort(
                     _(b"%s does not have function: %s") % (toolpath, scriptfn)

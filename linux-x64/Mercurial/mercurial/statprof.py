@@ -101,6 +101,7 @@ significantly off if other threads' work patterns are not similar to the
 main thread's work patterns.
 """
 # no-check-code
+from __future__ import annotations
 
 import collections
 import contextlib
@@ -113,7 +114,10 @@ import sys
 import threading
 import time
 
-from .pycompat import open
+from typing import (
+    List,
+)
+
 from . import (
     encoding,
     pycompat,
@@ -122,7 +126,7 @@ from . import (
 defaultdict = collections.defaultdict
 contextmanager = contextlib.contextmanager
 
-__all__ = [b'start', b'stop', b'reset', b'display', b'profile']
+__all__ = ['start', 'stop', 'reset', 'display', 'profile']
 
 skips = {
     "util.py:check",
@@ -155,6 +159,8 @@ def clock():
 
 
 class ProfileState:
+    samples: List[Sample]
+
     def __init__(self, frequency=None):
         self.reset(frequency)
         self.track = b'cpu'
@@ -167,7 +173,7 @@ class ProfileState:
         # a float
         if frequency:
             self.sample_interval = 1.0 / frequency
-        elif not pycompat.hasattr(self, 'sample_interval'):
+        elif not hasattr(self, 'sample_interval'):
             # default to 1000 Hz
             self.sample_interval = 1.0 / 1000.0
         else:
@@ -238,7 +244,7 @@ class CodeSite:
         if self.source is None:
             try:
                 lineno = self.lineno - 1  # lineno can be None
-                with open(self.path, b'rb') as fp:
+                with open(self.path, 'rb') as fp:
                     for i, line in enumerate(fp):
                         if i == lineno:
                             self.source = line.strip()
@@ -378,20 +384,21 @@ def stop():
 
 
 def save_data(path):
-    with open(path, b'w+') as file:
+    with open(path, 'w+b') as file:
         file.write(b"%f %f\n" % state.accumulated_time)
         for sample in state.samples:
             time = sample.time
             stack = sample.stack
             sites = [
-                b'\1'.join([s.path, b'%d' % s.lineno, s.function])
+                b'\1'.join([s.path, b'%d' % s.lineno or -1, s.function])
                 for s in stack
             ]
             file.write(b"%d\0%s\n" % (time, b'\0'.join(sites)))
 
 
 def load_data(path):
-    lines = open(path, b'rb').read().splitlines()
+    with open(path, 'rb') as fp:
+        lines = fp.read().splitlines()
 
     state.accumulated_time = [float(value) for value in lines[0].split()]
     state.samples = []
@@ -663,7 +670,7 @@ def display_about_method(data, fp, function=None, **kwargs):
                 count / relevant_samples * 100,
                 pycompat.fsencode(parent.filename()),
                 pycompat.sysbytes(parent.function),
-                parent.lineno,
+                parent.lineno or -1,
                 pycompat.sysbytes(parent.getsource(50)),
             )
         )
@@ -705,7 +712,7 @@ def display_about_method(data, fp, function=None, **kwargs):
             b'        %6.2f%%   line %s: %s\n'
             % (
                 count / relevant_samples * 100,
-                child.lineno,
+                child.lineno or -1,
                 pycompat.sysbytes(child.getsource(50)),
             )
         )
@@ -824,7 +831,7 @@ def write_to_flame(data, fp, scriptpath=None, outputfile=None, **kwargs):
 
     fd, path = pycompat.mkstemp()
 
-    with open(path, b"w+") as file:
+    with open(path, "w+b") as file:
         for line, count in lines.items():
             file.write(b"%s %d\n" % (line, count))
 
@@ -865,7 +872,7 @@ def write_to_json(data, fp):
             stack.append(
                 (
                     pycompat.sysstr(frame.path),
-                    frame.lineno,
+                    frame.lineno or -1,
                     pycompat.sysstr(frame.function),
                 )
             )
@@ -952,13 +959,14 @@ def write_to_chrome(data, fp, minthreshold=0.005, maxthreshold=0.999):
     for sample in data.samples:
         stack = tuple(
             (
-                (
-                    '%s:%d'
-                    % (simplifypath(pycompat.sysstr(frame.path)), frame.lineno),
-                    pycompat.sysstr(frame.function),
-                )
-                for frame in sample.stack
+                '%s:%d'
+                % (
+                    simplifypath(pycompat.sysstr(frame.path)),
+                    frame.lineno or -1,
+                ),
+                pycompat.sysstr(frame.function),
             )
+            for frame in sample.stack
         )
         qstack = collections.deque(stack)
         if laststack == qstack:

@@ -3,19 +3,31 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
+
+import abc
+import typing
+
+from typing import (
+    Protocol,
+)
 
 from .node import (
     bin,
     hex,
 )
 from .i18n import _
-from .pycompat import getattr
 from .thirdparty import attr
+
+# Force pytype to use the non-vendored package
+if typing.TYPE_CHECKING:
+    # noinspection PyPackageRequirements
+    import attr
+
 from . import (
     error,
     util,
 )
-from .interfaces import util as interfaceutil
 from .utils import compression
 
 # Names of the SSH protocol implementations.
@@ -173,7 +185,7 @@ GETBUNDLE_ARGUMENTS = {
 }
 
 
-class baseprotocolhandler(interfaceutil.Interface):
+class baseprotocolhandler(Protocol):
     """Abstract base class for wire protocol handlers.
 
     A wire protocol handler serves as an interface between protocol command
@@ -182,14 +194,16 @@ class baseprotocolhandler(interfaceutil.Interface):
     the request, handle response types, etc.
     """
 
-    name = interfaceutil.Attribute(
+    @property
+    @abc.abstractmethod
+    def name(self) -> bytes:
         """The name of the protocol implementation.
 
         Used for uniquely identifying the transport type.
         """
-    )
 
-    def getargs(args):
+    @abc.abstractmethod
+    def getargs(self, args):
         """return the value for arguments in <args>
 
         For version 1 transports, returns a list of values in the same
@@ -197,20 +211,23 @@ class baseprotocolhandler(interfaceutil.Interface):
         a dict mapping argument name to value.
         """
 
-    def getprotocaps():
+    @abc.abstractmethod
+    def getprotocaps(self):
         """Returns the list of protocol-level capabilities of client
 
         Returns a list of capabilities as declared by the client for
         the current request (or connection for stateful protocol handlers)."""
 
-    def getpayload():
+    @abc.abstractmethod
+    def getpayload(self):
         """Provide a generator for the raw payload.
 
         The caller is responsible for ensuring that the full payload is
         processed.
         """
 
-    def mayberedirectstdio():
+    @abc.abstractmethod
+    def mayberedirectstdio(self):
         """Context manager to possibly redirect stdio.
 
         The context manager yields a file-object like object that receives
@@ -223,10 +240,12 @@ class baseprotocolhandler(interfaceutil.Interface):
         won't be captured.
         """
 
-    def client():
+    @abc.abstractmethod
+    def client(self):
         """Returns a string representation of this client (as bytes)."""
 
-    def addcapabilities(repo, caps):
+    @abc.abstractmethod
+    def addcapabilities(self, repo, caps):
         """Adds advertised capabilities specific to this protocol.
 
         Receives the list of capabilities collected so far.
@@ -234,7 +253,8 @@ class baseprotocolhandler(interfaceutil.Interface):
         Returns a list of capabilities. The passed in argument can be returned.
         """
 
-    def checkperm(perm):
+    @abc.abstractmethod
+    def checkperm(self, perm):
         """Validate that the client has permissions to perform a request.
 
         The argument is the permission required to proceed. If the client
@@ -326,7 +346,7 @@ class commanddict(dict):
                 b'or 2-tuples'
             )
 
-        return super(commanddict, self).__setitem__(k, v)
+        return super().__setitem__(k, v)
 
     def commandavailable(self, command, proto):
         """Determine if a command is available for the requested protocol."""
@@ -367,9 +387,7 @@ def supportedcompengines(ui, role):
     # No explicit config. Filter out the ones that aren't supposed to be
     # advertised and return default ordering.
     if not configengines:
-        attr = (
-            b'serverpriority' if role == util.SERVERROLE else b'clientpriority'
-        )
+        attr = 'serverpriority' if role == util.SERVERROLE else 'clientpriority'
         return [
             e for e in compengines if getattr(e.wireprotosupport(), attr) > 0
         ]
@@ -399,7 +417,7 @@ def supportedcompengines(ui, role):
             )
             % config,
             hint=_(b'usable compression engines: %s')
-            % b', '.sorted(validnames),  # pytype: disable=attribute-error
+            % b', '.join(sorted(validnames)),
         )
 
     return compengines

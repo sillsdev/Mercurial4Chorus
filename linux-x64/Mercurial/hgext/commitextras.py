@@ -7,6 +7,7 @@
 
 '''adds a new flag extras to commit (ADVANCED)'''
 
+from __future__ import annotations
 
 import re
 
@@ -16,7 +17,6 @@ from mercurial import (
     error,
     extensions,
     registrar,
-    util,
 )
 
 cmdtable = {}
@@ -52,7 +52,7 @@ def extsetup(ui):
 
 
 def _commit(orig, ui, repo, *pats, **opts):
-    if util.safehasattr(repo, 'unfiltered'):
+    if hasattr(repo, 'unfiltered'):
         repo = repo.unfiltered()
 
     class repoextra(repo.__class__):
@@ -82,7 +82,7 @@ def _commit(orig, ui, repo, *pats, **opts):
                     )
                     raise error.InputError(msg % k)
                 inneropts['extra'][k] = v
-            return super(repoextra, self).commit(*innerpats, **inneropts)
+            return super().commit(*innerpats, **inneropts)
 
     repo.__class__ = repoextra
     return orig(ui, repo, *pats, **opts)

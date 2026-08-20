@@ -6,6 +6,8 @@
 
 '''remote largefile store; the base class for wirestore'''
 
+from __future__ import annotations
+
 from mercurial.i18n import _
 
 from mercurial import (
@@ -32,7 +34,7 @@ class remotestore(basestore.basestore):
     '''a largefile store accessed over a network'''
 
     def __init__(self, ui, repo, url):
-        super(remotestore, self).__init__(ui, repo, url)
+        super().__init__(ui, repo, url)
         self._lstore = None
         if repo is not None:
             self._lstore = localstore.localstore(self.ui, self.repo, self.repo)
@@ -60,7 +62,7 @@ class remotestore(basestore.basestore):
         try:
             with lfutil.httpsendfile(self.ui, filename) as fd:
                 return self._put(hash, fd)
-        except IOError as e:
+        except OSError as e:
             raise error.Abort(
                 _(b'remotestore: could not open file %s: %s')
                 % (filename, stringutil.forcebytestr(e))
@@ -82,7 +84,7 @@ class remotestore(basestore.basestore):
             raise error.Abort(
                 b'%s: %s' % (urlutil.hidepassword(self.url), e.reason)
             )
-        except IOError as e:
+        except OSError as e:
             raise basestore.StoreError(
                 filename, hash, self.url, stringutil.forcebytestr(e)
             )

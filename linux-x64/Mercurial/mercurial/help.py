@@ -5,6 +5,7 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
 
 import itertools
 import re
@@ -26,7 +27,6 @@ from .i18n import (
     _,
     gettext,
 )
-from .pycompat import getattr
 from . import (
     cmdutil,
     encoding,
@@ -43,7 +43,6 @@ from . import (
     templatefuncs,
     templatekw,
     ui as uimod,
-    util,
 )
 from .hgweb import webcommands
 from .utils import (
@@ -159,6 +158,15 @@ def listexts(
     if rst:
         rst.insert(0, b'\n%s\n\n' % header)
     return rst
+
+
+def ext_help(ui: uimod.ui, ext) -> bytes:
+    doc = pycompat.getdoc(ext)
+    if doc is None:
+        return b""
+    assert doc is not None
+    doc = gettext(doc)
+    return sub_config_item_help(ui, doc)
 
 
 def extshelp(ui: uimod.ui) -> bytes:
@@ -367,6 +375,7 @@ def loaddoc(topic: bytes, subdir: Optional[bytes] = None) -> _DocLoader:
             doc = gettext(fp.read())
         for rewriter in helphooks.get(topic, []):
             doc = rewriter(ui, topic, doc)
+        doc = sub_config_item_help(ui, doc)
         return doc
 
     return loader
@@ -697,6 +706,44 @@ def inserttweakrc(ui: uimod.ui, topic: bytes, doc: bytes) -> bytes:
     return re.sub(br'( *)%s' % re.escape(marker), sub, doc)
 
 
+_CONFIG_DOC_RE = re.compile(b'(^ *)?:config-doc:`([^`]+)`', flags=re.MULTILINE)
+
+
+def sub_config_item_help(ui: uimod.ui, doc: bytes) -> bytes:
+    """replace :config-doc:`foo.bar` markup with the item documentation
+
+    This allow grouping config item declaration and help without having to
+    repeat it in the help text file and keep that in sync.
+    """
+    pieces = []
+    last_match_end = 0
+    for match in _CONFIG_DOC_RE.finditer(doc):
+        # finditer is expected to yield result in order
+        start = match.start()
+        assert last_match_end <= match.start()
+        pieces.append(doc[last_match_end:start])
+        item_name = match.group(2)
+        section, key = item_name.split(b'.', 1)
+        section_items = ui._knownconfig.get(section)
+        if section_items is None:
+            item = None
+        else:
+            item = section_items.get(key)
+        if item is None or not item.documentation:
+            item_doc = b'<missing help text for `%s`>' % item_name
+        else:
+            item_doc = gettext(item.documentation)
+            item_doc = sub_config_item_help(ui, item_doc)
+            indent = match.group(1)
+            if indent:  # either None or 0 should be ignored
+                indent = indent
+                item_doc = indent + item_doc.replace(b'\n', b'\n' + indent)
+        pieces.append(item_doc)
+        last_match_end = match.end()
+    pieces.append(doc[last_match_end:])
+    return b''.join(pieces)
+
+
 def _getcategorizedhelpcmds(
     ui: uimod.ui, cmdtable, name: bytes, select: Optional[_SelectFn] = None
 ) -> Tuple[Dict[bytes, List[bytes]], Dict[bytes, bytes], _SynonymTable]:
@@ -759,7 +806,7 @@ def help_(
     full: bool = True,
     subtopic: Optional[bytes] = None,
     fullname: Optional[bytes] = None,
-    **opts
+    **opts,
 ) -> bytes:
     """
     Generate the help for 'name' as unformatted restructured text. If
@@ -810,7 +857,7 @@ def help_(
         doc = gettext(pycompat.getdoc(entry[0]))
         if not doc:
             doc = _(b"(no help text available)")
-        if util.safehasattr(entry[0], 'definition'):  # aliased command
+        if hasattr(entry[0], 'definition'):  # aliased command
             source = entry[0].source
             if entry[0].definition.startswith(b'!'):  # shell alias
                 doc = _(b'shell alias for: %s\n\n%s\n\ndefined by: %s\n') % (
@@ -824,6 +871,7 @@ def help_(
                     doc,
                     source,
                 )
+        doc = sub_config_item_help(ui, doc)
         doc = doc.splitlines(True)
         if ui.quiet or not full:
             rst.append(doc[0])
@@ -1044,12 +1092,15 @@ def help_(
     def helpext(name: bytes, subtopic: Optional[bytes] = None) -> List[bytes]:
         try:
             mod = extensions.find(name)
-            doc = gettext(pycompat.getdoc(mod)) or _(b'no help text available')
+            doc = ext_help(ui, mod)
+            if not doc:
+                doc = _(b'no help text available')
         except KeyError:
             mod = None
             doc = extensions.disabled_help(name)
             if not doc:
                 raise error.UnknownCommand(name)
+            doc = sub_config_item_help(ui, doc)
 
         if b'\n' not in doc:
             head, tail = doc, b""
@@ -1178,7 +1229,7 @@ def formattedhelp(
     keep: Optional[Iterable[bytes]] = None,
     unknowncmd: bool = False,
     full: bool = True,
-    **opts
+    **opts,
 ) -> bytes:
     """get help for a given topic (as a dotted name) as rendered rst
 
@@ -1211,7 +1262,7 @@ def formattedhelp(
         subtopic=subtopic,
         unknowncmd=unknowncmd,
         full=full,
-        **opts
+        **opts,
     )
 
     blocks, pruned = minirst.parse(text, keep=keep)

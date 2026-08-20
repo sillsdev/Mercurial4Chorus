@@ -5,6 +5,7 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
 
 import errno
 import fcntl
@@ -23,6 +24,7 @@ import unicodedata
 from typing import (
     Any,
     AnyStr,
+    Callable,
     Iterable,
     Iterator,
     List,
@@ -35,10 +37,6 @@ from typing import (
 )
 
 from .i18n import _
-from .pycompat import (
-    getattr,
-    open,
-)
 from . import (
     encoding,
     error,
@@ -71,13 +69,6 @@ rename = os.rename
 removedirs = os.removedirs
 
 if typing.TYPE_CHECKING:
-    # Replace the various overloads that come along with aliasing stdlib methods
-    # with the narrow definition that we care about in the type checking phase
-    # only.  This ensures that both Windows and POSIX see only the definition
-    # that is actually available.
-    #
-    # Note that if we check pycompat.TYPE_CHECKING here, it is always False, and
-    # the methods aren't replaced.
 
     def normpath(path: bytes) -> bytes:
         raise NotImplementedError
@@ -106,7 +97,7 @@ expandglobs: bool = False
 umask: int = os.umask(0)
 os.umask(umask)
 
-posixfile = open
+posixfile = pycompat.open
 
 
 def split(p: bytes) -> Tuple[bytes, bytes]:
@@ -180,14 +171,14 @@ def setflags(f: bytes, l: bool, x: bool) -> None:
     if l:
         if not stat.S_ISLNK(s):
             # switch file to link
-            with open(f, b'rb') as fp:
+            with open(f, 'rb') as fp:
                 data = fp.read()
             unlink(f)
             try:
                 os.symlink(data, f)
             except OSError:
                 # failed to make a link, rewrite file
-                with open(f, b"wb") as fp:
+                with open(f, "wb") as fp:
                     fp.write(data)
 
         # no chmod needed at this point
@@ -196,17 +187,17 @@ def setflags(f: bytes, l: bool, x: bool) -> None:
         # switch link to file
         data = os.readlink(f)
         unlink(f)
-        with open(f, b"wb") as fp:
+        with open(f, "wb") as fp:
             fp.write(data)
         s = 0o666 & ~umask  # avoid restatting for chmod
 
     sx = s & 0o100
     if st.st_nlink > 1 and bool(x) != bool(sx):
         # the file is a hardlink, break it
-        with open(f, b"rb") as fp:
+        with open(f, "rb") as fp:
             data = fp.read()
         unlink(f)
-        with open(f, b"wb") as fp:
+        with open(f, "wb") as fp:
             fp.write(data)
 
     if x and not sx:
@@ -221,7 +212,7 @@ def setflags(f: bytes, l: bool, x: bool) -> None:
 def copymode(
     src: bytes,
     dst: bytes,
-    mode: Optional[bytes] = None,
+    mode: Optional[int] = None,
     enforcewritable: bool = False,
 ) -> None:
     """Copy the file mode from the file at path src to dst.
@@ -269,7 +260,7 @@ def checkexec(path: bytes) -> bool:
                     copymode(storedir, cachedir)
                 else:
                     copymode(basedir, cachedir)
-            except (IOError, OSError):
+            except OSError:
                 # we other fallback logic triggers
                 pass
         if os.path.isdir(cachedir):
@@ -288,7 +279,7 @@ def checkexec(path: bytes) -> bool:
                     try:
                         m = os.stat(checknoexec).st_mode
                     except FileNotFoundError:
-                        open(checknoexec, b'w').close()  # might fail
+                        open(checknoexec, 'w').close()  # might fail
                         m = os.stat(checknoexec).st_mode
                     if m & EXECFLAGS == 0:
                         # check-exec is exec and check-no-exec is not exec
@@ -309,6 +300,7 @@ def checkexec(path: bytes) -> bool:
             os.close(fh)
             m = os.stat(fn).st_mode
             if m & EXECFLAGS == 0:
+                m = 0o666 & ~umask
                 os.chmod(fn, m & 0o777 | EXECFLAGS)
                 if os.stat(fn).st_mode & EXECFLAGS != 0:
                     if checkisexec is not None:
@@ -318,7 +310,7 @@ def checkexec(path: bytes) -> bool:
         finally:
             if fn is not None:
                 unlink(fn)
-    except (IOError, OSError):
+    except OSError:
         # we don't care, the user probably won't be able to commit anyway
         return False
 
@@ -355,7 +347,7 @@ def checklink(path: bytes) -> bool:
                 target = b'checklink-target'
                 try:
                     fullpath = os.path.join(cachedir, target)
-                    open(fullpath, b'w').close()
+                    open(fullpath, 'w').close()
                 except PermissionError:
                     # If we can't write to cachedir, just pretend
                     # that the fs is readonly and by association
@@ -394,20 +386,20 @@ def checkosfilename(path: bytes) -> Optional[bytes]:
     return None  # on posix platforms, every path is ok
 
 
-def getfsmountpoint(dirpath: bytes) -> Optional[bytes]:
+def getfsmountpoint(path: bytes) -> Optional[bytes]:
     """Get the filesystem mount point from a directory (best-effort)
 
     Returns None if we are unsure. Raises OSError on ENOENT, EPERM, etc.
     """
-    return getattr(osutil, 'getfsmountpoint', lambda x: None)(dirpath)
+    return getattr(osutil, 'getfsmountpoint', lambda x: None)(path)
 
 
-def getfstype(dirpath: bytes) -> Optional[bytes]:
+def getfstype(path: bytes) -> Optional[bytes]:
     """Get the filesystem type name from a directory (best-effort)
 
     Returns None if we are unsure. Raises OSError on ENOENT, EPERM, etc.
     """
-    return getattr(osutil, 'getfstype', lambda x: None)(dirpath)
+    return getattr(osutil, 'getfstype', lambda x: None)(path)
 
 
 def get_password() -> bytes:
@@ -554,7 +546,13 @@ if pycompat.sysplatform == b'cygwin':
         return False
 
 
-_needsshellquote: Optional[Match[bytes]] = None
+if pycompat.sysplatform == b'OpenVMS':
+    # OpenVMS's symlink emulation is broken on some OpenVMS versions.
+    def checklink(path: bytes) -> bool:
+        return False
+
+
+_needsshellquote: Optional[Callable[[bytes], Optional[Match[bytes]]]] = None
 
 
 def shellquote(s: bytes) -> bytes:
@@ -693,7 +691,7 @@ def makedir(path: bytes, notindexed: bool) -> None:
 
 def lookupreg(
     key: bytes,
-    name: Optional[bytes] = None,
+    valname: Optional[bytes] = None,
     scope: Optional[Union[int, Iterable[int]]] = None,
 ) -> Optional[bytes]:
     return None
@@ -709,6 +707,8 @@ def hidewindow() -> None:
 
 
 class cachestat:
+    stat: os.stat_result
+
     def __init__(self, path: bytes) -> None:
         self.stat = os.stat(path)
 
@@ -783,7 +783,7 @@ def readpipe(pipe) -> bytes:
                 if not s:
                     break
                 chunks.append(s)
-            except IOError:
+            except OSError:
                 break
 
         return b''.join(chunks)

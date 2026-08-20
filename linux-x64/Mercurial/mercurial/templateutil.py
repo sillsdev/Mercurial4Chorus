@@ -5,12 +5,12 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
 
 import abc
 import types
 
 from .i18n import _
-from .pycompat import getattr
 from . import (
     error,
     pycompat,
@@ -281,7 +281,7 @@ class hybrid(wrapped):
 
     def getmember(self, context, mapping, key):
         # TODO: maybe split hybrid list/dict types?
-        if not util.safehasattr(self._values, 'get'):
+        if not hasattr(self._values, 'get'):
             raise error.ParseError(_(b'not a dictionary'))
         key = unwrapastype(context, mapping, key, self._keytype)
         return self._wrapvalue(key, self._values.get(key))
@@ -301,13 +301,13 @@ class hybrid(wrapped):
     def _wrapvalue(self, key, val):
         if val is None:
             return
-        if util.safehasattr(val, '_makemap'):
+        if hasattr(val, '_makemap'):
             # a nested hybrid list/dict, which has its own way of map operation
             return val
         return hybriditem(None, key, val, self._makemap)
 
     def filter(self, context, mapping, select):
-        if util.safehasattr(self._values, 'get'):
+        if hasattr(self._values, 'get'):
             values = {
                 k: v
                 for k, v in self._values.items()
@@ -341,7 +341,7 @@ class hybrid(wrapped):
     def tovalue(self, context, mapping):
         # TODO: make it non-recursive for trivial lists/dicts
         xs = self._values
-        if util.safehasattr(xs, 'get'):
+        if hasattr(xs, 'get'):
             return {k: unwrapvalue(context, mapping, v) for k, v in xs.items()}
         return [unwrapvalue(context, mapping, x) for x in xs]
 
@@ -549,7 +549,7 @@ class mappinggenerator(_mappingsequence):
     """
 
     def __init__(self, make, args=(), name=None, tmpl=None, sep=b''):
-        super(mappinggenerator, self).__init__(name, tmpl, sep)
+        super().__init__(name, tmpl, sep)
         self._make = make
         self._args = args
 
@@ -564,7 +564,7 @@ class mappinglist(_mappingsequence):
     """Wrapper for list of template mappings"""
 
     def __init__(self, mappings, name=None, tmpl=None, sep=b''):
-        super(mappinglist, self).__init__(name, tmpl, sep)
+        super().__init__(name, tmpl, sep)
         self._mappings = mappings
 
     def itermaps(self, context):
@@ -582,7 +582,7 @@ class mappingdict(mappable, _mappingsequence):
     """
 
     def __init__(self, mapping, name=None, tmpl=None):
-        super(mappingdict, self).__init__(name, tmpl)
+        super().__init__(name, tmpl)
         self._mapping = mapping
 
     def tomap(self, context):
@@ -595,7 +595,7 @@ class mappingdict(mappable, _mappingsequence):
         return True
 
     def tovalue(self, context, mapping):
-        return super(mappingdict, self).tovalue(context, mapping)[0]
+        return super().tovalue(context, mapping)[0]
 
 
 class mappingnone(wrappedvalue):
@@ -606,7 +606,7 @@ class mappingnone(wrappedvalue):
     """
 
     def __init__(self):
-        super(mappingnone, self).__init__(None)
+        super().__init__(None)
 
     def itermaps(self, context):
         return iter([])
@@ -858,7 +858,7 @@ def flatten(context, mapping, thing):
         )
     elif thing is None:
         pass
-    elif not util.safehasattr(thing, '__iter__'):
+    elif not hasattr(thing, '__iter__'):
         yield pycompat.bytestr(thing)
     else:
         for i in thing:
@@ -868,11 +868,10 @@ def flatten(context, mapping, thing):
                 yield i
             elif i is None:
                 pass
-            elif not util.safehasattr(i, '__iter__'):
+            elif not hasattr(i, '__iter__'):
                 yield pycompat.bytestr(i)
             else:
-                for j in flatten(context, mapping, i):
-                    yield j
+                yield from flatten(context, mapping, i)
 
 
 def stringify(context, mapping, thing):

@@ -1,10 +1,11 @@
+from __future__ import annotations
+
 import threading
 
 from mercurial.node import (
     hex,
     sha1nodeconstants,
 )
-from mercurial.pycompat import getattr
 from mercurial import (
     mdiff,
     revlog,
@@ -36,7 +37,7 @@ class ChainIndicies:
 
 class unioncontentstore(basestore.baseunionstore):
     def __init__(self, *args, **kwargs):
-        super(unioncontentstore, self).__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
 
         self.stores = args
         self.writestore = kwargs.get('writestore')
@@ -158,7 +159,7 @@ class unioncontentstore(basestore.baseunionstore):
 
 class remotefilelogcontentstore(basestore.basestore):
     def __init__(self, *args, **kwargs):
-        super(remotefilelogcontentstore, self).__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
         self._threaddata = threading.local()
 
     def get(self, name, node):

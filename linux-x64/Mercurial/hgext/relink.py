@@ -7,11 +7,12 @@
 
 """recreates hardlinks between repository clones"""
 
+from __future__ import annotations
+
 import os
 import stat
 
 from mercurial.i18n import _
-from mercurial.pycompat import open
 from mercurial import (
     error,
     hg,
@@ -60,9 +61,7 @@ def relink(ui, repo, origin=None, **opts):
     command is running. (Both repositories will be locked against
     writes.)
     """
-    if not util.safehasattr(util, b'samefile') or not util.safehasattr(
-        util, b'samedevice'
-    ):
+    if not hasattr(util, 'samefile') or not hasattr(util, 'samedevice'):
         raise error.Abort(_(b'hardlinks are not supported on this system'))
 
     if origin is None and b'default-relink' in ui.paths:
@@ -185,19 +184,17 @@ def do_relink(src, dst, files, ui):
         source = os.path.join(src, f)
         tgt = os.path.join(dst, f)
         # Binary mode, so that read() works correctly, especially on Windows
-        sfp = open(source, b'rb')
-        dfp = open(tgt, b'rb')
-        sin = sfp.read(CHUNKLEN)
-        while sin:
-            din = dfp.read(CHUNKLEN)
-            if sin != din:
-                break
+        with open(source, 'rb') as sfp, open(tgt, 'rb') as dfp:
             sin = sfp.read(CHUNKLEN)
-        sfp.close()
-        dfp.close()
-        if sin:
-            ui.debug(b'not linkable: %s\n' % f)
-            continue
+            while sin:
+                din = dfp.read(CHUNKLEN)
+                if sin != din:
+                    break
+                sin = sfp.read(CHUNKLEN)
+
+            if sin:
+                ui.debug(b'not linkable: %s\n' % f)
+                continue
         try:
             relinkfile(source, tgt)
             progress.update(pos, item=f)

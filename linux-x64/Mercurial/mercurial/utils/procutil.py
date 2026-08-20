@@ -7,6 +7,7 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
 
 import contextlib
 import errno
@@ -23,10 +24,6 @@ from typing import (
 )
 
 from ..i18n import _
-from ..pycompat import (
-    getattr,
-    open,
-)
 
 from .. import (
     encoding,
@@ -58,10 +55,10 @@ class BadFile(io.RawIOBase):
     """Dummy file object to simulate closed stdio behavior"""
 
     def readinto(self, b):
-        raise IOError(errno.EBADF, 'Bad file descriptor')
+        raise OSError(errno.EBADF, 'Bad file descriptor')
 
     def write(self, b):
-        raise IOError(errno.EBADF, 'Bad file descriptor')
+        raise OSError(errno.EBADF, 'Bad file descriptor')
 
 
 class LineBufferedWrapper:
@@ -182,7 +179,7 @@ if pycompat.iswindows:
     # Work around Windows bugs.
     stdout = platform.winstdout(stdout)  # pytype: disable=module-attr
     stderr = platform.winstdout(stderr)  # pytype: disable=module-attr
-if isatty(stdout):
+if isatty(stdout) and pycompat.sysplatform != b'OpenVMS':
     # The standard library doesn't offer line-buffered binary streams.
     stdout = make_line_buffered(stdout)
 
@@ -209,7 +206,7 @@ try:
 except AttributeError:
     pass
 
-closefds = pycompat.isposix
+closefds = pycompat.isposix and pycompat.sysplatform != b'OpenVMS'
 
 
 def explainexit(code):
@@ -331,21 +328,20 @@ def tempfilter(s, cmd):
     inname, outname = None, None
     try:
         infd, inname = pycompat.mkstemp(prefix=b'hg-filter-in-')
-        fp = os.fdopen(infd, 'wb')
-        fp.write(s)
-        fp.close()
+
+        with os.fdopen(infd, 'wb') as fp:
+            fp.write(s)
+
         outfd, outname = pycompat.mkstemp(prefix=b'hg-filter-out-')
         os.close(outfd)
         cmd = cmd.replace(b'INFILE', inname)
         cmd = cmd.replace(b'OUTFILE', outname)
         code = system(cmd)
-        if pycompat.sysplatform == b'OpenVMS' and code & 1:
-            code = 0
         if code:
             raise error.Abort(
                 _(b"command '%s' failed: %s") % (cmd, explainexit(code))
             )
-        with open(outname, b'rb') as fp:
+        with open(outname, 'rb') as fp:
             return fp.read()
     finally:
         try:
@@ -384,8 +380,10 @@ def hgexecutable():
     Defaults to $HG or 'hg' in the search path.
     """
     if _hgexecutable is None:
-        hg = encoding.environ.get(b'HG')
+        hg = encoding.environ.get(b'HG', '')
         mainmod = sys.modules['__main__']
+        if pycompat.sysplatform == b'OpenVMS' and hg[0:1] == '$':
+            hg = 'mcr ' + hg[1:]
         if hg:
             _sethgexecutable(hg)
         elif resourceutil.mainfrozen():
@@ -534,8 +532,6 @@ def system(cmd, environ=None, cwd=None, out=None):
             out.write(line)
         proc.wait()
         rc = proc.returncode
-    if pycompat.sysplatform == b'OpenVMS' and rc & 1:
-        rc = 0
     return rc
 
 
@@ -689,8 +685,9 @@ if pycompat.iswindows:
         # we can't use close_fds *and* redirect stdin. I'm not sure that we
         # need to because the detached process has no console connection.
 
+        stdin = None
+
         try:
-            stdin = None
             if stdin_bytes is not None:
                 stdin = pycompat.unnamedtempfile()
                 stdin.write(stdin_bytes)
@@ -712,7 +709,6 @@ if pycompat.iswindows:
         finally:
             if stdin is not None:
                 stdin.close()
-
 
 else:
 
@@ -747,7 +743,7 @@ else:
             script = b' '.join(shellquote(x) for x in cmd)
         if record_wait is None:
             # double-fork to completely detach from the parent process
-            script = b'( %s ) &' % script
+            script = b'( ( %s ) <&3 3<&- &) 3<&0' % script
             start_new_session = True
         else:
             start_new_session = False

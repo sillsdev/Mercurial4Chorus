@@ -5,6 +5,7 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
 
 import copy
 import mimetypes
@@ -13,7 +14,6 @@ import re
 
 from ..i18n import _
 from ..node import hex, short
-from ..pycompat import getattr
 
 from .common import (
     ErrorResponse,
@@ -73,7 +73,7 @@ class webcommand:
         self.name = name
 
     def __call__(self, func):
-        __all__.append(self.name)
+        __all__.append(pycompat.sysstr(self.name))
         commands[self.name] = func
         return func
 
@@ -175,7 +175,7 @@ def _filerevision(web, fctx):
         rename=webutil.renamelink(fctx),
         permissions=fctx.manifest().flags(f),
         ishead=int(ishead),
-        **pycompat.strkwargs(webutil.commonentry(web.repo, fctx))
+        **pycompat.strkwargs(webutil.commonentry(web.repo, fctx)),
     )
 
 
@@ -234,8 +234,7 @@ def _search(web):
                     ctx = web.repo[j]
                     l.append(ctx)
                 l.reverse()
-                for e in l:
-                    yield e
+                yield from l
 
         for ctx in revgen():
             miss = 0
@@ -425,8 +424,7 @@ def changelog(web, shortlog=False):
         if pos != -1:
             revs = web.repo.changelog.revs(pos, 0)
 
-        for entry in webutil.changelistentries(web, revs, maxcount, parity):
-            yield entry
+        yield from webutil.changelistentries(web, revs, maxcount, parity)
 
     if shortlog:
         revcount = web.maxshortchanges
@@ -517,8 +515,7 @@ def changeset(web):
 rev = webcommand(b'rev')(changeset)
 
 
-def decodepath(path):
-    # type: (bytes) -> bytes
+def decodepath(path: bytes) -> bytes:
     """Hook for mapping a path in the repository to a path in the
     working copy.
 
@@ -585,7 +582,9 @@ def manifest(web):
             h[None] = None  # denotes files present
 
     if mf and not files and not dirs:
-        raise ErrorResponse(HTTP_NOT_FOUND, b'path not found: ' + path)
+        # /!\ Do not print `path` here unless you do *extensive* escaping.
+        # Because XSS escaping is hard, we just don't risk it.
+        raise ErrorResponse(HTTP_NOT_FOUND, b'path not found')
 
     def filelist(context):
         for f in sorted(files):
@@ -603,7 +602,6 @@ def manifest(web):
 
     def dirlist(context):
         for d in sorted(dirs):
-
             emptydirs = []
             h = dirs[d]
             while isinstance(h, dict) and len(h) == 1:
@@ -631,7 +629,7 @@ def manifest(web):
         fentries=templateutil.mappinggenerator(filelist),
         dentries=templateutil.mappinggenerator(dirlist),
         archives=web.archivelist(hex(node)),
-        **pycompat.strkwargs(webutil.commonentry(web.repo, ctx))
+        **pycompat.strkwargs(webutil.commonentry(web.repo, ctx)),
     )
 
 
@@ -800,8 +798,7 @@ def summary(web):
             lm[b'parity'] = next(parity)
             l.append(lm)
 
-        for entry in reversed(l):
-            yield entry
+        yield from reversed(l)
 
     tip = web.repo[b'tip']
     count = len(web.repo)
@@ -876,7 +873,7 @@ def filediff(web):
         symrev=webutil.symrevorshortnode(web.req, ctx),
         rename=rename,
         diff=diffs,
-        **pycompat.strkwargs(webutil.commonentry(web.repo, ctx))
+        **pycompat.strkwargs(webutil.commonentry(web.repo, ctx)),
     )
 
 
@@ -957,7 +954,7 @@ def comparison(web):
         rightrev=rightrev,
         rightnode=hex(rightnode),
         comparison=comparison,
-        **pycompat.strkwargs(webutil.commonentry(web.repo, ctx))
+        **pycompat.strkwargs(webutil.commonentry(web.repo, ctx)),
     )
 
 
@@ -1050,7 +1047,9 @@ def annotate(web):
             }
 
     diffopts = webutil.difffeatureopts(web.req, web.repo.ui, b'annotate')
-    diffopts = {k: getattr(diffopts, k) for k in diffopts.defaults}
+    diffopts = {
+        k: getattr(diffopts, pycompat.sysstr(k)) for k in diffopts.defaults
+    }
 
     return web.sendtemplate(
         b'fileannotate',
@@ -1062,7 +1061,7 @@ def annotate(web):
         permissions=fctx.manifest().flags(f),
         ishead=int(ishead),
         diffopts=templateutil.hybriddict(diffopts),
-        **pycompat.strkwargs(webutil.commonentry(web.repo, fctx))
+        **pycompat.strkwargs(webutil.commonentry(web.repo, fctx)),
     )
 
 
@@ -1225,7 +1224,7 @@ def filelog(web):
         revcount=revcount,
         morevars=morevars,
         lessvars=lessvars,
-        **pycompat.strkwargs(webutil.commonentry(web.repo, fctx))
+        **pycompat.strkwargs(webutil.commonentry(web.repo, fctx)),
     )
 
 
@@ -1255,11 +1254,15 @@ def archive(web):
     key = web.req.qsparams[b'node']
 
     if type_ not in webutil.archivespecs:
-        msg = b'Unsupported archive type: %s' % stringutil.pprint(type_)
+        # /!\ Do not print `type_` here unless you do *extensive* escaping.
+        # Because XSS escaping is hard, we just don't risk it.
+        msg = b'Unsupported archive type'
         raise ErrorResponse(HTTP_NOT_FOUND, msg)
 
-    if not ((type_ in allowed or web.configbool(b"web", b"allow" + type_))):
-        msg = b'Archive type not allowed: %s' % type_
+    if not (type_ in allowed or web.configbool(b"web", b"allow" + type_)):
+        # /!\ Do not print `type_` here unless you do *extensive* escaping.
+        # Because XSS escaping is hard, we just don't risk it.
+        msg = b'Archive type not allowed'
         raise ErrorResponse(HTTP_FORBIDDEN, msg)
 
     reponame = re.sub(br"\W+", b"-", os.path.basename(web.reponame))
@@ -1278,41 +1281,53 @@ def archive(web):
         if pats:
             files = [f for f in ctx.manifest().keys() if match(f)]
             if not files:
-                raise ErrorResponse(
-                    HTTP_NOT_FOUND, b'file(s) not found: %s' % file
-                )
+                # /!\ Do not print `files` here unless you do *extensive*
+                # escaping.
+                # Because XSS escaping is hard, we just don't risk it.
+                raise ErrorResponse(HTTP_NOT_FOUND, b'file(s) not found')
 
     mimetype, artype, extension, encoding = webutil.archivespecs[type_]
-
-    web.res.headers[b'Content-Type'] = mimetype
-    web.res.headers[b'Content-Disposition'] = b'attachment; filename=%s%s' % (
-        name,
-        extension,
-    )
-
-    if encoding:
-        web.res.headers[b'Content-Encoding'] = encoding
-
-    web.res.setbodywillwrite()
-    if list(web.res.sendresponse()):
-        raise error.ProgrammingError(
-            b'sendresponse() should not emit data if writing later'
-        )
 
     if web.req.method == b'HEAD':
         return []
 
-    bodyfh = web.res.getbodyfile()
+    def open_archive():
+        """Open the output "file" for the archiver.
 
-    archival.archive(
+        This function starts the streaming response. Error reporting
+        after this point will result in short writes without proper
+        diagnostics to the client.
+        """
+        web.res.headers[b'Content-Type'] = mimetype
+        web.res.headers[
+            b'Content-Disposition'
+        ] = b'attachment; filename=%s%s' % (
+            name,
+            extension,
+        )
+
+        if encoding:
+            web.res.headers[b'Content-Encoding'] = encoding
+
+        web.res.setbodywillwrite()
+        if list(web.res.sendresponse()):
+            raise error.ProgrammingError(
+                b'sendresponse() should not emit data if writing later'
+            )
+
+        return web.res.getbodyfile()
+
+    total = archival.archive(
         web.repo,
-        bodyfh,
+        open_archive,
         cnode,
         artype,
         prefix=name,
         match=match,
         subrepos=web.configbool(b"web", b"archivesubrepos"),
     )
+    if total == 0:
+        raise ErrorResponse(HTTP_NOT_FOUND, b'no files found in changeset')
 
     return []
 
@@ -1427,7 +1442,7 @@ def graph(web):
         return tree
 
     def jsdata(context):
-        for (id, type, ctx, vtx, edges) in fulltree():
+        for id, type, ctx, vtx, edges in fulltree():
             yield {
                 b'node': pycompat.bytestr(ctx),
                 b'graphnode': webutil.getgraphnode(web.repo, ctx),

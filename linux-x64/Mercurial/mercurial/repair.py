@@ -6,6 +6,7 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
 
 from .i18n import _
 from .node import (
@@ -218,6 +219,7 @@ def strip(ui, repo, nodelist, backup=True, topic=b'backup'):
                 oldfiles = set(tr._offsetmap.keys())
                 oldfiles.update(tr._newfiles)
 
+                repo._phasecache.register_strip(repo, tr, striprev)
                 tr.startgroup()
                 cl.strip(striprev, tr)
                 stripmanifest(repo, striprev, tr, files)
@@ -239,7 +241,10 @@ def strip(ui, repo, nodelist, backup=True, topic=b'backup'):
                 deleteobsmarkers(repo.obsstore, stripobsidx)
                 del repo.obsstore
                 repo.invalidatevolatilesets()
-                repo._phasecache.filterunknown(repo)
+
+            # NOTE: eventually make a common entry point on localrepo to help
+            # other caches
+            repo.revbranchcache().invalidate(striprev)
 
             if tmpbundlefile:
                 ui.note(_(b"adding branch\n"))

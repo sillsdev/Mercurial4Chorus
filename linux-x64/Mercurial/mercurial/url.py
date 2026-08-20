@@ -7,11 +7,14 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
 
 import base64
+import hashlib
 import socket
 
 from .i18n import _
+from .node import hex
 from . import (
     encoding,
     error,
@@ -190,7 +193,7 @@ def _gen_sendfile(orgsend):
     return _sendfile
 
 
-has_https = util.safehasattr(urlreq, 'httpshandler')
+has_https = hasattr(urlreq, 'httpshandler')
 
 
 class httpconnection(keepalive.HTTPConnection):
@@ -222,47 +225,6 @@ def _generic_start_transaction(handler, h, req):
     h.headers = None
 
 
-def _generic_proxytunnel(self: "httpsconnection"):
-    headers = self.headers  # pytype: disable=attribute-error
-    proxyheaders = {
-        pycompat.bytestr(x): pycompat.bytestr(headers[x])
-        for x in headers
-        if x.lower().startswith('proxy-')
-    }
-    realhostport = self.realhostport  # pytype: disable=attribute-error
-    self.send(b'CONNECT %s HTTP/1.0\r\n' % realhostport)
-
-    for header in proxyheaders.items():
-        self.send(b'%s: %s\r\n' % header)
-    self.send(b'\r\n')
-
-    # majority of the following code is duplicated from
-    # httplib.HTTPConnection as there are no adequate places to
-    # override functions to provide the needed functionality.
-
-    # pytype: disable=attribute-error
-    res = self.response_class(self.sock, method=self._method)
-    # pytype: enable=attribute-error
-
-    while True:
-        # pytype: disable=attribute-error
-        version, status, reason = res._read_status()
-        # pytype: enable=attribute-error
-        if status != httplib.CONTINUE:
-            break
-        # skip lines that are all whitespace
-        list(iter(lambda: res.fp.readline().strip(), b''))
-
-    if status == 200:
-        # skip lines until we find a blank line
-        list(iter(res.fp.readline, b'\r\n'))
-    else:
-        self.close()
-        raise socket.error(
-            "Tunnel connection failed: %d %s" % (status, reason.strip())
-        )
-
-
 class httphandler(keepalive.HTTPHandler):
     def http_open(self, req):
         return self.do_open(httpconnection, req)
@@ -272,39 +234,72 @@ class httphandler(keepalive.HTTPHandler):
         return keepalive.HTTPHandler._start_transaction(self, h, req)
 
 
-class logginghttpconnection(keepalive.HTTPConnection):
-    def __init__(self, createconn, *args, **kwargs):
-        keepalive.HTTPConnection.__init__(self, *args, **kwargs)
-        self._create_connection = createconn
-
-
 class logginghttphandler(httphandler):
-    """HTTP handler that logs socket I/O."""
+    """HTTP(S) handler that logs socket I/O."""
 
-    def __init__(self, logfh, name, observeropts, timeout=None):
-        super(logginghttphandler, self).__init__(timeout=timeout)
+    def __init__(self, logfh, name, observeropts, *args, **kwargs):
+        super().__init__(*args, **kwargs)
 
         self._logfh = logfh
         self._logname = name
         self._observeropts = observeropts
 
-    # do_open() calls the passed class to instantiate an HTTPConnection. We
-    # pass in a callable method that creates a custom HTTPConnection instance
-    # whose callback to create the socket knows how to proxy the socket.
-    def http_open(self, req):
-        return self.do_open(self._makeconnection, req)
+    def do_open(self, http_class, *args, **kwargs):
+        _logfh = self._logfh
+        _logname = self._logname
+        _observeropts = self._observeropts
 
-    def _makeconnection(self, *args, **kwargs):
-        def createconnection(*args, **kwargs):
-            sock = socket.create_connection(*args, **kwargs)
-            return util.makeloggingsocket(
-                self._logfh, sock, self._logname, **self._observeropts
-            )
+        class logginghttpconnection(http_class):
+            def connect(self):
+                super().connect()
+                self.sock = util.makeloggingsocket(
+                    _logfh, self.sock, _logname, **_observeropts
+                )
 
-        return logginghttpconnection(createconnection, *args, **kwargs)
+        return super().do_open(logginghttpconnection, *args, **kwargs)
 
 
 if has_https:
+
+    def _generic_proxytunnel(self: httpsconnection):
+        headers = self.headers  # pytype: disable=attribute-error
+        proxyheaders = {
+            pycompat.bytestr(x): pycompat.bytestr(headers[x])
+            for x in headers
+            if x.lower().startswith('proxy-')
+        }
+        realhostport = self.realhostport  # pytype: disable=attribute-error
+        self.send(b'CONNECT %s HTTP/1.0\r\n' % realhostport)
+
+        for header in proxyheaders.items():
+            self.send(b'%s: %s\r\n' % header)
+        self.send(b'\r\n')
+
+        # majority of the following code is duplicated from
+        # httplib.HTTPConnection as there are no adequate places to
+        # override functions to provide the needed functionality.
+
+        # pytype: disable=attribute-error
+        res = self.response_class(self.sock, method=self._method)
+        # pytype: enable=attribute-error
+
+        while True:
+            # pytype: disable=attribute-error
+            version, status, reason = res._read_status()
+            # pytype: enable=attribute-error
+            if status != httplib.CONTINUE:
+                break
+            # skip lines that are all whitespace
+            list(iter(lambda: res.fp.readline().strip(), b''))
+
+        if status == 200:
+            # skip lines until we find a blank line
+            list(iter(res.fp.readline, b'\r\n'))
+        else:
+            self.close()
+            raise OSError(
+                "Tunnel connection failed: %d %s" % (status, reason.strip())
+            )
 
     class httpsconnection(keepalive.HTTPConnection):
         response_class = keepalive.HTTPResponse
@@ -320,7 +315,7 @@ if has_https:
             key_file=None,
             cert_file=None,
             *args,
-            **kwargs
+            **kwargs,
         ):
             keepalive.HTTPConnection.__init__(self, host, port, *args, **kwargs)
             self.key_file = key_file
@@ -463,41 +458,123 @@ class httpbasicauthhandler(urlreq.httpbasicauthhandler):
             return None
 
 
-class cookiehandler(urlreq.basehandler):
-    def __init__(self, ui):
-        self.cookiejar = None
-
-        cookiefile = ui.config(b'auth', b'cookiefile')
-        if not cookiefile:
-            return
-
-        cookiefile = util.expandpath(cookiefile)
-        try:
-            cookiejar = util.cookielib.MozillaCookieJar(
-                pycompat.fsdecode(cookiefile)
+def load_cookiejar(ui):
+    cookiefile = ui.config(b'auth', b'cookiefile')
+    if not cookiefile:
+        return
+    cookiefile = util.expandpath(cookiefile)
+    try:
+        cookiejar = util.cookielib.MozillaCookieJar(
+            pycompat.fsdecode(cookiefile)
+        )
+        cookiejar.load()
+        return cookiejar
+    except util.cookielib.LoadError as e:
+        ui.warn(
+            _(
+                b'(error loading cookie file %s: %s; continuing without '
+                b'cookies)\n'
             )
-            cookiejar.load()
-            self.cookiejar = cookiejar
-        except util.cookielib.LoadError as e:
-            ui.warn(
-                _(
-                    b'(error loading cookie file %s: %s; continuing without '
-                    b'cookies)\n'
-                )
-                % (cookiefile, stringutil.forcebytestr(e))
-            )
+            % (cookiefile, stringutil.forcebytestr(e))
+        )
 
-    def http_request(self, request):
-        if self.cookiejar:
-            self.cookiejar.add_cookie_header(request)
 
-        return request
+class readlinehandler(urlreq.basehandler):
+    def http_response(self, request, response):
+        class readlineresponse(response.__class__):
+            def readlines(self, sizehint=0):
+                total = 0
+                list = []
+                while True:
+                    line = self.readline()
+                    if not line:
+                        break
+                    list.append(line)
+                    total += len(line)
+                    if sizehint and total >= sizehint:
+                        break
+                return list
 
-    def https_request(self, request):
-        if self.cookiejar:
-            self.cookiejar.add_cookie_header(request)
+        response.__class__ = readlineresponse
+        return response
 
-        return request
+    https_response = http_response
+
+
+class digesthandler(urlreq.basehandler):
+    # exchange.py assumes the algorithms are listed in order of preference,
+    # earlier entries are prefered.
+    digest_algorithms = {
+        b'sha256': hashlib.sha256,
+        b'sha512': hashlib.sha512,
+    }
+
+    def __init__(self, digest):
+        if b':' not in digest:
+            raise error.Abort(_(b'invalid digest specification'))
+        algo, checksum = digest.split(b':')
+        if algo not in self.digest_algorithms:
+            raise error.Abort(_(b'unsupported digest algorithm: %s') % algo)
+        self._digest = checksum
+        self._hasher = self.digest_algorithms[algo]()
+
+    def http_response(self, request, response):
+        class digestresponse(response.__class__):
+            def _digest_input(self, data):
+                self._hasher.update(data)
+                self._digest_consumed += len(data)
+                if self._digest_finished:
+                    digest = hex(self._hasher.digest())
+                    if digest != self._digest:
+                        raise error.SecurityError(
+                            _(
+                                b'file with digest %s expected, but %s found for %d bytes'
+                            )
+                            % (
+                                pycompat.bytestr(self._digest),
+                                pycompat.bytestr(digest),
+                                self._digest_consumed,
+                            )
+                        )
+
+            def read(self, amt=None):
+                self._digest_recursion_level += 1
+                data = super().read(amt)
+                self._digest_recursion_level -= 1
+                if self._digest_recursion_level == 0:
+                    self._digest_input(data)
+                return data
+
+            def readline(self):
+                self._digest_recursion_level += 1
+                data = super().readline()
+                self._digest_recursion_level -= 1
+                if self._digest_recursion_level == 0:
+                    self._digest_input(data)
+                return data
+
+            def readinto(self, dest):
+                self._digest_recursion_level += 1
+                got = super().readinto(dest)
+                self._digest_recursion_level -= 1
+                if self._digest_recursion_level == 0:
+                    self._digest_input(dest[:got])
+                return got
+
+            def _close_conn(self):
+                self._digest_finished = True
+                return super().close()
+
+        response.__class__ = digestresponse
+        response._digest = self._digest
+        response._digest_consumed = 0
+        response._hasher = self._hasher.copy()
+        # Python 3.8 / 3.9 recurses internally between read/readinto.
+        response._digest_recursion_level = 0
+        response._digest_finished = False
+        return response
+
+    https_response = http_response
 
 
 handlerfuncs = []
@@ -511,6 +588,7 @@ def opener(
     loggingname=b's',
     loggingopts=None,
     sendaccept=True,
+    digest=None,
 ):
     """
     construct an opener suitable for urllib2
@@ -536,13 +614,13 @@ def opener(
                 loggingfh, loggingname, loggingopts or {}, timeout=timeout
             )
         )
-        # We don't yet support HTTPS when logging I/O. If we attempt to open
-        # an HTTPS URL, we'll likely fail due to unknown protocol.
-
     else:
         handlers.append(httphandler(timeout=timeout))
-        if has_https:
-            handlers.append(httpshandler(ui, timeout=timeout))
+    if has_https:
+        # pytype get confused about the conditional existence for httpshandler here.
+        handlers.append(
+            httpshandler(ui, timeout=timeout)  # pytype: disable=name-error
+        )
 
     handlers.append(proxyhandler(ui))
 
@@ -561,7 +639,10 @@ def opener(
         (httpbasicauthhandler(passmgr), httpdigestauthhandler(passmgr))
     )
     handlers.extend([h(ui, passmgr) for h in handlerfuncs])
-    handlers.append(cookiehandler(ui))
+    handlers.append(urlreq.httpcookieprocessor(cookiejar=load_cookiejar(ui)))
+    handlers.append(readlinehandler())
+    if digest:
+        handlers.append(digesthandler(digest))
     opener = urlreq.buildopener(*handlers)
 
     # keepalive.py's handlers will populate these attributes if they exist.
@@ -600,7 +681,7 @@ def opener(
     return opener
 
 
-def open(ui, url_, data=None, sendaccept=True):
+def open(ui, url_, data=None, sendaccept=True, digest=None):
     u = urlutil.url(url_)
     if u.scheme:
         u.scheme = u.scheme.lower()
@@ -611,7 +692,7 @@ def open(ui, url_, data=None, sendaccept=True):
             urlreq.pathname2url(pycompat.fsdecode(path))
         )
         authinfo = None
-    return opener(ui, authinfo, sendaccept=sendaccept).open(
+    return opener(ui, authinfo, sendaccept=sendaccept, digest=digest).open(
         pycompat.strurl(url_), data
     )
 

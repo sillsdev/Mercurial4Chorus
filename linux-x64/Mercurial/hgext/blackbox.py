@@ -42,6 +42,7 @@ Examples::
 
 """
 
+from __future__ import annotations
 
 import re
 
@@ -66,41 +67,6 @@ testedwith = b'ships-with-hg-core'
 
 cmdtable = {}
 command = registrar.command(cmdtable)
-
-configtable = {}
-configitem = registrar.configitem(configtable)
-
-configitem(
-    b'blackbox',
-    b'dirty',
-    default=False,
-)
-configitem(
-    b'blackbox',
-    b'maxsize',
-    default=b'1 MB',
-)
-configitem(
-    b'blackbox',
-    b'logsource',
-    default=False,
-)
-configitem(
-    b'blackbox',
-    b'maxfiles',
-    default=7,
-)
-configitem(
-    b'blackbox',
-    b'track',
-    default=lambda: [b'*'],
-)
-configitem(
-    b'blackbox',
-    b'ignore',
-    default=lambda: [b'chgserver', b'cmdserver', b'extension'],
-)
-configitem(b'blackbox', b'date-format', default=b'')
 
 _lastlogger = loggingutil.proxylogger()
 
@@ -134,6 +100,7 @@ class blackboxlogger:
     def _log(self, ui, event, msg, opts):
         default = ui.configdate(b'devel', b'default-date')
         dateformat = ui.config(b'blackbox', b'date-format')
+        debug_to_stderr = ui.configbool(b'blackbox', b'debug.to-stderr')
         if dateformat:
             date = dateutil.datestr(default, dateformat)
         else:
@@ -165,8 +132,11 @@ class blackboxlogger:
                 maxfiles=self._maxfiles,
                 maxsize=self._maxsize,
             ) as fp:
-                fp.write(fmt % args)
-        except (IOError, OSError) as err:
+                msg = fmt % args
+                fp.write(msg)
+                if debug_to_stderr:
+                    ui.write_err(msg)
+        except OSError as err:
             # deactivate this to avoid failed logging again
             self._trackedevents.clear()
             ui.debug(

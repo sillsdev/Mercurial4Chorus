@@ -45,11 +45,12 @@ You can specify the encoding by config option::
 It is useful for the users who want to commit with UTF-8 log message.
 '''
 
+from __future__ import annotations
+
 import os
 import sys
 
 from mercurial.i18n import _
-from mercurial.pycompat import getattr, setattr
 from mercurial import (
     encoding,
     error,
@@ -74,7 +75,7 @@ configitem(
     default=lambda: encoding.encoding,
 )
 
-_encoding = None  # see extsetup
+_encoding: str = ""  # see extsetup
 
 
 def decode(arg):
@@ -130,7 +131,7 @@ def basewrapper(func, argtype, enc, dec, args, kwds):
     except UnicodeError:
         raise error.Abort(
             _(b"[win32mbcs] filename conversion failed with %s encoding\n")
-            % _encoding
+            % encoding.strtolocal(_encoding)
         )
 
 
@@ -200,7 +201,7 @@ def extsetup(ui):
         return
     # determine encoding for filename
     global _encoding
-    _encoding = ui.config(b'win32mbcs', b'encoding')
+    _encoding = encoding.strfromlocal(ui.config(b'win32mbcs', b'encoding'))
     # fake is only for relevant environment.
     if _encoding.lower() in problematic_encodings.split():
         for f in funcs.split():
@@ -218,5 +219,6 @@ def extsetup(ui):
         # extensions.loadall() is called.
         if '--debug' in sys.argv:
             ui.writenoi18n(
-                b"[win32mbcs] activated with encoding: %s\n" % _encoding
+                b"[win32mbcs] activated with encoding: %s\n"
+                % encoding.strtolocal(_encoding)
             )

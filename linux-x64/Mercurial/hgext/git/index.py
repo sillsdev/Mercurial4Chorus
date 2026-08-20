@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import collections
 import os
 import sqlite3
@@ -16,7 +18,7 @@ from . import gitutil
 
 pygit2 = gitutil.get_pygit2()
 
-_CURRENT_SCHEMA_VERSION = 1
+_CURRENT_SCHEMA_VERSION = 5
 _SCHEMA = (
     """
 CREATE TABLE refs (
@@ -33,6 +35,8 @@ CREATE TABLE possible_heads (
   node TEXT NOT NULL
 );
 
+CREATE UNIQUE INDEX possible_heads_idx ON possible_heads(node);
+
 -- The topological heads of the changelog, which hg depends on.
 CREATE TABLE heads (
   node TEXT NOT NULL
@@ -43,7 +47,9 @@ CREATE TABLE changelog (
   rev INTEGER NOT NULL PRIMARY KEY,
   node TEXT NOT NULL,
   p1 TEXT,
-  p2 TEXT
+  p2 TEXT,
+  synthetic TEXT,
+  changedfiles BOOLEAN
 );
 
 CREATE UNIQUE INDEX changelog_node_idx ON changelog(node);
@@ -65,6 +71,12 @@ CREATE TABLE changedfiles (
 
 CREATE INDEX changedfiles_nodes_idx
   ON changedfiles(node);
+
+-- Cached values to improve performance
+CREATE TABLE cache (
+  ncommits INTEGER
+);
+INSERT INTO cache (ncommits) VALUES (NULL);
 
 PRAGMA user_version=%d
 """
@@ -214,6 +226,48 @@ def fill_in_filelog(gitrepo, db, startcommit, path, startfilenode):
     db.commit()
 
 
+def _index_repo_commit(gitrepo, db, node, commit=False):
+    already_done = db.execute(
+        "SELECT changedfiles FROM changelog WHERE node=?", (node,)
+    ).fetchone()[0]
+    if already_done:
+        return  # This commit has already been indexed
+
+    commit = gitrepo[node]
+    files = {}
+    # I *think* we only need to check p1 for changed files
+    # (and therefore linkrevs), because any node that would
+    # actually have this commit as a linkrev would be
+    # completely new in this rev.
+    p1 = commit.parents[0].id.hex if commit.parents else None
+    if p1 is not None:
+        patchgen = gitrepo.diff(p1, commit.id.hex, flags=_DIFF_FLAGS)
+    else:
+        patchgen = commit.tree.diff_to_tree(swap=True, flags=_DIFF_FLAGS)
+    new_files = (p.delta.new_file for p in patchgen)
+    files = {
+        nf.path: nf.id.hex
+        for nf in new_files
+        if nf.id.raw != sha1nodeconstants.nullid
+    }
+    for p, n in files.items():
+        # We intentionally set NULLs for any file parentage
+        # information so it'll get demand-computed later. We
+        # used to do it right here, and it was _very_ slow.
+        db.execute(
+            'INSERT INTO changedfiles ('
+            'node, filename, filenode, p1node, p1filenode, p2node, '
+            'p2filenode) VALUES(?, ?, ?, ?, ?, ?, ?)',
+            (commit.id.hex, p, n, None, None, None, None),
+        )
+    # Mark the commit as loaded
+    db.execute(
+        "UPDATE changelog SET changedfiles=TRUE WHERE node=?", (commit.id.hex,)
+    )
+    if commit:
+        db.commit()
+
+
 def _index_repo(
     gitrepo,
     db,
@@ -223,7 +277,7 @@ def _index_repo(
     # Identify all references so we can tell the walker to visit all of them.
     all_refs = gitrepo.listall_references()
     possible_heads = set()
-    prog = progress_factory(b'refs')
+    prog = progress_factory(b'indexing refs')
     for pos, ref in enumerate(all_refs):
         if prog is not None:
             prog.update(pos)
@@ -240,9 +294,9 @@ def _index_repo(
             # No commit to be found, so we don't care for hg's purposes.
             continue
         possible_heads.add(start.id)
-    # Optimization: if the list of heads hasn't changed, don't
-    # reindex, the changelog. This doesn't matter on small
-    # repositories, but on even moderately deep histories (eg cpython)
+    # Optimization: if the list of refs hasn't changed, don't
+    # reindex the changelog. This doesn't matter on small
+    # repositories, but on even moderately deep histories (e.g., cpython)
     # this is a very important performance win.
     #
     # TODO: we should figure out how to incrementally index history
@@ -270,73 +324,92 @@ def _index_repo(
     db.execute('DELETE FROM changelog')
     if prog is not None:
         prog.complete()
-    prog = progress_factory(b'commits')
+    prog = progress_factory(b'indexing commits')
     # This walker is sure to visit all the revisions in history, but
     # only once.
-    for pos, commit in enumerate(walker):
+    pos = -1
+    for commit in walker:
         if prog is not None:
             prog.update(pos)
         p1 = p2 = gitutil.nullgit
-        if len(commit.parents) > 2:
-            raise error.ProgrammingError(
-                (
-                    b"git support can't handle octopus merges, "
-                    b"found a commit with %d parents :("
-                )
-                % len(commit.parents)
+        if len(commit.parents) <= 2:
+            if commit.parents:
+                p1 = commit.parents[0].id.hex
+            if len(commit.parents) == 2:
+                p2 = commit.parents[1].id.hex
+            pos += 1
+            db.execute(
+                'INSERT INTO changelog (rev, node, p1, p2, synthetic, changedfiles) VALUES(?, ?, ?, ?, NULL, FALSE)',
+                (pos, commit.id.hex, p1, p2),
             )
-        if commit.parents:
-            p1 = commit.parents[0].id.hex
-        if len(commit.parents) == 2:
-            p2 = commit.parents[1].id.hex
-        db.execute(
-            'INSERT INTO changelog (rev, node, p1, p2) VALUES(?, ?, ?, ?)',
-            (pos, commit.id.hex, p1, p2),
-        )
+        else:
+            parents = list(commit.parents)
 
-        num_changedfiles = db.execute(
-            "SELECT COUNT(*) from changedfiles WHERE node = ?",
-            (commit.id.hex,),
-        ).fetchone()[0]
-        if not num_changedfiles:
-            files = {}
-            # I *think* we only need to check p1 for changed files
-            # (and therefore linkrevs), because any node that would
-            # actually have this commit as a linkrev would be
-            # completely new in this rev.
-            p1 = commit.parents[0].id.hex if commit.parents else None
-            if p1 is not None:
-                patchgen = gitrepo.diff(p1, commit.id.hex, flags=_DIFF_FLAGS)
-            else:
-                patchgen = commit.tree.diff_to_tree(
-                    swap=True, flags=_DIFF_FLAGS
-                )
-            new_files = (p.delta.new_file for p in patchgen)
-            files = {
-                nf.path: nf.id.hex
-                for nf in new_files
-                if nf.id.raw != sha1nodeconstants.nullid
-            }
-            for p, n in files.items():
-                # We intentionally set NULLs for any file parentage
-                # information so it'll get demand-computed later. We
-                # used to do it right here, and it was _very_ slow.
+            p1 = parents.pop(0).id.hex
+            while parents:
+                pos += 1
+
+                if len(parents) == 1:
+                    this = commit.id.hex
+                    synth = None
+                else:
+                    this = "%040x" % pos
+                    synth = commit.id.hex
+
+                p2 = parents.pop(0).id.hex
+
                 db.execute(
-                    'INSERT INTO changedfiles ('
-                    'node, filename, filenode, p1node, p1filenode, p2node, '
-                    'p2filenode) VALUES(?, ?, ?, ?, ?, ?, ?)',
-                    (commit.id.hex, p, n, None, None, None, None),
+                    'INSERT INTO changelog (rev, node, p1, p2, synthetic, changedfiles) VALUES(?, ?, ?, ?, ?, FALSE)',
+                    (pos, this, p1, p2, synth),
                 )
+
+                p1 = this
+    # Determine heads from the list of possible heads.
     db.execute('DELETE FROM heads')
     db.execute('DELETE FROM possible_heads')
-    for hid in possible_heads:
-        h = hid.hex
-        db.execute('INSERT INTO possible_heads (node) VALUES(?)', (h,))
-        haschild = db.execute(
-            'SELECT COUNT(*) FROM changelog WHERE p1 = ? OR p2 = ?', (h, h)
-        ).fetchone()[0]
-        if not haschild:
-            db.execute('INSERT INTO heads (node) VALUES(?)', (h,))
+    db.executemany(
+        'INSERT INTO possible_heads (node) VALUES(?)',
+        [(hid.hex,) for hid in possible_heads],
+    )
+    db.execute(
+        '''
+    INSERT INTO heads (node)
+        SELECT node FROM possible_heads WHERE
+            node NOT IN (
+                SELECT DISTINCT possible_heads.node FROM changelog, possible_heads WHERE
+                    changelog.p1 = possible_heads.node OR
+                    changelog.p2 = possible_heads.node
+            )
+    '''
+    )
+    # Mark all commits with already-loaded changefiles info
+    db.execute(
+        '''
+    UPDATE changelog SET changedfiles=TRUE WHERE node IN (
+        SELECT DISTINCT node FROM changedfiles
+    )
+    '''
+    )
+
+    if prog is not None:
+        prog.complete()
+
+    # Index the changed files for head commits
+    prog = progress_factory(b'indexing head files')
+    heads = [
+        row[0].decode('ascii') for row in db.execute("SELECT * FROM heads")
+    ]
+    for pos, h in enumerate(heads):
+        if prog is not None:
+            prog.update(pos)
+        _index_repo_commit(gitrepo, db, h)
+
+    db.execute(
+        '''
+    UPDATE cache SET
+        ncommits = (SELECT COUNT(1) FROM changelog)
+    '''
+    )
 
     db.commit()
     if prog is not None:

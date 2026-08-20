@@ -5,6 +5,7 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
 
 import os
 import stat as statmod
@@ -39,8 +40,8 @@ if pycompat.isdarwin:
             self.st_mtime = st_mtime
             self.st_size = st_size
 
-    tv_sec_ofs = ffi.offsetof(b"struct timespec", b"tv_sec")
-    buf = ffi.new(b"char[]", listdir_batch_size)
+    tv_sec_ofs = ffi.offsetof("struct timespec", "tv_sec")
+    buf = ffi.new("char[]", listdir_batch_size)
 
     def listdirinternal(dfd, req, stat, skip):
         ret = []
@@ -50,16 +51,16 @@ if pycompat.isdarwin:
                 break
             if r == -1:
                 raise OSError(ffi.errno, os.strerror(ffi.errno))
-            cur = ffi.cast(b"val_attrs_t*", buf)
+            cur = ffi.cast("val_attrs_t*", buf)
             for i in range(r):
                 lgt = cur.length
-                assert lgt == ffi.cast(b'uint32_t*', cur)[0]
+                assert lgt == ffi.cast('uint32_t*', cur)[0]
                 ofs = cur.name_info.attr_dataoffset
                 str_lgt = cur.name_info.attr_length
-                base_ofs = ffi.offsetof(b'val_attrs_t', b'name_info')
+                base_ofs = ffi.offsetof('val_attrs_t', 'name_info')
                 name = bytes(
                     ffi.buffer(
-                        ffi.cast(b"char*", cur) + base_ofs + ofs, str_lgt - 1
+                        ffi.cast("char*", cur) + base_ofs + ofs, str_lgt - 1
                     )
                 )
                 tp = attrkinds[cur.obj_type]
@@ -84,12 +85,12 @@ if pycompat.isdarwin:
                 else:
                     ret.append((name, tp))
                 cur = ffi.cast(
-                    b"val_attrs_t*", int(ffi.cast(b"intptr_t", cur)) + lgt
+                    "val_attrs_t*", int(ffi.cast("intptr_t", cur)) + lgt
                 )
         return ret
 
     def listdir(path, stat=False, skip=None):
-        req = ffi.new(b"struct attrlist*")
+        req = ffi.new("struct attrlist*")
         req.bitmapcount = lib.ATTR_BIT_MAP_COUNT
         req.commonattr = (
             lib.ATTR_CMN_RETURNED_ATTRS

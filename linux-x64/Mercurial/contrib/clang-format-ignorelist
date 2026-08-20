@@ -1,0 +1,12 @@
+# Files that just need to be migrated to the formatter.
+# Do not add new files here!
+mercurial/cext/manifest.c
+mercurial/cext/osutil.c
+# Vendored code that we should never format:
+syntax: glob
+contrib/python-zstandard/**.c
+contrib/python-zstandard/**.h
+hgext/fsmonitor/pywatchman/**.c
+mercurial/thirdparty/**.c
+mercurial/thirdparty/**.h
+mercurial/pythoncapi_compat.h

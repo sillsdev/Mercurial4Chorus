@@ -1,15 +1,49 @@
 # repository.py - Interfaces and base classes for repositories and peers.
-# coding: utf-8
 #
 # Copyright 2017 Gregory Szorc <gregory.szorc@gmail.com>
 #
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
+
+import abc
+import typing
+
+from typing import (
+    Any,
+    Callable,
+    Collection,
+    Iterable,
+    Iterator,
+    Mapping,
+    Optional,
+    Protocol,
+    Set,
+)
 
 from ..i18n import _
 from .. import error
-from . import util as interfaceutil
+
+if typing.TYPE_CHECKING:
+    from typing import (
+        ByteString,  # TODO: change to Buffer for 3.14
+    )
+
+    from ._basetypes import (
+        UiT as Ui,
+        VfsT as Vfs,
+    )
+
+    from . import (
+        dirstate as intdirstate,
+        matcher,
+        misc,
+    )
+
+    # TODO: make a protocol class for this
+    NodeConstants = Any
+
 
 # Local repository feature string.
 
@@ -54,6 +88,8 @@ CACHE_BRANCHMAP_ALL = b"branchmap-all"
 CACHE_BRANCHMAP_SERVED = b"branchmap-served"
 # Warm internal changelog cache (eg: persistent nodemap)
 CACHE_CHANGELOG_CACHE = b"changelog-cache"
+# check of a branchmap can use the "pure topo" mode
+CACHE_BRANCHMAP_DETECT_PURE_TOPO = b"branchmap-detect-pure-topo"
 # Warm full manifest cache
 CACHE_FULL_MANIFEST = b"full-manifest"
 # Warm file-node-tags cache
@@ -78,6 +114,8 @@ CACHES_DEFAULT = {
 CACHES_ALL = {
     CACHE_BRANCHMAP_SERVED,
     CACHE_BRANCHMAP_ALL,
+    CACHE_BRANCHMAP_DETECT_PURE_TOPO,
+    CACHE_REV_BRANCH,
     CACHE_CHANGELOG_CACHE,
     CACHE_FILE_NODE_TAGS,
     CACHE_FULL_MANIFEST,
@@ -90,9 +128,10 @@ CACHES_ALL = {
 # (this is a mutable set to let extension update it)
 CACHES_POST_CLONE = CACHES_ALL.copy()
 CACHES_POST_CLONE.discard(CACHE_FILE_NODE_TAGS)
+CACHES_POST_CLONE.discard(CACHE_REV_BRANCH)
 
 
-class ipeerconnection(interfaceutil.Interface):
+class _ipeerconnection(Protocol):
     """Represents a "connection" to a repository.
 
     This is the base interface for representing a connection to a repository.
@@ -102,10 +141,14 @@ class ipeerconnection(interfaceutil.Interface):
     outside of this module.
     """
 
-    ui = interfaceutil.Attribute("""ui.ui instance""")
-    path = interfaceutil.Attribute("""a urlutil.path instance or None""")
+    ui: Ui
+    """ui.ui instance"""
 
-    def url():
+    path: Optional[misc.IPath]
+    """a urlutil.path instance or None"""
+
+    @abc.abstractmethod
+    def url(self):
         """Returns a URL string representing this peer.
 
         Currently, implementations expose the raw URL used to construct the
@@ -117,17 +160,20 @@ class ipeerconnection(interfaceutil.Interface):
         value.
         """
 
-    def local():
+    @abc.abstractmethod
+    def local(self):
         """Returns a local repository instance.
 
         If the peer represents a local repository, returns an object that
         can be used to interface with it. Otherwise returns ``None``.
         """
 
-    def canpush():
+    @abc.abstractmethod
+    def canpush(self):
         """Returns a boolean indicating if this peer can be pushed to."""
 
-    def close():
+    @abc.abstractmethod
+    def close(self):
         """Close the connection to this peer.
 
         This is called when the peer will no longer be used. Resources
@@ -135,10 +181,11 @@ class ipeerconnection(interfaceutil.Interface):
         """
 
 
-class ipeercapabilities(interfaceutil.Interface):
+class ipeercapabilities(Protocol):
     """Peer sub-interface related to capabilities."""
 
-    def capable(name):
+    @abc.abstractmethod
+    def capable(self, name: bytes) -> bool | bytes:
         """Determine support for a named capability.
 
         Returns ``False`` if capability not supported.
@@ -149,49 +196,56 @@ class ipeercapabilities(interfaceutil.Interface):
         Capability strings may or may not map to wire protocol capabilities.
         """
 
-    def requirecap(name, purpose):
+    @abc.abstractmethod
+    def capabilities(self) -> Set[bytes]:
+        """Obtain capabilities of the peer.
+
+        Returns a set of string capabilities.
+        """
+
+    @abc.abstractmethod
+    def requirecap(self, name: bytes, purpose: bytes) -> None:
         """Require a capability to be present.
 
         Raises a ``CapabilityError`` if the capability isn't present.
         """
 
 
-class ipeercommands(interfaceutil.Interface):
+class ipeercommands(Protocol):
     """Client-side interface for communicating over the wire protocol.
 
     This interface is used as a gateway to the Mercurial wire protocol.
     methods commonly call wire protocol commands of the same name.
     """
 
-    def branchmap():
+    @abc.abstractmethod
+    def branchmap(self):
         """Obtain heads in named branches.
 
         Returns a dict mapping branch name to an iterable of nodes that are
         heads on that branch.
         """
 
-    def capabilities():
-        """Obtain capabilities of the peer.
-
-        Returns a set of string capabilities.
-        """
-
-    def get_cached_bundle_inline(path):
+    @abc.abstractmethod
+    def get_cached_bundle_inline(self, path):
         """Retrieve a clonebundle across the wire.
 
         Returns a chunkbuffer
         """
 
-    def clonebundles():
+    @abc.abstractmethod
+    def clonebundles(self):
         """Obtains the clone bundles manifest for the repo.
 
         Returns the manifest as unparsed bytes.
         """
 
-    def debugwireargs(one, two, three=None, four=None, five=None):
+    @abc.abstractmethod
+    def debugwireargs(self, one, two, three=None, four=None, five=None):
         """Used to facilitate debugging of arguments passed over the wire."""
 
-    def getbundle(source, **kwargs):
+    @abc.abstractmethod
+    def getbundle(self, source, **kwargs):
         """Obtain remote repository data as a bundle.
 
         This command is how the bulk of repository data is transferred from
@@ -200,13 +254,15 @@ class ipeercommands(interfaceutil.Interface):
         Returns a generator of bundle data.
         """
 
-    def heads():
+    @abc.abstractmethod
+    def heads(self):
         """Determine all known head revisions in the peer.
 
         Returns an iterable of binary nodes.
         """
 
-    def known(nodes):
+    @abc.abstractmethod
+    def known(self, nodes):
         """Determine whether multiple nodes are known.
 
         Accepts an iterable of nodes whose presence to check for.
@@ -215,19 +271,22 @@ class ipeercommands(interfaceutil.Interface):
         at that index is known to the peer.
         """
 
-    def listkeys(namespace):
+    @abc.abstractmethod
+    def listkeys(self, namespace):
         """Obtain all keys in a pushkey namespace.
 
         Returns an iterable of key names.
         """
 
-    def lookup(key):
+    @abc.abstractmethod
+    def lookup(self, key):
         """Resolve a value to a known revision.
 
         Returns a binary node of the resolved revision on success.
         """
 
-    def pushkey(namespace, key, old, new):
+    @abc.abstractmethod
+    def pushkey(self, namespace, key, old, new):
         """Set a value using the ``pushkey`` protocol.
 
         Arguments correspond to the pushkey namespace and key to operate on and
@@ -237,13 +296,15 @@ class ipeercommands(interfaceutil.Interface):
         namespace.
         """
 
-    def stream_out():
+    @abc.abstractmethod
+    def stream_out(self):
         """Obtain streaming clone data.
 
         Successful result should be a generator of data chunks.
         """
 
-    def unbundle(bundle, heads, url):
+    @abc.abstractmethod
+    def unbundle(self, bundle, heads, url):
         """Transfer repository data to the peer.
 
         This is how the bulk of data during a push is transferred.
@@ -252,7 +313,7 @@ class ipeercommands(interfaceutil.Interface):
         """
 
 
-class ipeerlegacycommands(interfaceutil.Interface):
+class ipeerlegacycommands(Protocol):
     """Interface for implementing support for legacy wire protocol commands.
 
     Wire protocol commands transition to legacy status when they are no longer
@@ -260,7 +321,8 @@ class ipeerlegacycommands(interfaceutil.Interface):
     legacy, the interfaces are split.
     """
 
-    def between(pairs):
+    @abc.abstractmethod
+    def between(self, pairs):
         """Obtain nodes between pairs of nodes.
 
         ``pairs`` is an iterable of node pairs.
@@ -269,7 +331,8 @@ class ipeerlegacycommands(interfaceutil.Interface):
         requested pair.
         """
 
-    def branches(nodes):
+    @abc.abstractmethod
+    def branches(self, nodes):
         """Obtain ancestor changesets of specific nodes back to a branch point.
 
         For each requested node, the peer finds the first ancestor node that is
@@ -278,14 +341,16 @@ class ipeerlegacycommands(interfaceutil.Interface):
         Returns an iterable of iterables with the resolved values for each node.
         """
 
-    def changegroup(nodes, source):
+    @abc.abstractmethod
+    def changegroup(self, nodes, source):
         """Obtain a changegroup with data for descendants of specified nodes."""
 
-    def changegroupsubset(bases, heads, source):
+    @abc.abstractmethod
+    def changegroupsubset(self, bases, heads, source):
         pass
 
 
-class ipeercommandexecutor(interfaceutil.Interface):
+class ipeercommandexecutor(Protocol):
     """Represents a mechanism to execute remote commands.
 
     This is the primary interface for requesting that wire protocol commands
@@ -294,7 +359,8 @@ class ipeercommandexecutor(interfaceutil.Interface):
     outstanding requests are waited on.
     """
 
-    def callcommand(name, args):
+    @abc.abstractmethod
+    def callcommand(self, name, args):
         """Request that a named command be executed.
 
         Receives the command name and a dictionary of command arguments.
@@ -316,7 +382,8 @@ class ipeercommandexecutor(interfaceutil.Interface):
         until all command requests have been issued.
         """
 
-    def sendcommands():
+    @abc.abstractmethod
+    def sendcommands(self):
         """Trigger submission of queued command requests.
 
         Not all transports submit commands as soon as they are requested to
@@ -326,7 +393,8 @@ class ipeercommandexecutor(interfaceutil.Interface):
         When called, no more new commands may be issued with this executor.
         """
 
-    def close():
+    @abc.abstractmethod
+    def close(self):
         """Signal that this command request is finished.
 
         When called, no more new commands may be issued. All outstanding
@@ -343,14 +411,14 @@ class ipeercommandexecutor(interfaceutil.Interface):
         """
 
 
-class ipeerrequests(interfaceutil.Interface):
+class ipeerrequests(Protocol):
     """Interface for executing commands on a peer."""
 
-    limitedarguments = interfaceutil.Attribute(
-        """True if the peer cannot receive large argument value for commands."""
-    )
+    limitedarguments: bool
+    """True if the peer cannot receive large argument value for commands."""
 
-    def commandexecutor():
+    @abc.abstractmethod
+    def commandexecutor(self):
         """A context manager that resolves to an ipeercommandexecutor.
 
         The object this resolves to can be used to issue command requests
@@ -373,32 +441,27 @@ class ipeerrequests(interfaceutil.Interface):
         """
 
 
-class ipeerbase(ipeerconnection, ipeercapabilities, ipeerrequests):
+# TODO: make this a Protocol class when 3.11 is the minimum supported version?
+class peer(_ipeerconnection, ipeercapabilities, ipeerrequests):
     """Unified interface for peer repositories.
 
     All peer instances must conform to this interface.
     """
 
+    limitedarguments: bool = False
+    path: misc.IPath | None
+    ui: Ui
 
-class ipeerv2(ipeerconnection, ipeercapabilities, ipeerrequests):
-    """Unified peer interface for wire protocol version 2 peers."""
-
-    apidescriptor = interfaceutil.Attribute(
-        """Data structure holding description of server API."""
-    )
-
-
-@interfaceutil.implementer(ipeerbase)
-class peer:
-    """Base class for peer repositories."""
-
-    limitedarguments = False
-
-    def __init__(self, ui, path=None, remotehidden=False):
+    def __init__(
+        self,
+        ui: Ui,
+        path: misc.IPath | None = None,
+        remotehidden: bool = False,
+    ) -> None:
         self.ui = ui
         self.path = path
 
-    def capable(self, name):
+    def capable(self, name: bytes) -> bool | bytes:
         caps = self.capabilities()
         if name in caps:
             return True
@@ -410,7 +473,7 @@ class peer:
 
         return False
 
-    def requirecap(self, name, purpose):
+    def requirecap(self, name: bytes, purpose: bytes) -> None:
         if self.capable(name):
             return
 
@@ -423,7 +486,7 @@ class peer:
         )
 
 
-class iverifyproblem(interfaceutil.Interface):
+class iverifyproblem(Protocol):
     """Represents a problem with the integrity of the repository.
 
     Instances of this interface are emitted to describe an integrity issue
@@ -432,21 +495,20 @@ class iverifyproblem(interfaceutil.Interface):
     Instances are essentially messages associated with severity.
     """
 
-    warning = interfaceutil.Attribute(
-        """Message indicating a non-fatal problem."""
-    )
+    warning: bytes | None
+    """Message indicating a non-fatal problem."""
 
-    error = interfaceutil.Attribute("""Message indicating a fatal problem.""")
+    error: bytes | None
+    """Message indicating a fatal problem."""
 
-    node = interfaceutil.Attribute(
-        """Revision encountering the problem.
+    node: bytes | None
+    """Revision encountering the problem.
 
-        ``None`` means the problem doesn't apply to a single revision.
-        """
-    )
+    ``None`` means the problem doesn't apply to a single revision.
+    """
 
 
-class irevisiondelta(interfaceutil.Interface):
+class irevisiondelta(Protocol):
     """Represents a delta between one revision and another.
 
     Instances convey enough information to allow a revision to be exchanged
@@ -459,66 +521,60 @@ class irevisiondelta(interfaceutil.Interface):
     Typically used for changegroup generation.
     """
 
-    node = interfaceutil.Attribute("""20 byte node of this revision.""")
+    node: bytes
+    """20 byte node of this revision."""
 
-    p1node = interfaceutil.Attribute(
-        """20 byte node of 1st parent of this revision."""
-    )
+    p1node: bytes
+    """20 byte node of 1st parent of this revision."""
 
-    p2node = interfaceutil.Attribute(
-        """20 byte node of 2nd parent of this revision."""
-    )
+    p2node: bytes
+    """20 byte node of 2nd parent of this revision."""
 
-    linknode = interfaceutil.Attribute(
-        """20 byte node of the changelog revision this node is linked to."""
-    )
+    # TODO: is this really optional? revlog.revlogrevisiondelta defaults to None
+    linknode: bytes | None
+    """20 byte node of the changelog revision this node is linked to."""
 
-    flags = interfaceutil.Attribute(
-        """2 bytes of integer flags that apply to this revision.
+    flags: int
+    """2 bytes of integer flags that apply to this revision.
 
-        This is a bitwise composition of the ``REVISION_FLAG_*`` constants.
-        """
-    )
+    This is a bitwise composition of the ``REVISION_FLAG_*`` constants.
+    """
 
-    basenode = interfaceutil.Attribute(
-        """20 byte node of the revision this data is a delta against.
+    basenode: bytes
+    """20 byte node of the revision this data is a delta against.
 
-        ``nullid`` indicates that the revision is a full revision and not
-        a delta.
-        """
-    )
+    ``nullid`` indicates that the revision is a full revision and not
+    a delta.
+    """
 
-    baserevisionsize = interfaceutil.Attribute(
-        """Size of base revision this delta is against.
+    baserevisionsize: int | None
+    """Size of base revision this delta is against.
 
-        May be ``None`` if ``basenode`` is ``nullid``.
-        """
-    )
+    May be ``None`` if ``basenode`` is ``nullid``.
+    """
 
-    revision = interfaceutil.Attribute(
-        """Raw fulltext of revision data for this node."""
-    )
+    # TODO: is this really optional? (Seems possible in
+    #  storageutil.emitrevisions()).
+    revision: bytes | None
+    """Raw fulltext of revision data for this node."""
 
-    delta = interfaceutil.Attribute(
-        """Delta between ``basenode`` and ``node``.
+    delta: bytes | None
+    """Delta between ``basenode`` and ``node``.
 
-        Stored in the bdiff delta format.
-        """
-    )
+    Stored in the bdiff delta format.
+    """
 
-    sidedata = interfaceutil.Attribute(
-        """Raw sidedata bytes for the given revision."""
-    )
+    sidedata: bytes | None
+    """Raw sidedata bytes for the given revision."""
 
-    protocol_flags = interfaceutil.Attribute(
-        """Single byte of integer flags that can influence the protocol.
+    protocol_flags: int
+    """Single byte of integer flags that can influence the protocol.
 
-        This is a bitwise composition of the ``storageutil.CG_FLAG*`` constants.
-        """
-    )
+    This is a bitwise composition of the ``storageutil.CG_FLAG*`` constants.
+    """
 
 
-class ifilerevisionssequence(interfaceutil.Interface):
+class ifilerevisionssequence(Protocol):
     """Contains index data for all revisions of a file.
 
     Types implementing this behave like lists of tuples. The index
@@ -529,10 +585,12 @@ class ifilerevisionssequence(interfaceutil.Interface):
     in the index.
     """
 
-    def __len__():
+    @abc.abstractmethod
+    def __len__(self):
         """The total number of revisions."""
 
-    def __getitem__(rev):
+    @abc.abstractmethod
+    def __getitem__(self, rev):
         """Returns the object having a specific revision number.
 
         Returns an 8-tuple with the following fields:
@@ -563,14 +621,16 @@ class ifilerevisionssequence(interfaceutil.Interface):
         recent revision.
         """
 
-    def __contains__(rev):
+    @abc.abstractmethod
+    def __contains__(self, rev):
         """Whether a revision number exists."""
 
+    @abc.abstractmethod
     def insert(self, i, entry):
         """Add an item to the index at specific revision."""
 
 
-class ifileindex(interfaceutil.Interface):
+class ifileindex(Protocol):
     """Storage interface for index data of a single file.
 
     File storage data is divided into index metadata and data storage.
@@ -583,17 +643,19 @@ class ifileindex(interfaceutil.Interface):
     * Metadata to facilitate storage.
     """
 
-    nullid = interfaceutil.Attribute(
-        """node for the null revision for use as delta base."""
-    )
+    nullid: bytes
+    """node for the null revision for use as delta base."""
 
-    def __len__():
+    @abc.abstractmethod
+    def __len__(self) -> int:
         """Obtain the number of revisions stored for this file."""
 
-    def __iter__():
+    @abc.abstractmethod
+    def __iter__(self) -> Iterator[int]:
         """Iterate over revision numbers for this file."""
 
-    def hasnode(node):
+    @abc.abstractmethod
+    def hasnode(self, node):
         """Returns a bool indicating if a node is known to this store.
 
         Implementations must only return True for full, binary node values:
@@ -603,31 +665,37 @@ class ifileindex(interfaceutil.Interface):
         The null node is never present.
         """
 
-    def revs(start=0, stop=None):
+    @abc.abstractmethod
+    def revs(self, start=0, stop=None):
         """Iterate over revision numbers for this file, with control."""
 
-    def parents(node):
+    @abc.abstractmethod
+    def parents(self, node):
         """Returns a 2-tuple of parent nodes for a revision.
 
         Values will be ``nullid`` if the parent is empty.
         """
 
-    def parentrevs(rev):
+    @abc.abstractmethod
+    def parentrevs(self, rev):
         """Like parents() but operates on revision numbers."""
 
-    def rev(node):
+    @abc.abstractmethod
+    def rev(self, node):
         """Obtain the revision number given a node.
 
         Raises ``error.LookupError`` if the node is not known.
         """
 
-    def node(rev):
+    @abc.abstractmethod
+    def node(self, rev):
         """Obtain the node value given a revision number.
 
         Raises ``IndexError`` if the node is not known.
         """
 
-    def lookup(node):
+    @abc.abstractmethod
+    def lookup(self, node):
         """Attempt to resolve a value to a node.
 
         Value can be a binary node, hex node, revision number, or a string
@@ -636,25 +704,30 @@ class ifileindex(interfaceutil.Interface):
         Raises ``error.LookupError`` if a node could not be resolved.
         """
 
-    def linkrev(rev):
+    @abc.abstractmethod
+    def linkrev(self, rev):
         """Obtain the changeset revision number a revision is linked to."""
 
-    def iscensored(rev):
+    @abc.abstractmethod
+    def iscensored(self, rev):
         """Return whether a revision's content has been censored."""
 
-    def commonancestorsheads(node1, node2):
+    @abc.abstractmethod
+    def commonancestorsheads(self, node1, node2):
         """Obtain an iterable of nodes containing heads of common ancestors.
 
         See ``ancestor.commonancestorsheads()``.
         """
 
-    def descendants(revs):
+    @abc.abstractmethod
+    def descendants(self, revs):
         """Obtain descendant revision numbers for a set of revision numbers.
 
         If ``nullrev`` is in the set, this is equivalent to ``revs()``.
         """
 
-    def heads(start=None, stop=None):
+    @abc.abstractmethod
+    def heads(self, start=None, stop=None):
         """Obtain a list of nodes that are DAG heads, with control.
 
         The set of revisions examined can be limited by specifying
@@ -664,27 +737,30 @@ class ifileindex(interfaceutil.Interface):
         encountered.
         """
 
-    def children(node):
+    @abc.abstractmethod
+    def children(self, node):
         """Obtain nodes that are children of a node.
 
         Returns a list of nodes.
         """
 
 
-class ifiledata(interfaceutil.Interface):
+class ifiledata(Protocol):
     """Storage interface for data storage of a specific file.
 
     This complements ``ifileindex`` and provides an interface for accessing
     data for a tracked file.
     """
 
-    def size(rev):
+    @abc.abstractmethod
+    def size(self, rev):
         """Obtain the fulltext size of file data.
 
         Any metadata is excluded from size measurements.
         """
 
-    def revision(node, raw=False):
+    @abc.abstractmethod
+    def revision(self, node):
         """Obtain fulltext data for a node.
 
         By default, any storage transformations are applied before the data
@@ -695,24 +771,28 @@ class ifiledata(interfaceutil.Interface):
         consumers should use ``read()`` to obtain the actual file data.
         """
 
-    def rawdata(node):
+    @abc.abstractmethod
+    def rawdata(self, node):
         """Obtain raw data for a node."""
 
-    def read(node):
+    @abc.abstractmethod
+    def read(self, node):
         """Resolve file fulltext data.
 
         This is similar to ``revision()`` except any metadata in the data
         headers is stripped.
         """
 
-    def renamed(node):
+    @abc.abstractmethod
+    def renamed(self, node):
         """Obtain copy metadata for a node.
 
         Returns ``False`` if no copy metadata is stored or a 2-tuple of
         (path, node) from which this revision was copied.
         """
 
-    def cmp(node, fulltext):
+    @abc.abstractmethod
+    def cmp(self, node, fulltext):
         """Compare fulltext to another revision.
 
         Returns True if the fulltext is different from what is stored.
@@ -722,7 +802,9 @@ class ifiledata(interfaceutil.Interface):
         TODO better document the copy metadata and censoring logic.
         """
 
+    @abc.abstractmethod
     def emitrevisions(
+        self,
         nodes,
         nodesorder=None,
         revisiondata=False,
@@ -778,10 +860,11 @@ class ifiledata(interfaceutil.Interface):
         """
 
 
-class ifilemutation(interfaceutil.Interface):
+class ifilemutation(Protocol):
     """Storage interface for mutation events of a tracked file."""
 
-    def add(filedata, meta, transaction, linkrev, p1, p2):
+    @abc.abstractmethod
+    def add(self, filedata, meta, transaction, linkrev, p1, p2):
         """Add a new revision to the store.
 
         Takes file data, dictionary of metadata, a transaction, linkrev,
@@ -792,7 +875,9 @@ class ifilemutation(interfaceutil.Interface):
         May no-op if a revision matching the supplied data is already stored.
         """
 
+    @abc.abstractmethod
     def addrevision(
+        self,
         revisiondata,
         transaction,
         linkrev,
@@ -818,7 +903,9 @@ class ifilemutation(interfaceutil.Interface):
         applying raw data from a peer repo.
         """
 
+    @abc.abstractmethod
     def addgroup(
+        self,
         deltas,
         linkmapper,
         transaction,
@@ -855,7 +942,8 @@ class ifilemutation(interfaceutil.Interface):
         even if it existed in the store previously.
         """
 
-    def censorrevision(tr, node, tombstone=b''):
+    @abc.abstractmethod
+    def censorrevision(self, tr, node, tombstone=b''):
         """Remove the content of a single revision.
 
         The specified ``node`` will have its content purged from storage.
@@ -872,7 +960,8 @@ class ifilemutation(interfaceutil.Interface):
         that they no longer reference the deleted content.
         """
 
-    def getstrippoint(minlink):
+    @abc.abstractmethod
+    def getstrippoint(self, minlink):
         """Find the minimum revision that must be stripped to strip a linkrev.
 
         Returns a 2-tuple containing the minimum revision number and a set
@@ -882,7 +971,8 @@ class ifilemutation(interfaceutil.Interface):
         a higher-level deletion API. ``repair.strip()`` relies on this.
         """
 
-    def strip(minlink, transaction):
+    @abc.abstractmethod
+    def strip(self, minlink, transaction):
         """Remove storage of items starting at a linkrev.
 
         This uses ``getstrippoint()`` to determine the first node to remove.
@@ -893,17 +983,20 @@ class ifilemutation(interfaceutil.Interface):
         """
 
 
-class ifilestorage(ifileindex, ifiledata, ifilemutation):
+class ifilestorage(ifileindex, ifiledata, ifilemutation, Protocol):
     """Complete storage interface for a single tracked file."""
 
-    def files():
+    @abc.abstractmethod
+    def files(self):
         """Obtain paths that are backing storage for this file.
 
         TODO this is used heavily by verify code and there should probably
         be a better API for that.
         """
 
+    @abc.abstractmethod
     def storageinfo(
+        self,
         exclusivefiles=False,
         sharedfiles=False,
         revisionscount=False,
@@ -942,7 +1035,8 @@ class ifilestorage(ifileindex, ifiledata, ifilemutation):
         callers are expected to handle this special value.
         """
 
-    def verifyintegrity(state):
+    @abc.abstractmethod
+    def verifyintegrity(self, state) -> Iterable[iverifyproblem]:
         """Verifies the integrity of file storage.
 
         ``state`` is a dict holding state of the verifier process. It can be
@@ -960,41 +1054,46 @@ class ifilestorage(ifileindex, ifiledata, ifilemutation):
         """
 
 
-class idirs(interfaceutil.Interface):
+class idirs(Protocol):
     """Interface representing a collection of directories from paths.
 
     This interface is essentially a derived data structure representing
     directories from a collection of paths.
     """
 
-    def addpath(path):
+    @abc.abstractmethod
+    def addpath(self, path):
         """Add a path to the collection.
 
         All directories in the path will be added to the collection.
         """
 
-    def delpath(path):
+    @abc.abstractmethod
+    def delpath(self, path):
         """Remove a path from the collection.
 
         If the removal was the last path in a particular directory, the
         directory is removed from the collection.
         """
 
-    def __iter__():
+    @abc.abstractmethod
+    def __iter__(self):
         """Iterate over the directories in this collection of paths."""
 
-    def __contains__(path):
+    @abc.abstractmethod
+    def __contains__(self, path):
         """Whether a specific directory is in this collection."""
 
 
-class imanifestdict(interfaceutil.Interface):
+class imanifestdict(Protocol):
     """Interface representing a manifest data structure.
 
     A manifest is effectively a dict mapping paths to entries. Each entry
     consists of a binary node and extra flags affecting that entry.
     """
 
-    def __getitem__(path):
+    @abc.abstractmethod
+    def __getitem__(self, key: bytes) -> bytes:
         """Returns the binary node value for a path in the manifest.
 
         Raises ``KeyError`` if the path does not exist in the manifest.
@@ -1002,7 +1101,8 @@ class imanifestdict(interfaceutil.Interface):
         Equivalent to ``self.find(path)[0]``.
         """
 
-    def find(path):
+    @abc.abstractmethod
+    def find(self, path: bytes) -> tuple[bytes, bytes]:
         """Returns the entry for a path in the manifest.
 
         Returns a 2-tuple of (node, flags).
@@ -1010,40 +1110,56 @@ class imanifestdict(interfaceutil.Interface):
         Raises ``KeyError`` if the path does not exist in the manifest.
         """
 
-    def __len__():
+    @abc.abstractmethod
+    def __len__(self) -> int:
         """Return the number of entries in the manifest."""
 
-    def __nonzero__():
+    @abc.abstractmethod
+    def __nonzero__(self) -> bool:
         """Returns True if the manifest has entries, False otherwise."""
 
     __bool__ = __nonzero__
 
-    def __setitem__(path, node):
+    @abc.abstractmethod
+    def set(self, path: bytes, node: bytes, flags: bytes) -> None:
+        """Define the node value and flags for a path in the manifest.
+
+        Equivalent to __setitem__ followed by setflag, but can be more efficient.
+        """
+
+    @abc.abstractmethod
+    def __setitem__(self, path: bytes, node: bytes) -> None:
         """Define the node value for a path in the manifest.
 
         If the path is already in the manifest, its flags will be copied to
         the new entry.
         """
 
-    def __contains__(path):
+    @abc.abstractmethod
+    def __contains__(self, path: bytes) -> bool:
         """Whether a path exists in the manifest."""
 
-    def __delitem__(path):
+    @abc.abstractmethod
+    def __delitem__(self, path: bytes) -> None:
         """Remove a path from the manifest.
 
         Raises ``KeyError`` if the path is not in the manifest.
         """
 
-    def __iter__():
+    @abc.abstractmethod
+    def __iter__(self) -> Iterator[bytes]:
         """Iterate over paths in the manifest."""
 
-    def iterkeys():
+    @abc.abstractmethod
+    def iterkeys(self) -> Iterator[bytes]:
         """Iterate over paths in the manifest."""
 
-    def keys():
+    @abc.abstractmethod
+    def keys(self) -> list[bytes]:
         """Obtain a list of paths in the manifest."""
 
-    def filesnotin(other, match=None):
+    @abc.abstractmethod
+    def filesnotin(self, other, match=None) -> Set[bytes]:
         """Obtain the set of paths in this manifest but not in another.
 
         ``match`` is an optional matcher function to be applied to both
@@ -1052,20 +1168,32 @@ class imanifestdict(interfaceutil.Interface):
         Returns a set of paths.
         """
 
-    def dirs():
+    @abc.abstractmethod
+    def dirs(self) -> misc.IDirs:
         """Returns an object implementing the ``idirs`` interface."""
 
-    def hasdir(dir):
+    @abc.abstractmethod
+    def hasdir(self, dir: bytes) -> bool:
         """Returns a bool indicating if a directory is in this manifest."""
 
-    def walk(match):
+    @abc.abstractmethod
+    def walk(self, match: matcher.IMatcher) -> Iterator[bytes]:
         """Generator of paths in manifest satisfying a matcher.
 
         If the matcher has explicit files listed and they don't exist in
         the manifest, ``match.bad()`` is called for each missing file.
         """
 
-    def diff(other, match=None, clean=False):
+    @abc.abstractmethod
+    def diff(
+        self,
+        other: Any,  # TODO: 'manifestdict' or (better) equivalent interface
+        match: matcher.IMatcher | None = None,
+        clean: bool = False,
+    ) -> dict[
+        bytes,
+        tuple[tuple[bytes | None, bytes], tuple[bytes | None, bytes]] | None,
+    ]:
         """Find differences between this manifest and another.
 
         This manifest is compared to ``other``.
@@ -1082,41 +1210,52 @@ class imanifestdict(interfaceutil.Interface):
         are the same for the other manifest.
         """
 
-    def setflag(path, flag):
+    @abc.abstractmethod
+    def setflag(self, path: bytes, flag: bytes) -> None:
         """Set the flag value for a given path.
 
         Raises ``KeyError`` if the path is not already in the manifest.
         """
 
-    def get(path, default=None):
+    @abc.abstractmethod
+    def get(self, path: bytes, default=None) -> bytes | None:
         """Obtain the node value for a path or a default value if missing."""
 
-    def flags(path):
+    @abc.abstractmethod
+    def flags(self, path: bytes) -> bytes:
         """Return the flags value for a path (default: empty bytestring)."""
 
-    def copy():
+    @abc.abstractmethod
+    def copy(self) -> imanifestdict:
         """Return a copy of this manifest."""
 
-    def items():
+    @abc.abstractmethod
+    def items(self) -> Iterator[tuple[bytes, bytes]]:
         """Returns an iterable of (path, node) for items in this manifest."""
 
-    def iteritems():
+    @abc.abstractmethod
+    def iteritems(self) -> Iterator[tuple[bytes, bytes]]:
         """Identical to items()."""
 
-    def iterentries():
+    @abc.abstractmethod
+    def iterentries(self) -> Iterator[tuple[bytes, bytes, bytes]]:
         """Returns an iterable of (path, node, flags) for this manifest.
 
         Similar to ``iteritems()`` except items are a 3-tuple and include
         flags.
         """
 
-    def text():
+    @abc.abstractmethod
+    def text(self) -> ByteString:
         """Obtain the raw data representation for this manifest.
 
         Result is used to create a manifest revision.
         """
 
-    def fastdelta(base, changes):
+    @abc.abstractmethod
+    def fastdelta(
+        self, base: ByteString, changes: Iterable[tuple[bytes, bool]]
+    ) -> tuple[ByteString, ByteString]:
         """Obtain a delta between this manifest and another given changes.
 
         ``base`` in the raw data representation for another manifest.
@@ -1131,14 +1270,15 @@ class imanifestdict(interfaceutil.Interface):
         """
 
 
-class imanifestrevisionbase(interfaceutil.Interface):
+class imanifestrevisionbase(Protocol):
     """Base interface representing a single revision of a manifest.
 
     Should not be used as a primary interface: should always be inherited
     as part of a larger interface.
     """
 
-    def copy():
+    @abc.abstractmethod
+    def copy(self):
         """Obtain a copy of this manifest instance.
 
         Returns an object conforming to the ``imanifestrevisionwritable``
@@ -1146,49 +1286,122 @@ class imanifestrevisionbase(interfaceutil.Interface):
         ``imanifestlog`` collection as this instance.
         """
 
-    def read():
+    @abc.abstractmethod
+    def read(self):
         """Obtain the parsed manifest data structure.
 
         The returned object conforms to the ``imanifestdict`` interface.
         """
 
 
-class imanifestrevisionstored(imanifestrevisionbase):
+class imanifestrevisionstored(imanifestrevisionbase, Protocol):
     """Interface representing a manifest revision committed to storage."""
 
-    def node():
+    @abc.abstractmethod
+    def node(self) -> bytes:
         """The binary node for this manifest."""
 
-    parents = interfaceutil.Attribute(
-        """List of binary nodes that are parents for this manifest revision."""
-    )
+    parents: list[bytes]
+    """List of binary nodes that are parents for this manifest revision."""
 
-    def readdelta(shallow=False):
+    @abc.abstractmethod
+    def readdelta(self, shallow: bool = False):
         """Obtain the manifest data structure representing changes from parent.
 
-        This manifest is compared to its 1st parent. A new manifest representing
-        those differences is constructed.
+        This manifest is compared to its 1st parent. A new manifest
+        representing those differences is constructed.
+
+        If `shallow` is True, this will read the delta for this directory,
+        without recursively reading subdirectory manifests. Instead, any
+        subdirectory entry will be reported as it appears in the manifest, i.e.
+        the subdirectory will be reported among files and distinguished only by
+        its 't' flag. This only apply if the underlying manifest support it.
 
         The returned object conforms to the ``imanifestdict`` interface.
         """
 
-    def readfast(shallow=False):
+    @abc.abstractmethod
+    def read_any_fast_delta(
+        self,
+        valid_bases: Collection[int] | None = None,
+        *,
+        shallow: bool = False,
+    ):
+        """read some manifest information as fast if possible
+
+        This might return a "delta", a manifest object containing only file
+        changed compared to another revisions. The `valid_bases` argument
+        control the set of revision that might be used as a base.
+
+        If no delta can be retrieved quickly, a full read of the manifest will
+        be performed instead.
+
+        The function return a tuple with two elements. The first one is the
+        delta base used (or None if we did a full read), the second one is the
+        manifest information.
+
+        If `shallow` is True, this will read the delta for this directory,
+        without recursively reading subdirectory manifests. Instead, any
+        subdirectory entry will be reported as it appears in the manifest, i.e.
+        the subdirectory will be reported among files and distinguished only by
+        its 't' flag. This only apply if the underlying manifest support it.
+
+        The returned object conforms to the ``imanifestdict`` interface.
+        """
+
+    @abc.abstractmethod
+    def read_delta_parents(self, *, shallow: bool = False, exact: bool = True):
+        """return a diff from this revision against both parents.
+
+        If `exact` is False, this might return a superset of the diff, containing
+        files that are actually present as is in one of the parents.
+
+        If `shallow` is True, this will read the delta for this directory,
+        without recursively reading subdirectory manifests. Instead, any
+        subdirectory entry will be reported as it appears in the manifest, i.e.
+        the subdirectory will be reported among files and distinguished only by
+        its 't' flag. This only apply if the underlying manifest support it.
+
+        The returned object conforms to the ``imanifestdict`` interface."""
+
+    @abc.abstractmethod
+    def read_delta_new_entries(self, *, shallow: bool = False):
+        """Return a manifest containing just the entries that might be new to
+        the repository.
+
+        This is often equivalent to a diff against both parents, but without
+        garantee. For performance reason, It might contains more files in some cases.
+
+        If `shallow` is True, this will read the delta for this directory,
+        without recursively reading subdirectory manifests. Instead, any
+        subdirectory entry will be reported as it appears in the manifest, i.e.
+        the subdirectory will be reported among files and distinguished only by
+        its 't' flag. This only apply if the underlying manifest support it.
+
+        The returned object conforms to the ``imanifestdict`` interface."""
+
+    @abc.abstractmethod
+    def readfast(self, shallow: bool = False):
         """Calls either ``read()`` or ``readdelta()``.
 
         The faster of the two options is called.
         """
 
-    def find(key):
-        """Calls self.read().find(key)``.
+    @abc.abstractmethod
+    def find(self, key: bytes) -> tuple[bytes, bytes]:
+        """Calls ``self.read().find(key)``.
 
         Returns a 2-tuple of ``(node, flags)`` or raises ``KeyError``.
         """
 
 
-class imanifestrevisionwritable(imanifestrevisionbase):
+class imanifestrevisionwritable(imanifestrevisionbase, Protocol):
     """Interface representing a manifest revision that can be committed."""
 
-    def write(transaction, linkrev, p1node, p2node, added, removed, match=None):
+    @abc.abstractmethod
+    def write(
+        self, transaction, linkrev, p1node, p2node, added, removed, match=None
+    ):
         """Add this revision to storage.
 
         Takes a transaction object, the changeset revision number it will
@@ -1204,64 +1417,58 @@ class imanifestrevisionwritable(imanifestrevisionbase):
         """
 
 
-class imanifeststorage(interfaceutil.Interface):
+class imanifeststorage(Protocol):
     """Storage interface for manifest data."""
 
-    nodeconstants = interfaceutil.Attribute(
-        """nodeconstants used by the current repository."""
-    )
+    nodeconstants: NodeConstants
+    """nodeconstants used by the current repository."""
 
-    tree = interfaceutil.Attribute(
-        """The path to the directory this manifest tracks.
+    tree: bytes
+    """The path to the directory this manifest tracks.
 
-        The empty bytestring represents the root manifest.
-        """
-    )
+    The empty bytestring represents the root manifest.
+    """
 
-    index = interfaceutil.Attribute(
-        """An ``ifilerevisionssequence`` instance."""
-    )
+    index: ifilerevisionssequence
+    """An ``ifilerevisionssequence`` instance."""
 
-    opener = interfaceutil.Attribute(
-        """VFS opener to use to access underlying files used for storage.
+    opener: Vfs
+    """VFS opener to use to access underlying files used for storage.
 
-        TODO this is revlog specific and should not be exposed.
-        """
-    )
+    TODO this is revlog specific and should not be exposed.
+    """
 
-    _generaldelta = interfaceutil.Attribute(
-        """Whether generaldelta storage is being used.
+    # TODO: finish type hints
+    fulltextcache: dict
+    """Dict with cache of fulltexts.
 
-        TODO this is revlog specific and should not be exposed.
-        """
-    )
+    TODO this doesn't feel appropriate for the storage interface.
+    """
 
-    fulltextcache = interfaceutil.Attribute(
-        """Dict with cache of fulltexts.
-
-        TODO this doesn't feel appropriate for the storage interface.
-        """
-    )
-
-    def __len__():
+    @abc.abstractmethod
+    def __len__(self):
         """Obtain the number of revisions stored for this manifest."""
 
-    def __iter__():
+    @abc.abstractmethod
+    def __iter__(self):
         """Iterate over revision numbers for this manifest."""
 
-    def rev(node):
+    @abc.abstractmethod
+    def rev(self, node):
         """Obtain the revision number given a binary node.
 
         Raises ``error.LookupError`` if the node is not known.
         """
 
-    def node(rev):
+    @abc.abstractmethod
+    def node(self, rev):
         """Obtain the node value given a revision number.
 
         Raises ``error.LookupError`` if the revision is not known.
         """
 
-    def lookup(value):
+    @abc.abstractmethod
+    def lookup(self, value):
         """Attempt to resolve a value to a node.
 
         Value can be a binary node, hex node, revision number, or a bytes
@@ -1270,38 +1477,47 @@ class imanifeststorage(interfaceutil.Interface):
         Raises ``error.LookupError`` if a ndoe could not be resolved.
         """
 
-    def parents(node):
+    @abc.abstractmethod
+    def parents(self, node):
         """Returns a 2-tuple of parent nodes for a node.
 
         Values will be ``nullid`` if the parent is empty.
         """
 
-    def parentrevs(rev):
+    @abc.abstractmethod
+    def parentrevs(self, rev):
         """Like parents() but operates on revision numbers."""
 
-    def linkrev(rev):
+    @abc.abstractmethod
+    def linkrev(self, rev):
         """Obtain the changeset revision number a revision is linked to."""
 
-    def revision(node, _df=None):
+    @abc.abstractmethod
+    def revision(self, node):
         """Obtain fulltext data for a node."""
 
-    def rawdata(node, _df=None):
+    @abc.abstractmethod
+    def rawdata(self, node):
         """Obtain raw data for a node."""
 
-    def revdiff(rev1, rev2):
+    @abc.abstractmethod
+    def revdiff(self, rev1, rev2):
         """Obtain a delta between two revision numbers.
 
         The returned data is the result of ``bdiff.bdiff()`` on the raw
         revision data.
         """
 
-    def cmp(node, fulltext):
+    @abc.abstractmethod
+    def cmp(self, node, fulltext):
         """Compare fulltext to another revision.
 
         Returns True if the fulltext is different from what is stored.
         """
 
+    @abc.abstractmethod
     def emitrevisions(
+        self,
         nodes,
         nodesorder=None,
         revisiondata=False,
@@ -1312,7 +1528,9 @@ class imanifeststorage(interfaceutil.Interface):
         See the documentation for ``ifiledata`` for more.
         """
 
+    @abc.abstractmethod
     def addgroup(
+        self,
         deltas,
         linkmapper,
         transaction,
@@ -1324,7 +1542,8 @@ class imanifeststorage(interfaceutil.Interface):
         See the documentation in ``ifilemutation`` for more.
         """
 
-    def rawsize(rev):
+    @abc.abstractmethod
+    def rawsize(self, rev):
         """Obtain the size of tracked data.
 
         Is equivalent to ``len(m.rawdata(node))``.
@@ -1332,49 +1551,67 @@ class imanifeststorage(interfaceutil.Interface):
         TODO this method is only used by upgrade code and may be removed.
         """
 
-    def getstrippoint(minlink):
+    @abc.abstractmethod
+    def getstrippoint(self, minlink):
         """Find minimum revision that must be stripped to strip a linkrev.
 
         See the documentation in ``ifilemutation`` for more.
         """
 
-    def strip(minlink, transaction):
+    @abc.abstractmethod
+    def strip(self, minlink, transaction):
         """Remove storage of items starting at a linkrev.
 
         See the documentation in ``ifilemutation`` for more.
         """
 
-    def checksize():
+    @abc.abstractmethod
+    def checksize(self):
         """Obtain the expected sizes of backing files.
 
         TODO this is used by verify and it should not be part of the interface.
         """
 
-    def files():
+    @abc.abstractmethod
+    def files(self):
         """Obtain paths that are backing storage for this manifest.
 
         TODO this is used by verify and there should probably be a better API
         for this functionality.
         """
 
-    def deltaparent(rev):
+    @abc.abstractmethod
+    def deltaparent(self, rev):
         """Obtain the revision that a revision is delta'd against.
 
         TODO delta encoding is an implementation detail of storage and should
         not be exposed to the storage interface.
         """
 
-    def clone(tr, dest, **kwargs):
+    @abc.abstractmethod
+    def clone(self, tr, dest, **kwargs):
         """Clone this instance to another."""
 
-    def clearcaches(clear_persisted_data=False):
+    @abc.abstractmethod
+    def clearcaches(self, clear_persisted_data=False):
         """Clear any caches associated with this instance."""
 
-    def dirlog(d):
+    @abc.abstractmethod
+    def dirlog(self, d):
         """Obtain a manifest storage instance for a tree."""
 
+    @abc.abstractmethod
     def add(
-        m, transaction, link, p1, p2, added, removed, readtree=None, match=None
+        self,
+        m,
+        transaction,
+        link,
+        p1,
+        p2,
+        added,
+        removed,
+        readtree=None,
+        match=None,
     ):
         """Add a revision to storage.
 
@@ -1397,7 +1634,9 @@ class imanifeststorage(interfaceutil.Interface):
         manifest including files that did not match.
         """
 
+    @abc.abstractmethod
     def storageinfo(
+        self,
         exclusivefiles=False,
         sharedfiles=False,
         revisionscount=False,
@@ -1410,7 +1649,8 @@ class imanifeststorage(interfaceutil.Interface):
         This one behaves the same way, except for manifest data.
         """
 
-    def get_revlog():
+    @abc.abstractmethod
+    def get_revlog(self):
         """return an actual revlog instance if any
 
         This exist because a lot of code leverage the fact the underlying
@@ -1419,7 +1659,7 @@ class imanifeststorage(interfaceutil.Interface):
         """
 
 
-class imanifestlog(interfaceutil.Interface):
+class imanifestlog(Protocol):
     """Interface representing a collection of manifest snapshots.
 
     Represents the root manifest in a repository.
@@ -1428,11 +1668,14 @@ class imanifestlog(interfaceutil.Interface):
     tree manifests.
     """
 
-    nodeconstants = interfaceutil.Attribute(
-        """nodeconstants used by the current repository."""
-    )
+    nodeconstants: NodeConstants
+    """nodeconstants used by the current repository."""
 
-    def __getitem__(node):
+    narrowed: bool
+    """True, is the manifest is narrowed by a matcher"""
+
+    @abc.abstractmethod
+    def __getitem__(self, node):
         """Obtain a manifest instance for a given binary node.
 
         Equivalent to calling ``self.get('', node)``.
@@ -1441,7 +1684,8 @@ class imanifestlog(interfaceutil.Interface):
         interface.
         """
 
-    def get(tree, node, verify=True):
+    @abc.abstractmethod
+    def get(self, tree, node, verify=True):
         """Retrieve the manifest instance for a given directory and binary node.
 
         ``node`` always refers to the node of the root manifest (which will be
@@ -1458,7 +1702,8 @@ class imanifestlog(interfaceutil.Interface):
         interface.
         """
 
-    def getstorage(tree):
+    @abc.abstractmethod
+    def getstorage(self, tree):
         """Retrieve an interface to storage for a particular tree.
 
         If ``tree`` is the empty bytestring, storage for the root manifest will
@@ -1467,262 +1712,278 @@ class imanifestlog(interfaceutil.Interface):
         TODO formalize interface for returned object.
         """
 
-    def clearcaches():
+    @abc.abstractmethod
+    def clearcaches(self, clear_persisted_data: bool = False) -> None:
         """Clear caches associated with this collection."""
 
-    def rev(node):
+    @abc.abstractmethod
+    def rev(self, node):
         """Obtain the revision number for a binary node.
 
         Raises ``error.LookupError`` if the node is not known.
         """
 
-    def update_caches(transaction):
+    @abc.abstractmethod
+    def update_caches(self, transaction):
         """update whatever cache are relevant for the used storage."""
 
 
-class ilocalrepositoryfilestorage(interfaceutil.Interface):
+class ilocalrepositoryfilestorage(Protocol):
     """Local repository sub-interface providing access to tracked file storage.
 
     This interface defines how a repository accesses storage for a single
     tracked file path.
     """
 
-    def file(f):
+    @abc.abstractmethod
+    def file(self, f):
         """Obtain a filelog for a tracked path.
 
         The returned type conforms to the ``ifilestorage`` interface.
         """
 
 
-class ilocalrepositorymain(interfaceutil.Interface):
+class ilocalrepositorymain(Protocol):
     """Main interface for local repositories.
 
     This currently captures the reality of things - not how things should be.
     """
 
-    nodeconstants = interfaceutil.Attribute(
-        """Constant nodes matching the hash function used by the repository."""
-    )
-    nullid = interfaceutil.Attribute(
-        """null revision for the hash function used by the repository."""
-    )
+    nodeconstants: NodeConstants
+    """Constant nodes matching the hash function used by the repository."""
 
-    supported = interfaceutil.Attribute(
-        """Set of requirements that this repo is capable of opening."""
-    )
+    nullid: bytes
+    """null revision for the hash function used by the repository."""
 
-    requirements = interfaceutil.Attribute(
-        """Set of requirements this repo uses."""
-    )
+    supported: set[bytes]
+    """Set of requirements that this repo is capable of opening."""
 
-    features = interfaceutil.Attribute(
-        """Set of "features" this repository supports.
+    requirements: set[bytes]
+    """Set of requirements this repo uses."""
 
-        A "feature" is a loosely-defined term. It can refer to a feature
-        in the classical sense or can describe an implementation detail
-        of the repository. For example, a ``readonly`` feature may denote
-        the repository as read-only. Or a ``revlogfilestore`` feature may
-        denote that the repository is using revlogs for file storage.
+    features: set[bytes]
+    """Set of "features" this repository supports.
 
-        The intent of features is to provide a machine-queryable mechanism
-        for repo consumers to test for various repository characteristics.
+    A "feature" is a loosely-defined term. It can refer to a feature
+    in the classical sense or can describe an implementation detail
+    of the repository. For example, a ``readonly`` feature may denote
+    the repository as read-only. Or a ``revlogfilestore`` feature may
+    denote that the repository is using revlogs for file storage.
 
-        Features are similar to ``requirements``. The main difference is that
-        requirements are stored on-disk and represent requirements to open the
-        repository. Features are more run-time capabilities of the repository
-        and more granular capabilities (which may be derived from requirements).
-        """
-    )
+    The intent of features is to provide a machine-queryable mechanism
+    for repo consumers to test for various repository characteristics.
 
-    filtername = interfaceutil.Attribute(
-        """Name of the repoview that is active on this repo."""
-    )
+    Features are similar to ``requirements``. The main difference is that
+    requirements are stored on-disk and represent requirements to open the
+    repository. Features are more run-time capabilities of the repository
+    and more granular capabilities (which may be derived from requirements).
+    """
 
-    vfs_map = interfaceutil.Attribute(
-        """a bytes-key → vfs mapping used by transaction and others"""
-    )
+    filtername: bytes
+    """Name of the repoview that is active on this repo."""
 
-    wvfs = interfaceutil.Attribute(
-        """VFS used to access the working directory."""
-    )
+    vfs_map: Mapping[bytes, Vfs]
+    """a bytes-key → vfs mapping used by transaction and others"""
 
-    vfs = interfaceutil.Attribute(
-        """VFS rooted at the .hg directory.
+    wvfs: Vfs
+    """VFS used to access the working directory."""
 
-        Used to access repository data not in the store.
-        """
-    )
+    vfs: Vfs
+    """VFS rooted at the .hg directory.
 
-    svfs = interfaceutil.Attribute(
-        """VFS rooted at the store.
+    Used to access repository data not in the store.
+    """
 
-        Used to access repository data in the store. Typically .hg/store.
-        But can point elsewhere if the store is shared.
-        """
-    )
+    svfs: Vfs
+    """VFS rooted at the store.
 
-    root = interfaceutil.Attribute(
-        """Path to the root of the working directory."""
-    )
+    Used to access repository data in the store. Typically .hg/store.
+    But can point elsewhere if the store is shared.
+    """
 
-    path = interfaceutil.Attribute("""Path to the .hg directory.""")
+    root: bytes
+    """Path to the root of the working directory."""
 
-    origroot = interfaceutil.Attribute(
-        """The filesystem path that was used to construct the repo."""
-    )
+    path: bytes
+    """Path to the .hg directory."""
 
-    auditor = interfaceutil.Attribute(
-        """A pathauditor for the working directory.
+    origroot: bytes
+    """The filesystem path that was used to construct the repo."""
 
-        This checks if a path refers to a nested repository.
+    auditor: Any
+    """A pathauditor for the working directory.
 
-        Operates on the filesystem.
-        """
-    )
+    This checks if a path refers to a nested repository.
 
-    nofsauditor = interfaceutil.Attribute(
-        """A pathauditor for the working directory.
+    Operates on the filesystem.
+    """
 
-        This is like ``auditor`` except it doesn't do filesystem checks.
-        """
-    )
+    nofsauditor: Any  # TODO: add type hints
+    """A pathauditor for the working directory.
 
-    baseui = interfaceutil.Attribute(
-        """Original ui instance passed into constructor."""
-    )
+    This is like ``auditor`` except it doesn't do filesystem checks.
+    """
 
-    ui = interfaceutil.Attribute("""Main ui instance for this instance.""")
+    baseui: Ui
+    """Original ui instance passed into constructor."""
 
-    sharedpath = interfaceutil.Attribute(
-        """Path to the .hg directory of the repo this repo was shared from."""
-    )
+    ui: Ui
+    """Main ui instance for this instance."""
 
-    store = interfaceutil.Attribute("""A store instance.""")
+    sharedpath: bytes
+    """Path to the .hg directory of the repo this repo was shared from."""
 
-    spath = interfaceutil.Attribute("""Path to the store.""")
+    store: Any  # TODO: add type hints
+    """A store instance."""
 
-    sjoin = interfaceutil.Attribute("""Alias to self.store.join.""")
+    spath: bytes
+    """Path to the store."""
 
-    cachevfs = interfaceutil.Attribute(
-        """A VFS used to access the cache directory.
+    sjoin: Callable  # TODO: add type hints
+    """Alias to self.store.join."""
 
-        Typically .hg/cache.
-        """
-    )
+    cachevfs: Vfs
+    """A VFS used to access the cache directory.
 
-    wcachevfs = interfaceutil.Attribute(
-        """A VFS used to access the cache directory dedicated to working copy
+    Typically .hg/cache.
+    """
 
-        Typically .hg/wcache.
-        """
-    )
+    wcachevfs: Vfs
+    """A VFS used to access the cache directory dedicated to working copy
 
-    filteredrevcache = interfaceutil.Attribute(
-        """Holds sets of revisions to be filtered."""
-    )
+    Typically .hg/wcache.
+    """
 
-    names = interfaceutil.Attribute("""A ``namespaces`` instance.""")
+    filteredrevcache: Any  # TODO: add type hints
+    """Holds sets of revisions to be filtered."""
 
-    filecopiesmode = interfaceutil.Attribute(
-        """The way files copies should be dealt with in this repo."""
-    )
+    names: Any  # TODO: add type hints
+    """A ``namespaces`` instance."""
 
-    def close():
+    filecopiesmode: Any  # TODO: add type hints
+    """The way files copies should be dealt with in this repo."""
+
+    @abc.abstractmethod
+    def close(self):
         """Close the handle on this repository."""
 
-    def peer(path=None):
+    @abc.abstractmethod
+    def peer(self, path=None):
         """Obtain an object conforming to the ``peer`` interface."""
 
-    def unfiltered():
+    @abc.abstractmethod
+    def unfiltered(self):
         """Obtain an unfiltered/raw view of this repo."""
 
-    def filtered(name, visibilityexceptions=None):
+    @abc.abstractmethod
+    def filtered(self, name, visibilityexceptions=None):
         """Obtain a named view of this repository."""
 
-    obsstore = interfaceutil.Attribute("""A store of obsolescence data.""")
+    obsstore: Any  # TODO: add type hints
+    """A store of obsolescence data."""
 
-    changelog = interfaceutil.Attribute("""A handle on the changelog revlog.""")
+    changelog: Any  # TODO: add type hints
+    """A handle on the changelog revlog."""
 
-    manifestlog = interfaceutil.Attribute(
-        """An instance conforming to the ``imanifestlog`` interface.
+    manifestlog: imanifestlog
+    """An instance conforming to the ``imanifestlog`` interface.
 
-        Provides access to manifests for the repository.
-        """
-    )
+    Provides access to manifests for the repository.
+    """
 
-    dirstate = interfaceutil.Attribute("""Working directory state.""")
+    dirstate: intdirstate.idirstate
+    """Working directory state."""
 
-    narrowpats = interfaceutil.Attribute(
-        """Matcher patterns for this repository's narrowspec."""
-    )
+    narrowpats: Any  # TODO: add type hints
+    """Matcher patterns for this repository's narrowspec."""
 
-    def narrowmatch(match=None, includeexact=False):
+    @abc.abstractmethod
+    def narrowmatch(self, match=None, includeexact=False):
         """Obtain a matcher for the narrowspec."""
 
-    def setnarrowpats(newincludes, newexcludes):
+    @abc.abstractmethod
+    def setnarrowpats(self, newincludes, newexcludes):
         """Define the narrowspec for this repository."""
 
-    def __getitem__(changeid):
+    @abc.abstractmethod
+    def __getitem__(self, changeid):
         """Try to resolve a changectx."""
 
-    def __contains__(changeid):
+    @abc.abstractmethod
+    def __contains__(self, changeid):
         """Whether a changeset exists."""
 
-    def __nonzero__():
+    @abc.abstractmethod
+    def __nonzero__(self):
         """Always returns True."""
         return True
 
     __bool__ = __nonzero__
 
-    def __len__():
+    @abc.abstractmethod
+    def __len__(self):
         """Returns the number of changesets in the repo."""
 
-    def __iter__():
+    @abc.abstractmethod
+    def __iter__(self):
         """Iterate over revisions in the changelog."""
 
-    def revs(expr, *args):
+    @abc.abstractmethod
+    def revs(self, expr, *args):
         """Evaluate a revset.
 
         Emits revisions.
         """
 
-    def set(expr, *args):
+    @abc.abstractmethod
+    def set(self, expr, *args):
         """Evaluate a revset.
 
         Emits changectx instances.
         """
 
-    def anyrevs(specs, user=False, localalias=None):
+    @abc.abstractmethod
+    def anyrevs(self, specs, user=False, localalias=None):
         """Find revisions matching one of the given revsets."""
 
-    def url():
+    @abc.abstractmethod
+    def url(self):
         """Returns a string representing the location of this repo."""
 
-    def hook(name, throw=False, **args):
+    @abc.abstractmethod
+    def hook(self, name, throw=False, **args):
         """Call a hook."""
 
-    def tags():
+    @abc.abstractmethod
+    def tags(self):
         """Return a mapping of tag to node."""
 
-    def tagtype(tagname):
+    @abc.abstractmethod
+    def tagtype(self, tagname):
         """Return the type of a given tag."""
 
-    def tagslist():
+    @abc.abstractmethod
+    def tagslist(self):
         """Return a list of tags ordered by revision."""
 
-    def nodetags(node):
+    @abc.abstractmethod
+    def nodetags(self, node):
         """Return the tags associated with a node."""
 
-    def nodebookmarks(node):
+    @abc.abstractmethod
+    def nodebookmarks(self, node):
         """Return the list of bookmarks pointing to the specified node."""
 
-    def branchmap():
+    @abc.abstractmethod
+    def branchmap(self):
         """Return a mapping of branch to heads in that branch."""
 
-    def revbranchcache():
+    @abc.abstractmethod
+    def revbranchcache(self):
         pass
 
-    def register_changeset(rev, changelogrevision):
+    @abc.abstractmethod
+    def register_changeset(self, rev, changelogrevision):
         """Extension point for caches for new nodes.
 
         Multiple consumers are expected to need parts of the changelogrevision,
@@ -1730,113 +1991,168 @@ class ilocalrepositorymain(interfaceutil.Interface):
         cache would be fragile when other revisions are accessed, too."""
         pass
 
-    def branchtip(branchtip, ignoremissing=False):
+    @abc.abstractmethod
+    def branchtip(self, branchtip, ignoremissing=False):
         """Return the tip node for a given branch."""
 
-    def lookup(key):
+    @abc.abstractmethod
+    def lookup(self, key):
         """Resolve the node for a revision."""
 
-    def lookupbranch(key):
+    @abc.abstractmethod
+    def lookupbranch(self, key):
         """Look up the branch name of the given revision or branch name."""
 
-    def known(nodes):
+    @abc.abstractmethod
+    def known(self, nodes):
         """Determine whether a series of nodes is known.
 
         Returns a list of bools.
         """
 
-    def local():
+    @abc.abstractmethod
+    def local(self):
         """Whether the repository is local."""
         return True
 
-    def publishing():
+    @abc.abstractmethod
+    def publishing(self):
         """Whether the repository is a publishing repository."""
 
-    def cancopy():
+    @abc.abstractmethod
+    def cancopy(self):
         pass
 
-    def shared():
+    @abc.abstractmethod
+    def shared(self):
         """The type of shared repository or None."""
 
-    def wjoin(f, *insidef):
+    @abc.abstractmethod
+    def wjoin(self, f, *insidef):
         """Calls self.vfs.reljoin(self.root, f, *insidef)"""
 
-    def setparents(p1, p2):
+    @abc.abstractmethod
+    def setparents(self, p1, p2):
         """Set the parent nodes of the working directory."""
 
-    def filectx(path, changeid=None, fileid=None):
+    @abc.abstractmethod
+    def filectx(self, path, changeid=None, fileid=None):
         """Obtain a filectx for the given file revision."""
 
-    def getcwd():
+    @abc.abstractmethod
+    def getcwd(self):
         """Obtain the current working directory from the dirstate."""
 
-    def pathto(f, cwd=None):
+    @abc.abstractmethod
+    def pathto(self, f, cwd=None):
         """Obtain the relative path to a file."""
 
-    def adddatafilter(name, fltr):
+    @abc.abstractmethod
+    def adddatafilter(self, name, fltr):
         pass
 
-    def wread(filename):
+    @abc.abstractmethod
+    def wread(self, filename):
         """Read a file from wvfs, using data filters."""
 
-    def wwrite(filename, data, flags, backgroundclose=False, **kwargs):
+    @abc.abstractmethod
+    def wwrite(self, filename, data, flags, backgroundclose=False, **kwargs):
         """Write data to a file in the wvfs, using data filters."""
 
-    def wwritedata(filename, data):
+    @abc.abstractmethod
+    def wwritedata(self, filename, data):
         """Resolve data for writing to the wvfs, using data filters."""
 
-    def currenttransaction():
+    @abc.abstractmethod
+    def currenttransaction(self):
         """Obtain the current transaction instance or None."""
 
-    def transaction(desc, report=None):
+    @abc.abstractmethod
+    def transaction(self, desc, report=None):
         """Open a new transaction to write to the repository."""
 
-    def undofiles():
+    @abc.abstractmethod
+    def undofiles(self):
         """Returns a list of (vfs, path) for files to undo transactions."""
 
-    def recover():
+    @abc.abstractmethod
+    def recover(self):
         """Roll back an interrupted transaction."""
 
-    def rollback(dryrun=False, force=False):
+    @abc.abstractmethod
+    def rollback(self, dryrun=False, force=False):
         """Undo the last transaction.
 
         DANGEROUS.
         """
 
-    def updatecaches(tr=None, full=False, caches=None):
+    @abc.abstractmethod
+    def updatecaches(self, tr=None, full=False, caches=None):
         """Warm repo caches."""
 
-    def invalidatecaches():
+    @abc.abstractmethod
+    def invalidatecaches(self):
         """Invalidate cached data due to the repository mutating."""
 
-    def invalidatevolatilesets():
+    @abc.abstractmethod
+    def invalidatevolatilesets(self):
         pass
 
-    def invalidatedirstate():
+    @abc.abstractmethod
+    def invalidatedirstate(self):
         """Invalidate the dirstate."""
 
-    def invalidate(clearfilecache=False):
+    @abc.abstractmethod
+    def invalidate(self, clearfilecache=False):
         pass
 
-    def invalidateall():
+    @abc.abstractmethod
+    def invalidateall(self):
         pass
 
-    def lock(wait=True):
-        """Lock the repository store and return a lock instance."""
+    @abc.abstractmethod
+    def lock(self, wait=True, steal_from=None):
+        """Lock the repository store and return a lock instance.
 
-    def currentlock():
+        If another lock object is specified through the "steal_from" argument,
+        the new lock will reuse the on-disk lock of that "stolen" lock instead
+        of creating its own. The "stolen" lock is no longer usable for any
+        purpose and won't execute its release callback.
+
+        That steal_from argument is used during local clone when reloading a
+        repository. If we could remove the need for this during copy clone, we
+        could remove this function.
+        """
+
+    @abc.abstractmethod
+    def currentlock(self):
         """Return the lock if it's held or None."""
 
-    def wlock(wait=True):
-        """Lock the non-store parts of the repository."""
+    @abc.abstractmethod
+    def wlock(self, wait=True, steal_from=None):
+        """Lock the non-store parts of the repository.
 
-    def currentwlock():
+        If another lock object is specified through the "steal_from" argument,
+        the new lock will reuse the on-disk lock of that "stolen" lock instead
+        of creating its own. The "stolen" lock is no longer usable for any
+        purpose and won't execute its release callback.
+
+        That steal_from argument is used during local clone when reloading a
+        repository. If we could remove the need for this during copy clone, we
+        could remove this function.
+        """
+
+    @abc.abstractmethod
+    def currentwlock(self):
         """Return the wlock if it's held or None."""
 
-    def checkcommitpatterns(wctx, match, status, fail):
+    @abc.abstractmethod
+    def checkcommitpatterns(self, wctx, match, status, fail):
         pass
 
+    @abc.abstractmethod
     def commit(
+        self,
         text=b'',
         user=None,
         date=None,
@@ -1847,16 +2163,21 @@ class ilocalrepositorymain(interfaceutil.Interface):
     ):
         """Add a new revision to the repository."""
 
-    def commitctx(ctx, error=False, origctx=None):
+    @abc.abstractmethod
+    def commitctx(self, ctx, error=False, origctx=None):
         """Commit a commitctx instance to the repository."""
 
-    def destroying():
+    @abc.abstractmethod
+    def destroying(self):
         """Inform the repository that nodes are about to be destroyed."""
 
-    def destroyed():
+    @abc.abstractmethod
+    def destroyed(self):
         """Inform the repository that nodes have been destroyed."""
 
+    @abc.abstractmethod
     def status(
+        self,
         node1=b'.',
         node2=None,
         match=None,
@@ -1867,60 +2188,77 @@ class ilocalrepositorymain(interfaceutil.Interface):
     ):
         """Convenience method to call repo[x].status()."""
 
-    def addpostdsstatus(ps):
+    @abc.abstractmethod
+    def addpostdsstatus(self, ps):
         pass
 
-    def postdsstatus():
+    @abc.abstractmethod
+    def postdsstatus(self):
         pass
 
-    def clearpostdsstatus():
+    @abc.abstractmethod
+    def clearpostdsstatus(self):
         pass
 
-    def heads(start=None):
+    @abc.abstractmethod
+    def heads(self, start=None):
         """Obtain list of nodes that are DAG heads."""
 
-    def branchheads(branch=None, start=None, closed=False):
+    @abc.abstractmethod
+    def branchheads(self, branch=None, start=None, closed=False):
         pass
 
-    def branches(nodes):
+    @abc.abstractmethod
+    def branches(self, nodes):
         pass
 
-    def between(pairs):
+    @abc.abstractmethod
+    def between(self, pairs):
         pass
 
-    def checkpush(pushop):
+    @abc.abstractmethod
+    def checkpush(self, pushop):
         pass
 
-    prepushoutgoinghooks = interfaceutil.Attribute("""util.hooks instance.""")
+    prepushoutgoinghooks: misc.IHooks
+    """util.hooks instance."""
 
-    def pushkey(namespace, key, old, new):
+    @abc.abstractmethod
+    def pushkey(self, namespace, key, old, new):
         pass
 
-    def listkeys(namespace):
+    @abc.abstractmethod
+    def listkeys(self, namespace):
         pass
 
-    def debugwireargs(one, two, three=None, four=None, five=None):
+    @abc.abstractmethod
+    def debugwireargs(self, one, two, three=None, four=None, five=None):
         pass
 
-    def savecommitmessage(text):
+    @abc.abstractmethod
+    def savecommitmessage(self, text):
         pass
 
+    @abc.abstractmethod
     def register_sidedata_computer(
-        kind, category, keys, computer, flags, replace=False
+        self, kind, category, keys, computer, flags, replace=False
     ):
         pass
 
-    def register_wanted_sidedata(category):
+    @abc.abstractmethod
+    def register_wanted_sidedata(self, category):
         pass
 
 
 class completelocalrepository(
-    ilocalrepositorymain, ilocalrepositoryfilestorage
+    ilocalrepositorymain,
+    ilocalrepositoryfilestorage,
+    Protocol,
 ):
     """Complete interface for a local repository."""
 
 
-class iwireprotocolcommandcacher(interfaceutil.Interface):
+class iwireprotocolcommandcacher(Protocol):
     """Represents a caching backend for wire protocol commands.
 
     Wire protocol version 2 supports transparent caching of many commands.
@@ -2003,20 +2341,23 @@ class iwireprotocolcommandcacher(interfaceutil.Interface):
     instances to avoid this overhead.
     """
 
-    def __enter__():
+    @abc.abstractmethod
+    def __enter__(self):
         """Marks the instance as active.
 
         Should return self.
         """
 
-    def __exit__(exctype, excvalue, exctb):
+    @abc.abstractmethod
+    def __exit__(self, exctype, excvalue, exctb):
         """Called when cacher is no longer used.
 
         This can be used by implementations to perform cleanup actions (e.g.
         disconnecting network sockets, aborting a partially cached response.
         """
 
-    def adjustcachekeystate(state):
+    @abc.abstractmethod
+    def adjustcachekeystate(self, state):
         """Influences cache key derivation by adjusting state to derive key.
 
         A dict defining the state used to derive the cache key is passed.
@@ -2028,7 +2369,8 @@ class iwireprotocolcommandcacher(interfaceutil.Interface):
         existing keys.
         """
 
-    def setcachekey(key):
+    @abc.abstractmethod
+    def setcachekey(self, key):
         """Record the derived cache key for this request.
 
         Instances may mutate the key for internal usage, as desired. e.g.
@@ -2040,7 +2382,8 @@ class iwireprotocolcommandcacher(interfaceutil.Interface):
         instance.
         """
 
-    def lookup():
+    @abc.abstractmethod
+    def lookup(self):
         """Attempt to resolve an entry in the cache.
 
         The instance is instructed to look for the cache key that it was
@@ -2058,7 +2401,8 @@ class iwireprotocolcommandcacher(interfaceutil.Interface):
            would return if invoked or an equivalent representation thereof.
         """
 
-    def onobject(obj):
+    @abc.abstractmethod
+    def onobject(self, obj):
         """Called when a new object is emitted from the command function.
 
         Receives as its argument the object that was emitted from the
@@ -2069,7 +2413,8 @@ class iwireprotocolcommandcacher(interfaceutil.Interface):
         ``yield obj``.
         """
 
-    def onfinished():
+    @abc.abstractmethod
+    def onfinished(self):
         """Called after all objects have been emitted from the command function.
 
         Implementations should return an iterator of objects to forward to

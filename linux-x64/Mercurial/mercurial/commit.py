@@ -3,6 +3,7 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
 
 from .i18n import _
 from .node import (
@@ -214,15 +215,15 @@ def _process_files(tr, ctx, ms, files, narrow_files=None, error=False):
             elif narrow_action == mergestate.CHANGE_ADDED:
                 files.mark_added(f)
                 added.append(f)
-                m[f] = m2[f]
+                fnode = m2[f]
                 flags = m2ctx.find(f)[1] or b''
-                m.setflag(f, flags)
+                m.set(f, fnode, flags)
             elif narrow_action == mergestate.CHANGE_MODIFIED:
                 files.mark_touched(f)
                 added.append(f)
-                m[f] = m2[f]
+                fnode = m2[f]
                 flags = m2ctx.find(f)[1] or b''
-                m.setflag(f, flags)
+                m.set(f, fnode, flags)
             else:
                 msg = _(b"corrupted mergestate, unknown narrow action: %b")
                 hint = _(b"restart the merge")
@@ -234,7 +235,7 @@ def _process_files(tr, ctx, ms, files, narrow_files=None, error=False):
                 removed.append(f)
             else:
                 added.append(f)
-                m[f], is_touched = _filecommit(
+                fnode, is_touched = _filecommit(
                     repo, fctx, m1, m2, linkrev, tr, writefilecopymeta, ms
                 )
                 if is_touched:
@@ -244,7 +245,7 @@ def _process_files(tr, ctx, ms, files, narrow_files=None, error=False):
                         files.mark_merged(f)
                     else:
                         files.mark_touched(f)
-                m.setflag(f, fctx.flags())
+                m.set(f, fnode, fctx.flags())
         except OSError:
             repo.ui.warn(_(b"trouble committing %s!\n") % uipathfn(f))
             raise

@@ -5,19 +5,24 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
 
 import copy as copymod
 import errno
 import functools
 import os
 import re
+import typing
 
 from typing import (
     Any,
     AnyStr,
+    BinaryIO,
     Dict,
     Iterable,
+    Literal,
     Optional,
+    TYPE_CHECKING,
     cast,
 )
 
@@ -27,20 +32,22 @@ from .node import (
     nullrev,
     short,
 )
-from .pycompat import (
-    getattr,
-    open,
-    setattr,
-)
 from .thirdparty import attr
+
+# Force pytype to use the non-vendored package
+if typing.TYPE_CHECKING:
+    # noinspection PyPackageRequirements
+    import attr
 
 from . import (
     bookmarks,
+    bundle2,
     changelog,
     copies,
     crecord as crecordmod,
     encoding,
     error,
+    exchange,
     formatter,
     logcmdutil,
     match as matchmod,
@@ -57,6 +64,7 @@ from . import (
     rewriteutil,
     scmutil,
     state as statemod,
+    streamclone,
     subrepoutil,
     templatekw,
     templater,
@@ -67,13 +75,17 @@ from . import (
 from .utils import (
     dateutil,
     stringutil,
+    urlutil,
 )
 
 from .revlogutils import (
     constants as revlog_constants,
 )
 
-if pycompat.TYPE_CHECKING:
+if TYPE_CHECKING:
+    from .interfaces import (
+        status as istatus,
+    )
     from . import (
         ui as uimod,
     )
@@ -312,7 +324,7 @@ def check_incompatible_arguments(
         check_at_most_one_arg(opts, first, other)
 
 
-def resolve_commit_options(ui: "uimod.ui", opts: Dict[str, Any]) -> bool:
+def resolve_commit_options(ui: uimod.ui, opts: Dict[str, Any]) -> bool:
     """modify commit options dict to handle related options
 
     The return value indicates that ``rewrite.update-timestamp`` is the reason
@@ -780,16 +792,14 @@ class dirnode:
                 return
 
         # add the files to status list
-        for st, fpath in self.iterfilepaths():
-            yield st, fpath
+        yield from self.iterfilepaths()
 
         # recurse on the subdirs
         for dirobj in self.subdirs.values():
-            for st, fpath in dirobj.tersewalk(terseargs):
-                yield st, fpath
+            yield from dirobj.tersewalk(terseargs)
 
 
-def tersedir(statuslist, terseargs):
+def tersedir(statuslist: istatus.Status, terseargs) -> istatus.Status:
     """
     Terse the status if all the files in a directory shares the same status.
 
@@ -813,18 +823,17 @@ def tersedir(statuslist, terseargs):
     # creating a dirnode object for the root of the repo
     rootobj = dirnode(b'')
     pstatus = (
-        b'modified',
-        b'added',
-        b'deleted',
-        b'clean',
-        b'unknown',
-        b'ignored',
-        b'removed',
+        ('modified', b'm'),
+        ('added', b'a'),
+        ('deleted', b'd'),
+        ('clean', b'c'),
+        ('unknown', b'u'),
+        ('ignored', b'i'),
+        ('removed', b'r'),
     )
 
     tersedict = {}
-    for attrname in pstatus:
-        statuschar = attrname[0:1]
+    for attrname, statuschar in pstatus:
         for f in getattr(statuslist, attrname):
             rootobj.addfile(f, statuschar)
         tersedict[statuschar] = []
@@ -1007,7 +1016,7 @@ def findcmd(cmd, table, strict=True):
     raise error.UnknownCommand(cmd, allcmds)
 
 
-def changebranch(ui, repo, revs, label, opts):
+def changebranch(ui, repo, revs, label, **opts):
     """Change the branch name of given revs to label"""
 
     with repo.wlock(), repo.lock(), repo.transaction(b'branches'):
@@ -1026,7 +1035,7 @@ def changebranch(ui, repo, revs, label, opts):
         root = repo[roots.first()]
         rpb = {parent.branch() for parent in root.parents()}
         if (
-            not opts.get(b'force')
+            not opts.get('force')
             and label not in rpb
             and label in repo.branchmap()
         ):
@@ -1110,7 +1119,7 @@ def changebranch(ui, repo, revs, label, opts):
         ui.status(_(b"changed branch on %d changesets\n") % len(replacements))
 
 
-def findrepo(p):
+def findrepo(p: bytes) -> Optional[bytes]:
     while not os.path.isdir(os.path.join(p, b".hg")):
         oldp, p = p, os.path.dirname(p)
         if p == oldp:
@@ -1138,7 +1147,7 @@ def bailifchanged(repo, merge=True, hint=None):
         ctx.sub(s).bailifchanged(hint=hint)
 
 
-def logmessage(ui: "uimod.ui", opts: Dict[bytes, Any]) -> Optional[bytes]:
+def logmessage(ui: uimod.ui, opts: Dict[bytes, Any]) -> Optional[bytes]:
     """get the log message according to -m and -l option"""
 
     check_at_most_one_arg(opts, b'message', b'logfile')
@@ -1152,7 +1161,7 @@ def logmessage(ui: "uimod.ui", opts: Dict[bytes, Any]) -> Optional[bytes]:
                 message = ui.fin.read()
             else:
                 message = b'\n'.join(util.readfile(logfile).splitlines())
-        except IOError as inst:
+        except OSError as inst:
             raise error.Abort(
                 _(b"can't read commit message '%s': %s")
                 % (logfile, encoding.strtolocal(inst.strerror))
@@ -1351,7 +1360,7 @@ def _buildfntemplate(pat, total=None, seqno=None, revwidth=None, pathname=None):
     return b''.join(newname)
 
 
-def makefilename(ctx, pat, **props):
+def makefilename(ctx, pat: bytes, **props):
     if not pat:
         return pat
     tmpl = _buildfntemplate(pat, **props)
@@ -1367,7 +1376,7 @@ def isstdiofilename(pat):
 
 
 class _unclosablefile:
-    def __init__(self, fp):
+    def __init__(self, fp: BinaryIO) -> None:
         self._fp = fp
 
     def close(self):
@@ -1386,8 +1395,10 @@ class _unclosablefile:
         pass
 
 
-def makefileobj(ctx, pat, mode=b'wb', **props):
-    writable = mode not in (b'r', b'rb')
+def makefileobj(
+    ctx, pat: bytes, mode: Literal['rb', 'wb'] = 'wb', **props
+) -> BinaryIO:
+    writable = mode not in ('r', 'rb')
 
     if isstdiofilename(pat):
         repo = ctx.repo()
@@ -1395,7 +1406,7 @@ def makefileobj(ctx, pat, mode=b'wb', **props):
             fp = repo.ui.fout
         else:
             fp = repo.ui.fin
-        return _unclosablefile(fp)
+        return typing.cast(BinaryIO, _unclosablefile(fp))
     fn = makefilename(ctx, pat, **props)
     return open(fn, mode)
 
@@ -1450,7 +1461,7 @@ def openstorage(repo, cmd, file_, opts, returnrevlog=False):
         if returnrevlog:
             if isinstance(r, revlog.revlog):
                 pass
-            elif util.safehasattr(r, '_revlog'):
+            elif hasattr(r, '_revlog'):
                 r = r._revlog  # pytype: disable=attribute-error
             elif r is not None:
                 raise error.InputError(
@@ -1783,7 +1794,7 @@ def copy(ui, repo, pats, opts: Dict[bytes, Any], rename=False):
                     # Linux CLI behavior.
                     util.copyfile(src, target, copystat=rename)
                 srcexists = True
-            except IOError as inst:
+            except OSError as inst:
                 if inst.errno == errno.ENOENT:
                     ui.warn(_(b'%s: deleted in working directory\n') % relsrc)
                     srcexists = False
@@ -2384,8 +2395,19 @@ def add(ui, repo, match, prefix, uipathfn, explicitonly, **opts):
             full=False,
         )
     ):
+        entry = dirstate.get_entry(f)
+        # We don't want to even attmpt to add back files that have been removed
+        # It would lead to a misleading message saying we're adding the path,
+        # and can also lead to file/dir conflicts when attempting to add it.
+        removed = entry and entry.removed
         exact = match.exact(f)
-        if exact or not explicitonly and f not in wctx and repo.wvfs.lexists(f):
+        if (
+            exact
+            or not explicitonly
+            and f not in wctx
+            and repo.wvfs.lexists(f)
+            and not removed
+        ):
             if cca:
                 cca(f)
             names.append(f)
@@ -3329,9 +3351,7 @@ def buildcommittext(repo, ctx, subs, extramsg):
     return b"\n".join(edittext)
 
 
-def commitstatus(repo, node, branch, bheads=None, tip=None, opts=None):
-    if opts is None:
-        opts = {}
+def commitstatus(repo, node, branch, bheads=None, tip=None, **opts):
     ctx = repo[node]
     parents = ctx.parents()
 
@@ -3341,7 +3361,7 @@ def commitstatus(repo, node, branch, bheads=None, tip=None, opts=None):
         # for most instances
         repo.ui.warn(_(b"warning: commit already existed in the repository!\n"))
     elif (
-        not opts.get(b'amend')
+        not opts.get('amend')
         and bheads
         and node not in bheads
         and not any(
@@ -3378,7 +3398,7 @@ def commitstatus(repo, node, branch, bheads=None, tip=None, opts=None):
         #
         # H H  n  head merge: head count decreases
 
-    if not opts.get(b'close_branch'):
+    if not opts.get('close_branch'):
         for r in parents:
             if r.closesbranch() and r.branch() == branch:
                 repo.ui.status(
@@ -3822,7 +3842,6 @@ def _performrevert(
         original_headers = patch.parsepatch(diff)
 
         try:
-
             chunks, opts = recordfilter(
                 repo.ui, original_headers, match, operation=operation
             )
@@ -4111,8 +4130,10 @@ def abortgraft(ui, repo, graftstate):
     return 0
 
 
-def readgraftstate(repo, graftstate):
-    # type: (Any, statemod.cmdstate) -> Dict[bytes, Any]
+def readgraftstate(
+    repo: Any,
+    graftstate: statemod.cmdstate,
+) -> Dict[bytes, Any]:
     """read the graft state file and return a dict of the data stored in it"""
     try:
         return graftstate.read()
@@ -4126,3 +4147,90 @@ def hgabortgraft(ui, repo):
     with repo.wlock():
         graftstate = statemod.cmdstate(repo, b'graftstate')
         return abortgraft(ui, repo, graftstate)
+
+
+def postincoming(ui, repo, modheads, optupdate, checkout, brev):
+    """Run after a changegroup has been added via pull/unbundle
+
+    This takes arguments below:
+
+    :modheads: change of heads by pull/unbundle
+    :optupdate: updating working directory is needed or not
+    :checkout: update destination revision (or None to default destination)
+    :brev: a name, which might be a bookmark to be activated after updating
+
+    return True if update raise any conflict, False otherwise.
+    """
+    if modheads == 0:
+        return False
+    if optupdate:
+        # avoid circular import
+        from . import hg
+
+        try:
+            return hg.updatetotally(ui, repo, checkout, brev)
+        except error.UpdateAbort as inst:
+            msg = _(b"not updating: %s") % stringutil.forcebytestr(inst)
+            hint = inst.hint
+            raise error.UpdateAbort(msg, hint=hint)
+    if ui.quiet:
+        pass  # we won't report anything so the other clause are useless.
+    elif modheads is not None and modheads > 1:
+        currentbranchheads = len(repo.branchheads())
+        if currentbranchheads == modheads:
+            ui.status(
+                _(b"(run 'hg heads' to see heads, 'hg merge' to merge)\n")
+            )
+        elif currentbranchheads > 1:
+            ui.status(
+                _(b"(run 'hg heads .' to see heads, 'hg merge' to merge)\n")
+            )
+        else:
+            ui.status(_(b"(run 'hg heads' to see heads)\n"))
+    elif not ui.configbool(b'commands', b'update.requiredest'):
+        ui.status(_(b"(run 'hg update' to get a working copy)\n"))
+    return False
+
+
+def unbundle_files(ui, repo, fnames, unbundle_source=b'unbundle'):
+    """utility for `hg unbundle` and `hg debug::unbundle`"""
+    assert fnames
+    # avoid circular import
+    from . import hg
+
+    with repo.lock():
+        for fname in fnames:
+            f = hg.openpath(ui, fname)
+            gen = exchange.readbundle(ui, f, fname)
+            if isinstance(gen, streamclone.streamcloneapplier):
+                raise error.InputError(
+                    _(
+                        b'packed bundles cannot be applied with '
+                        b'"hg unbundle"'
+                    ),
+                    hint=_(b'use "hg debugapplystreamclonebundle"'),
+                )
+            url = b'bundle:' + fname
+            try:
+                txnname = b'unbundle'
+                if not isinstance(gen, bundle2.unbundle20):
+                    txnname = b'unbundle\n%s' % urlutil.hidepassword(url)
+                with repo.transaction(txnname) as tr:
+                    op = bundle2.applybundle(
+                        repo,
+                        gen,
+                        tr,
+                        source=unbundle_source,  # used by debug::unbundle
+                        url=url,
+                    )
+            except error.BundleUnknownFeatureError as exc:
+                raise error.Abort(
+                    _(b'%s: unknown bundle feature, %s') % (fname, exc),
+                    hint=_(
+                        b"see https://mercurial-scm.org/"
+                        b"wiki/BundleFeature for more "
+                        b"information"
+                    ),
+                )
+            modheads = bundle2.combinechangegroupresults(op)
+    return modheads

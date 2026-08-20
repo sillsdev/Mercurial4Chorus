@@ -9,6 +9,7 @@
 ### Extension helper                                              ###
 #####################################################################
 
+from __future__ import annotations
 
 from . import (
     commands,
@@ -325,7 +326,7 @@ class exthelper:
             # Required, otherwise the function will not be wrapped
             uisetup = eh.finaluisetup
 
-            @eh.wrapfunction(discovery, b'checkheads')
+            @eh.wrapfunction(discovery, 'checkheads')
             def wrapcheckheads(orig, *args, **kwargs):
                 ui.note(b'His head smashed in and his heart cut out')
                 return orig(*args, **kwargs)

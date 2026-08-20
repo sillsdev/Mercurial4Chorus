@@ -5,11 +5,11 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
 
 import os
 
 from .i18n import _
-from .pycompat import open
 
 from . import (
     chgserver,
@@ -73,14 +73,13 @@ def runservice(
                 os.close(fd)
 
     def writepid(pid):
-        if opts[b'pid_file']:
+        file = opts[b'pid_file']
+        if file:
+            pid_line = b'%d\n' % pid
             if appendpid:
-                mode = b'ab'
+                util.appendfile(file, pid_line)
             else:
-                mode = b'wb'
-            fp = open(opts[b'pid_file'], mode)
-            fp.write(b'%d\n' % pid)
-            fp.close()
+                util.writefile(file, pid_line)
 
     if opts[b'daemon'] and not opts[b'daemon_postexec']:
         # Signal child process startup with file removal
@@ -108,7 +107,7 @@ def runservice(
                 # If the daemonized process managed to write out an error msg,
                 # report it.
                 if pycompat.iswindows and os.path.exists(lockpath):
-                    with open(lockpath, b'rb') as log:
+                    with open(lockpath, 'rb') as log:
                         for line in log:
                             procutil.stderr.write(line)
                 raise error.Abort(_(b'child process failed to start'))

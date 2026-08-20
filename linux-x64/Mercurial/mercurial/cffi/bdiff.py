@@ -5,15 +5,23 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
 
 import struct
+import typing
 
 from typing import (
     List,
+    Optional,
     Tuple,
 )
 
 from ..pure.bdiff import *
+
+from ..interfaces import (
+    modules as intmod,
+)
+
 from . import _bdiff  # pytype: disable=import-error
 
 ffi = _bdiff.ffi
@@ -21,11 +29,11 @@ lib = _bdiff.lib
 
 
 def blocks(sa: bytes, sb: bytes) -> List[Tuple[int, int, int, int]]:
-    a = ffi.new(b"struct bdiff_line**")
-    b = ffi.new(b"struct bdiff_line**")
-    ac = ffi.new(b"char[]", str(sa))
-    bc = ffi.new(b"char[]", str(sb))
-    l = ffi.new(b"struct bdiff_hunk*")
+    a = ffi.new("struct bdiff_line**")
+    b = ffi.new("struct bdiff_line**")
+    ac = ffi.new("char[]", bytes(sa))
+    bc = ffi.new("char[]", bytes(sb))
+    l = ffi.new("struct bdiff_hunk*")
     try:
         an = lib.bdiff_splitlines(ac, len(sa), a)
         bn = lib.bdiff_splitlines(bc, len(sb), b)
@@ -49,11 +57,11 @@ def blocks(sa: bytes, sb: bytes) -> List[Tuple[int, int, int, int]]:
 
 
 def bdiff(sa: bytes, sb: bytes) -> bytes:
-    a = ffi.new(b"struct bdiff_line**")
-    b = ffi.new(b"struct bdiff_line**")
-    ac = ffi.new(b"char[]", str(sa))
-    bc = ffi.new(b"char[]", str(sb))
-    l = ffi.new(b"struct bdiff_hunk*")
+    a = ffi.new("struct bdiff_line**")
+    b = ffi.new("struct bdiff_line**")
+    ac = ffi.new("char[]", bytes(sa))
+    bc = ffi.new("char[]", bytes(sb))
+    l = ffi.new("struct bdiff_hunk*")
     try:
         an = lib.bdiff_splitlines(ac, len(sa), a)
         bn = lib.bdiff_splitlines(bc, len(sb), b)
@@ -76,7 +84,7 @@ def bdiff(sa: bytes, sb: bytes) -> bytes:
                         lgt,
                     )
                 )
-                rl.append(str(ffi.buffer((b[0] + lb).l, lgt)))
+                rl.append(bytes(ffi.buffer((b[0] + lb).l, lgt)))
             la = h.a2
             lb = h.b2
             h = h.next
@@ -86,3 +94,11 @@ def bdiff(sa: bytes, sb: bytes) -> bytes:
         lib.free(b[0])
         lib.bdiff_freehunks(l.next)
     return b"".join(rl)
+
+
+# In order to adhere to the module protocol, these functions must be visible to
+# the type checker, though they aren't actually implemented by this
+# implementation of the module protocol.  Callers are responsible for
+# checking that the implementation is available before using them.
+if typing.TYPE_CHECKING:
+    xdiffblocks: Optional[intmod.BDiffBlocksFnc] = None

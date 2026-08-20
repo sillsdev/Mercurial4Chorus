@@ -1,6 +1,22 @@
+from __future__ import annotations
+
 import contextlib
 import os
 
+from typing import (
+    Any,
+    Dict,
+    Iterable,
+    Iterator,
+    List,
+    Optional,
+    Tuple,
+)
+
+from mercurial.interfaces.types import (
+    MatcherT,
+    TransactionT,
+)
 from mercurial.node import sha1nodeconstants
 from mercurial import (
     dirstatemap,
@@ -16,7 +32,6 @@ from mercurial.dirstateutils import (
 )
 from mercurial.interfaces import (
     dirstate as intdirstate,
-    util as interfaceutil,
 )
 
 from . import gitutil
@@ -47,7 +62,7 @@ def readpatternfile(orig, filepath, warn, sourceinfo=False):
     return result, warnings
 
 
-extensions.wrapfunction(matchmod, b'readpatternfile', readpatternfile)
+extensions.wrapfunction(matchmod, 'readpatternfile', readpatternfile)
 
 
 _STATUS_MAP = {}
@@ -71,8 +86,7 @@ if pygit2:
     }
 
 
-@interfaceutil.implementer(intdirstate.idirstate)
-class gitdirstate:
+class gitdirstate(intdirstate.idirstate):
     def __init__(self, ui, vfs, gitrepo, use_dirstate_v2):
         self._ui = ui
         self._root = os.path.dirname(vfs.base)
@@ -96,7 +110,7 @@ class gitdirstate:
         )
         return self._map
 
-    def p1(self):
+    def p1(self) -> bytes:
         try:
             return self.git.head.peel().id.raw
         except pygit2.GitError:
@@ -104,11 +118,11 @@ class gitdirstate:
             # empty repository.
             return sha1nodeconstants.nullid
 
-    def p2(self):
+    def p2(self) -> bytes:
         # TODO: MERGE_HEAD? something like that, right?
         return sha1nodeconstants.nullid
 
-    def setparents(self, p1, p2=None):
+    def setparents(self, p1: bytes, p2: Optional[bytes] = None):
         if p2 is None:
             p2 = sha1nodeconstants.nullid
         assert p2 == sha1nodeconstants.nullid, b'TODO merging support'
@@ -120,17 +134,17 @@ class gitdirstate:
             os.path.join(self._root, b'.git', b'index')
         )
 
-    def branch(self):
+    def branch(self) -> bytes:
         return b'default'
 
-    def parents(self):
+    def parents(self) -> List[bytes]:
         # TODO how on earth do we find p2 if a merge is in flight?
-        return self.p1(), sha1nodeconstants.nullid
+        return [self.p1(), sha1nodeconstants.nullid]
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[bytes]:
         return (pycompat.fsencode(f.path) for f in self.git.index)
 
-    def items(self):
+    def items(self) -> Iterator[Tuple[bytes, intdirstate.DirstateItemT]]:
         for ie in self.git.index:
             yield ie.path, None  # value should be a DirstateItem
 
@@ -144,14 +158,21 @@ class gitdirstate:
             return b'?'
         return _STATUS_MAP[gs]
 
-    def __contains__(self, filename):
+    def __contains__(self, filename: Any) -> bool:
         try:
             gs = self.git.status_file(filename)
             return _STATUS_MAP[gs] != b'?'
         except KeyError:
             return False
 
-    def status(self, match, subrepos, ignored, clean, unknown):
+    def status(
+        self,
+        match: MatcherT,
+        subrepos: bool,
+        ignored: bool,
+        clean: bool,
+        unknown: bool,
+    ) -> intdirstate.StatusReturnT:
         listclean = clean
         # TODO handling of clean files - can we get that from git.status()?
         modified, added, removed, deleted, unknown, ignored, clean = (
@@ -224,24 +245,28 @@ class gitdirstate:
             mtime_boundary,
         )
 
-    def flagfunc(self, buildfallback):
+    def flagfunc(
+        self, buildfallback: intdirstate.FlagFuncFallbackT
+    ) -> intdirstate.FlagFuncReturnT:
         # TODO we can do better
         return buildfallback()
 
-    def getcwd(self):
+    def getcwd(self) -> bytes:
         # TODO is this a good way to do this?
         return os.path.dirname(
             os.path.dirname(pycompat.fsencode(self.git.path))
         )
 
-    def get_entry(self, path):
+    def get_entry(self, path: bytes) -> intdirstate.DirstateItemT:
         """return a DirstateItem for the associated path"""
         entry = self._map.get(path)
         if entry is None:
             return DirstateItem()
         return entry
 
-    def normalize(self, path):
+    def normalize(
+        self, path: bytes, isknown: bool = False, ignoremissing: bool = False
+    ) -> bytes:
         normed = util.normcase(path)
         assert normed == path, b"TODO handling of case folding: %s != %s" % (
             normed,
@@ -249,28 +274,53 @@ class gitdirstate:
         )
         return path
 
+    def is_changing_files(self) -> bool:
+        raise NotImplementedError
+
+    def _ignorefileandline(self, f: bytes) -> intdirstate.IgnoreFileAndLineT:
+        raise NotImplementedError
+
     @property
-    def _checklink(self):
+    def _checklink(self) -> bool:
         return util.checklink(os.path.dirname(pycompat.fsencode(self.git.path)))
 
-    def copies(self):
+    def invalidate(self) -> None:
+        raise NotImplementedError
+
+    def copy(self, source: Optional[bytes], dest: bytes) -> None:
+        raise NotImplementedError
+
+    def copies(self) -> Dict[bytes, bytes]:
         # TODO support copies?
         return {}
 
     # # TODO what the heck is this
     _filecache = set()
 
-    def is_changing_parents(self):
+    @property
+    def is_changing_parents(self) -> bool:
         # TODO: we need to implement the context manager bits and
         # correctly stage/revert index edits.
         return False
 
-    def is_changing_any(self):
+    @property
+    def is_changing_any(self) -> bool:
         # TODO: we need to implement the context manager bits and
         # correctly stage/revert index edits.
         return False
 
-    def write(self, tr):
+    def clear(self) -> None:
+        raise NotImplementedError
+
+    def rebuild(
+        self,
+        parent: bytes,
+        allfiles: Iterable[bytes],  # TODO: more than iterable? (uses len())
+        changedfiles: Optional[Iterable[bytes]] = None,
+    ) -> None:
+        raise NotImplementedError
+
+    def write(self, tr: Optional[TransactionT]) -> None:
         # TODO: call parent change callbacks
 
         if tr:
@@ -282,7 +332,7 @@ class gitdirstate:
         else:
             self.git.index.write()
 
-    def pathto(self, f, cwd=None):
+    def pathto(self, f: bytes, cwd: Optional[bytes] = None) -> bytes:
         if cwd is None:
             cwd = self.getcwd()
         # TODO core dirstate does something about slashes here
@@ -290,11 +340,11 @@ class gitdirstate:
         r = util.pathto(self._root, cwd, f)
         return r
 
-    def matches(self, match):
+    def matches(self, match: MatcherT) -> Iterable[bytes]:
         for x in self.git.index:
             p = pycompat.fsencode(x.path)
             if match(p):
-                yield p
+                yield p  # TODO: return list instead of yielding?
 
     def set_clean(self, f, parentfiledata):
         """Mark a file normal and clean."""
@@ -306,7 +356,14 @@ class gitdirstate:
         # TODO: for now we just let libgit2 re-stat the file. We can
         # clearly do better.
 
-    def walk(self, match, subrepos, unknown, ignored, full=True):
+    def walk(
+        self,
+        match: MatcherT,
+        subrepos: Any,
+        unknown: bool,
+        ignored: bool,
+        full: bool = True,
+    ) -> intdirstate.WalkReturnT:
         # TODO: we need to use .status() and not iterate the index,
         # because the index doesn't force a re-walk and so `hg add` of
         # a new file without an intervening call to status will
@@ -368,7 +425,7 @@ class gitdirstate:
         index.remove(pycompat.fsdecode(f))
         index.write()
 
-    def copied(self, path):
+    def copied(self, file: bytes) -> Optional[bytes]:
         # TODO: track copies?
         return None
 
@@ -380,16 +437,41 @@ class gitdirstate:
         # TODO
         pass
 
+    def _checkexec(self) -> bool:
+        raise NotImplementedError
+
     @contextlib.contextmanager
     def changing_parents(self, repo):
         # TODO: track this maybe?
         yield
 
-    def addparentchangecallback(self, category, callback):
+    @contextlib.contextmanager
+    def changing_files(self, repo) -> Iterator:  # TODO: typehint this
+        raise NotImplementedError
+
+    def hasdir(self, d: bytes) -> bool:
+        raise NotImplementedError
+
+    def addparentchangecallback(
+        self, category: bytes, callback: intdirstate.AddParentChangeCallbackT
+    ) -> None:
         # TODO: should this be added to the dirstate interface?
         self._plchangecallbacks[category] = callback
 
-    def setbranch(self, branch, transaction=None):
+    def setbranch(
+        self, branch: bytes, transaction: Optional[TransactionT]
+    ) -> None:
         raise error.Abort(
             b'git repos do not support branches. try using bookmarks'
         )
+
+    def verify(
+        self, m1, m2, p1: bytes, narrow_matcher: Optional[Any] = None
+    ) -> Iterator[bytes]:
+        raise NotImplementedError
+
+    def running_status(self, repo):
+        raise NotImplementedError
+
+    def refresh(self):
+        pass

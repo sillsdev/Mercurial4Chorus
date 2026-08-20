@@ -1,0 +1,28 @@
+FROM rockylinux/rockylinux:8
+
+RUN groupadd -g %GID% build && \
+    useradd -u %UID% -g %GID% -s /bin/bash -d /build -m build
+
+RUN yum install -y \
+	bzip2-devel \
+	gcc \
+	gettext \
+	libffi-devel \
+	make \
+	ncurses-devel \
+	openssl-devel \
+	python3-devel \
+	python3-docutils \
+	readline-devel \
+	rpm-build \
+	sqlite-devel \
+	zlib-devel
+
+# For creating repo meta data
+RUN yum install -y createrepo
+
+# For rust extensions
+RUN yum install -y cargo
+
+# avoid incorrect docker image permissions on /tmp preventing writes by non-root users
+RUN chmod 1777 /tmp

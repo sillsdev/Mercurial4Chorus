@@ -8,25 +8,25 @@
 This contains aliases to hide python version-specific details from the core.
 """
 
+from __future__ import annotations
 
 import builtins
-import codecs
-import concurrent.futures as futures
-import functools
+import codecs  # noqa: F401 (ignore imported but not used)
+import concurrent.futures as futures  # noqa: F401 (ignore imported but not used)
 import getopt
-import http.client as httplib
-import http.cookiejar as cookielib
+import http.client as httplib  # noqa: F401 (ignore imported but not used)
+import http.cookiejar as cookielib  # noqa: F401 (ignore imported but not used)
 import inspect
-import io
+import io  # noqa: F401 (ignore imported but not used)
 import json
 import os
-import queue
+import queue  # noqa: F401 (ignore imported but not used)
 import shlex
-import socketserver
+import socketserver  # noqa: F401 (ignore imported but not used)
 import struct
 import sys
 import tempfile
-import xmlrpc.client as xmlrpclib
+import xmlrpc.client as xmlrpclib  # noqa: F401 (ignore imported but not used)
 
 from typing import (
     Any,
@@ -203,6 +203,13 @@ class bytestr(bytes):
     >>> bytestr(bytesable())
     'bytes'
 
+    ...unless the argument is the bytes *type* itself: it gets a
+    __bytes__() method in Python 3.11, which cannot be used as in an instance
+    of bytes:
+
+    >>> bytestr(bytes)
+    "<class 'bytes'>"
+
     There's no implicit conversion from non-ascii str as its encoding is
     unknown:
 
@@ -252,10 +259,9 @@ class bytestr(bytes):
     def __new__(cls: Type[_Tbytestr], s: object = b'') -> _Tbytestr:
         if isinstance(s, bytestr):
             return s
-        if not isinstance(
-            s, (bytes, bytearray)
-        ) and not builtins.hasattr(  # hasattr-py3-only
-            s, u'__bytes__'
+        if not isinstance(s, (bytes, bytearray)) and (
+            isinstance(s, type)
+            or not builtins.hasattr(s, '__bytes__')  # hasattr-py3-only
         ):
             s = str(s).encode('ascii')
         return bytes.__new__(cls, s)
@@ -343,28 +349,54 @@ def raisewithtb(exc: BaseException, tb) -> NoReturn:
     raise exc.with_traceback(tb)
 
 
+# Copied over from the 3.13 Python stdlib `inspect.cleandoc`, with a couple
+# of removals explained inline.
+# It differs slightly from the 3.8+ version, so it's better to use the same
+# version to remove any potential for variation.
+def cleandoc(doc):
+    """Clean up indentation from docstrings.
+
+    Any whitespace that can be uniformly removed from the second line
+    onwards is removed."""
+    lines = doc.expandtabs().split('\n')
+
+    # Find minimum indentation of any non-blank lines after first line.
+    margin = sys.maxsize
+    for line in lines[1:]:
+        content = len(line.lstrip(' '))
+        if content:
+            indent = len(line) - content
+            margin = min(margin, indent)
+    # Remove indentation.
+    if lines:
+        lines[0] = lines[0].lstrip(' ')
+    if margin < sys.maxsize:
+        for i in range(1, len(lines)):
+            lines[i] = lines[i][margin:]
+    # Here the upstream *Python* version does newline trimming, but it looks
+    # like the compiler (written in C) does not, so go with what the compiler
+    # does.
+    return '\n'.join(lines)
+
+
 def getdoc(obj: object) -> Optional[bytes]:
     """Get docstring as bytes; may be None so gettext() won't confuse it
     with _('')"""
     doc = builtins.getattr(obj, '__doc__', None)
     if doc is None:
         return doc
+    if sys.version_info < (3, 13):
+        # Python 3.13+ "cleans up" the docstring at compile time, let's
+        # normalize this behavior for previous versions
+        doc = cleandoc(doc)
     return sysbytes(doc)
 
 
-def _wrapattrfunc(f):
-    @functools.wraps(f)
-    def w(object, name, *args):
-        return f(object, sysstr(name), *args)
-
-    return w
-
-
 # these wrappers are automagically imported by hgloader
-delattr = _wrapattrfunc(builtins.delattr)
-getattr = _wrapattrfunc(builtins.getattr)
-hasattr = _wrapattrfunc(builtins.hasattr)
-setattr = _wrapattrfunc(builtins.setattr)
+delattr = builtins.delattr
+getattr = builtins.getattr
+hasattr = builtins.hasattr
+setattr = builtins.setattr
 xrange = builtins.range
 unicode = str
 
@@ -379,7 +411,7 @@ def open(
     return builtins.open(name, sysstr(mode), buffering, encoding)
 
 
-safehasattr = _wrapattrfunc(builtins.hasattr)
+safehasattr = builtins.hasattr
 
 
 def _getoptbwrapper(

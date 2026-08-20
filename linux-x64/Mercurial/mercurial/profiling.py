@@ -5,14 +5,15 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
 
 import contextlib
+import os
+import signal
+import subprocess
+import sys
 
 from .i18n import _
-from .pycompat import (
-    getattr,
-    open,
-)
 from . import (
     encoding,
     error,
@@ -55,7 +56,26 @@ def lsprofile(ui, fp):
             )
         )
     p = lsprof.Profiler()
-    p.enable(subcalls=True)
+    try:
+        p.enable(subcalls=True)
+    except ValueError as exc:
+        if str(exc) != "Another profiling tool is already active":
+            raise
+        if not hasattr(sys, "monitoring"):
+            raise
+        # python >=3.12 prevent more than one profiler to run at the same
+        # time, tries to improve the report to help the user understand
+        # what is going on.
+        other_tool_name = sys.monitoring.get_tool(sys.monitoring.PROFILER_ID)
+        if other_tool_name == "cProfile":
+            msg = b'cannot recursively call `lsprof`'
+            raise error.Abort(msg) from None
+        else:
+            tool = b'<unknown>'
+            if other_tool_name:
+                tool = encoding.strtolocal(other_tool_name)
+            m = b'failed to start "lsprofile"; another profiler already running: %s'
+            raise error.Abort(_(m) % tool) from None
     try:
         yield
     finally:
@@ -71,6 +91,7 @@ def lsprofile(ui, fp):
             stats = lsprof.Stats(p.getstats())
             stats.sort(pycompat.sysstr(field))
             stats.pprint(limit=limit, file=fp, climit=climit)
+        fp.flush()
 
 
 @contextlib.contextmanager
@@ -98,14 +119,15 @@ def flameprofile(ui, fp):
     finally:
         thread.stop()
         thread.join()
-        print(
-            b'Collected %d stack frames (%d unique) in %2.2f seconds.'
-            % (
+        m = b'Collected %d stack frames (%d unique) in %2.2f seconds.'
+        m %= (
+            (
                 util.timer() - start_time,
                 thread.num_frames(),
                 thread.num_frames(unique=True),
-            )
+            ),
         )
+        print(m, flush=True)
 
 
 @contextlib.contextmanager
@@ -171,6 +193,51 @@ def statprofile(ui, fp):
             kwargs['showtime'] = showtime
 
         statprof.display(fp, data=data, format=displayformat, **kwargs)
+        fp.flush()
+
+
+@contextlib.contextmanager
+def pyspy_profile(ui, fp):
+    exe = ui.config(b'profiling', b'py-spy.exe')
+
+    freq = ui.configint(b'profiling', b'py-spy.freq')
+
+    format = ui.config(b'profiling', b'py-spy.format')
+
+    fd = fp.fileno()
+
+    output_path = "/dev/fd/%d" % (fd)
+
+    my_pid = os.getpid()
+
+    cmd = [
+        exe,
+        "record",
+        "--pid",
+        str(my_pid),
+        "--native",
+        "--rate",
+        str(freq),
+        "--output",
+        output_path,
+    ]
+
+    if format:
+        cmd.extend(["--format", format])
+
+    proc = subprocess.Popen(
+        cmd,
+        pass_fds={fd},
+        stdout=subprocess.PIPE,
+    )
+
+    _ = proc.stdout.readline()
+
+    try:
+        yield
+    finally:
+        os.kill(proc.pid, signal.SIGINT)
+        proc.communicate()
 
 
 class profile:
@@ -212,7 +279,7 @@ class profile:
         proffn = None
         if profiler is None:
             profiler = self._ui.config(b'profiling', b'type')
-        if profiler not in (b'ls', b'stat', b'flame'):
+        if profiler not in (b'ls', b'stat', b'flame', b'py-spy'):
             # try load profiler from extension with the same name
             proffn = _loadprofiler(self._ui, profiler)
             if proffn is None:
@@ -228,7 +295,7 @@ class profile:
                 self._fp = util.stringio()
             elif self._output:
                 path = util.expandpath(self._output)
-                self._fp = open(path, b'wb')
+                self._fp = open(path, 'wb')
             elif pycompat.iswindows:
                 # parse escape sequence by win32print()
                 class uifp:
@@ -255,6 +322,8 @@ class profile:
                 proffn = lsprofile
             elif profiler == b'flame':
                 proffn = flameprofile
+            elif profiler == b'py-spy':
+                proffn = pyspy_profile
             else:
                 proffn = statprofile
 
@@ -272,7 +341,10 @@ class profile:
                 exception_type, exception_value, traceback
             )
             if self._output == b'blackbox':
-                val = b'Profile:\n%s' % self._fp.getvalue()
+                fp = self._fp
+                # Help pytype: blackbox output uses io.BytesIO instead of a file
+                assert isinstance(fp, util.stringio)
+                val = b'Profile:\n%s' % fp.getvalue()
                 # ui.log treats the input as a format string,
                 # so we need to escape any % signs.
                 val = val.replace(b'%', b'%%')

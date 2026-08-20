@@ -1,0 +1,55 @@
+#!/bin/bash -e
+
+BUILDDIR=$(dirname $0)
+export ROOTDIR=$(cd $BUILDDIR/../..; pwd)
+
+PLATFORM="$1"
+shift # extra params are passed to buildrpm
+
+DOCKERFILE="$PLATFORM"
+OS_RELEASE="${PLATFORM//[a-z]/}"
+case "$PLATFORM" in
+fedora*)
+    DOCKERFILE="${PLATFORM//[0-9]/}.template"
+    ;;
+esac
+
+DOCKER=$($BUILDDIR/hg-docker docker-path)
+
+CONTAINER=hg-docker-$PLATFORM
+
+DOCKERUID=$(id -u)
+DOCKERGID=$(id -g)
+
+$BUILDDIR/hg-docker build \
+    --build-arg UID=$DOCKERUID \
+    --build-arg GID=$DOCKERGID \
+    --build-arg OS_RELEASE=${OS_RELEASE:-latest} \
+    $BUILDDIR/docker/$DOCKERFILE $CONTAINER
+
+RPMBUILDDIR=$ROOTDIR/packages/$PLATFORM
+mkdir -p $RPMBUILDDIR
+$ROOTDIR/contrib/packaging/buildrpm --rpmbuilddir $RPMBUILDDIR --prepare $*
+
+DSHARED=/mnt/shared
+DBUILDUSER=build
+
+$DOCKER run -e http_proxy -e https_proxy -u $DBUILDUSER --rm -v $RPMBUILDDIR:$DSHARED $CONTAINER \
+    rpmbuild --define "_topdir $DSHARED" -ba $DSHARED/SPECS/mercurial.spec --clean
+
+$DOCKER run -e http_proxy -e https_proxy -u $DBUILDUSER --rm -v $RPMBUILDDIR:$DSHARED $CONTAINER \
+    createrepo $DSHARED
+
+cat << EOF > $RPMBUILDDIR/mercurial.repo
+# Place this file in /etc/yum.repos.d/mercurial.repo
+[mercurial]
+name=Mercurial packages for $PLATFORM
+# baseurl=file://$RPMBUILDDIR/
+baseurl=http://hg.example.com/build/$PLATFORM/
+skip_if_unavailable=True
+gpgcheck=0
+enabled=1
+EOF
+
+echo
+echo "Build complete - results can be found in $RPMBUILDDIR"

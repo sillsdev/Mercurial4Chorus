@@ -36,4 +36,7 @@ the default, unless the extension is enabled for backward compatibility.
 # extensions which SHIP WITH MERCURIAL. Non-mainline extensions should
 # be specifying the version(s) of Mercurial they are tested with, or
 # leave the attribute unspecified.
+
+from __future__ import annotations
+
 testedwith = b'ships-with-hg-core'

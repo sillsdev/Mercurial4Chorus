@@ -1,0 +1,10 @@
+# Declare requirements for generating the compiled (frozen)
+# set of requirements in ./requirements.txt.
+
+docutils
+jinja2
+
+# Keep these in sync with pyproject.toml
+setuptools >= 64
+setuptools-scm >= 8.1.0
+wheel

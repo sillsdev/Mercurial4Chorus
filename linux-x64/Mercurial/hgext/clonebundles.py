@@ -308,6 +308,7 @@ the `$HGCB_BUNDLE_URL` environment variable.
 If the file was already deleted, the command must still succeed.
 """
 
+from __future__ import annotations
 
 import os
 import weakref
@@ -349,7 +350,7 @@ def capabilities(orig, repo, proto):
 
 
 def extsetup(ui):
-    extensions.wrapfunction(wireprotov1server, b'_capabilities', capabilities)
+    extensions.wrapfunction(wireprotov1server, '_capabilities', capabilities)
 
 
 # logic for bundle auto-generation
@@ -389,7 +390,7 @@ BUNDLE_MASK = (
 AUTO_GEN_FILE = b'clonebundles.auto-gen'
 
 
-class BundleBase(object):
+class BundleBase:
     """represents the core of properties that matters for us in a bundle
 
     :bundle_type: the bundlespec (see hg help bundlespec)
@@ -441,7 +442,7 @@ class RequestedBundle(BundleBase):
     def __init__(self, bundle_type, revs, tip_rev, tip_node, head_revs, op_id):
         self.head_revs = head_revs
         self.op_id = op_id
-        super(RequestedBundle, self).__init__(
+        super().__init__(
             bundle_type,
             revs,
             tip_rev,
@@ -511,9 +512,7 @@ class GeneratingBundle(BundleBase):
         self.hostname = hostname
         self.pid = pid
         self.filepath = filepath
-        super(GeneratingBundle, self).__init__(
-            bundle_type, revs, tip_rev, tip_node
-        )
+        super().__init__(bundle_type, revs, tip_rev, tip_node)
 
     @classmethod
     def from_line(cls, line):
@@ -553,7 +552,7 @@ class GeneratingBundle(BundleBase):
         return templ % data
 
     def __eq__(self, other):
-        if not super(GeneratingBundle, self).__eq__(other):
+        if not super().__eq__(other):
             return False
         left = (self.hostname, self.pid, self.filepath)
         right = (other.hostname, other.pid, other.filepath)
@@ -590,9 +589,7 @@ class GeneratedBundle(BundleBase):
     ):
         self.file_url = file_url
         self.basename = basename
-        super(GeneratedBundle, self).__init__(
-            bundle_type, revs, tip_rev, tip_node
-        )
+        super().__init__(bundle_type, revs, tip_rev, tip_node)
 
     @classmethod
     def from_line(cls, line):
@@ -633,7 +630,7 @@ class GeneratedBundle(BundleBase):
         return templ % (self.file_url, self.bundle_type)
 
     def __eq__(self, other):
-        if not super(GeneratedBundle, self).__eq__(other):
+        if not super().__eq__(other):
             return False
         return self.file_url == other.file_url
 
@@ -776,7 +773,8 @@ def upload_bundle(repo, bundle):
     inline = repo.ui.config(b'clone-bundles', b'auto-generate.serve-inline')
     basename = repo.vfs.basename(bundle.filepath)
     if inline:
-        dest_dir = repo.vfs.join(bundlecaches.BUNDLE_CACHE_DIR)
+        bundle_cache_root = repo.ui.config(b'server', b'peer-bundle-cache-root')
+        dest_dir = repo.vfs.join(bundle_cache_root)
         repo.vfs.makedirs(dest_dir)
         dest = repo.vfs.join(dest_dir, basename)
         util.copyfiles(bundle.filepath, dest, hardlink=True)
@@ -785,9 +783,8 @@ def upload_bundle(repo, bundle):
     else:
         cmd = repo.ui.config(b'clone-bundles', b'upload-command')
         url = repo.ui.config(b'clone-bundles', b'url-template')
-        filepath = procutil.shellquote(bundle.filepath)
         variables = {
-            b'HGCB_BUNDLE_PATH': filepath,
+            b'HGCB_BUNDLE_PATH': bundle.filepath,
             b'HGCB_BUNDLE_BASENAME': basename,
         }
         env = procutil.shellenviron(environ=variables)
@@ -819,10 +816,8 @@ def delete_bundle(repo, bundle):
         repo.ui.debug(msg)
 
     if inline:
-        inline_path = repo.vfs.join(
-            bundlecaches.BUNDLE_CACHE_DIR,
-            bundle.basename,
-        )
+        bundle_cache_root = repo.ui.config(b'server', b'peer-bundle-cache-root')
+        inline_path = repo.vfs.join(bundle_cache_root, bundle.basename)
         util.tryunlink(inline_path)
     else:
         cmd = repo.ui.config(b'clone-bundles', b'delete-command')
@@ -964,7 +959,7 @@ def reposetup(ui, repo):
 
     class autobundlesrepo(repo.__class__):
         def transaction(self, *args, **kwargs):
-            tr = super(autobundlesrepo, self).transaction(*args, **kwargs)
+            tr = super().transaction(*args, **kwargs)
             enabled = repo.ui.configbool(
                 b'clone-bundles',
                 b'auto-generate.on-change',
@@ -987,7 +982,7 @@ def reposetup(ui, repo):
         @localrepo.unfilteredmethod
         def clonebundles_lock(self, wait=True):
             '''Lock the repository file related to clone bundles'''
-            if not util.safehasattr(self, '_cb_lock_ref'):
+            if not hasattr(self, '_cb_lock_ref'):
                 self._cb_lock_ref = None
             l = self._currentlock(self._cb_lock_ref)
             if l is not None:
@@ -1034,8 +1029,10 @@ def cmd_admin_clone_bundles_refresh(
     details about how to configure this feature.
     """
     debug = repo.ui.configbool(b'devel', b'debug.clonebundles')
+    op_id = repo.ui.config(b'devel', b'clonebundles.override-operation-id')
     bundles = read_auto_gen(repo)
-    op_id = b"%d_acbr" % os.getpid()
+    if op_id is None:
+        op_id = b"%d_acbr" % os.getpid()
     create, delete = auto_bundle_needed_actions(repo, bundles, op_id)
 
     # if some bundles are scheduled for creation in the background, they will

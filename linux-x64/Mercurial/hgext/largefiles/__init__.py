@@ -105,6 +105,8 @@ explicitly do so with the --large flag passed to the :hg:`add`
 command.
 '''
 
+from __future__ import annotations
+
 from mercurial import (
     cmdutil,
     configitems,
@@ -112,6 +114,7 @@ from mercurial import (
     exthelper,
     hg,
     localrepo,
+    merge,
     wireprotov1server,
 )
 
@@ -163,6 +166,7 @@ def featuresetup(ui, supported):
 
 @eh.uisetup
 def _uisetup(ui):
+    merge.MAYBE_USE_RUST_UPDATE = False
     localrepo.featuresetupfuncs.add(featuresetup)
     hg.wirepeersetupfuncs.append(proto.wirereposetup)
 
@@ -184,7 +188,7 @@ def _uisetup(ui):
     )
 
     extensions.wrapfunction(
-        wireprotov1server.commands[b'heads'], b'func', proto.heads
+        wireprotov1server.commands[b'heads'], 'func', proto.heads
     )
     # TODO also wrap wireproto.commandsv2 once heads is implemented there.
 
@@ -193,7 +197,7 @@ def _uisetup(ui):
         if name == b'rebase':
             # TODO: teach exthelper to handle this
             extensions.wrapfunction(
-                module, b'rebase', overrides.overriderebasecmd
+                module, 'rebase', overrides.overriderebasecmd
             )
 
 

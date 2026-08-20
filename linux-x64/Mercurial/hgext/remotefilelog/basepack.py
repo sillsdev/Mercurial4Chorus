@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import collections
 import errno
 import mmap
@@ -6,10 +8,6 @@ import struct
 import time
 
 from mercurial.i18n import _
-from mercurial.pycompat import (
-    getattr,
-    open,
-)
 from mercurial.node import hex
 from mercurial import (
     policy,
@@ -46,7 +44,7 @@ LARGEFANOUTPREFIX = 2
 # bisect) with (8 step fanout scan + 1 step bisect)
 # 5 step bisect = log(2^16 / 8 / 255)  # fanout
 # 10 step fanout scan = 2^16 / (2^16 / 8)  # fanout space divided by entries
-SMALLFANOUTCUTOFF = 2 ** 16 // 8
+SMALLFANOUTCUTOFF = 2**16 // 8
 
 # The amount of time to wait between checking for new packs. This prevents an
 # exception when data is moved to a new pack after the process has already
@@ -142,8 +140,8 @@ class basepackstore:
         packsuffixlen = len(self.PACKSUFFIX)
 
         ids = set()
-        sizes = collections.defaultdict(lambda: 0)
-        mtimes = collections.defaultdict(lambda: [])
+        sizes = collections.defaultdict(int)
+        mtimes = collections.defaultdict(list)
         try:
             for filename, type, stat in osutil.listdir(self.path, stat=True):
                 id = None
@@ -276,7 +274,7 @@ class versionmixin:
 class basepack(versionmixin):
     # The maximum amount we should read via mmap before remmaping so the old
     # pages can be released (100MB)
-    MAXPAGEDIN = 100 * 1024 ** 2
+    MAXPAGEDIN = 100 * 1024**2
 
     SUPPORTED_VERSIONS = [2]
 
@@ -333,12 +331,12 @@ class basepack(versionmixin):
             self._data.close()
 
         # TODO: use an opener/vfs to access these paths
-        with open(self.indexpath, b'rb') as indexfp:
+        with open(self.indexpath, 'rb') as indexfp:
             # memory-map the file, size 0 means whole file
             self._index = mmap.mmap(
                 indexfp.fileno(), 0, access=mmap.ACCESS_READ
             )
-        with open(self.packpath, b'rb') as datafp:
+        with open(self.packpath, 'rb') as datafp:
             self._data = mmap.mmap(datafp.fileno(), 0, access=mmap.ACCESS_READ)
 
         self._pagedin = 0
@@ -502,7 +500,7 @@ class mutablebasepack(versionmixin):
         self.idxfp.write(rawindex)
         self.idxfp.close()
 
-    def createindex(self, nodelocations):
+    def createindex(self, nodelocations, indexoffset):
         raise NotImplementedError()
 
     def _writeheader(self, indexparams):

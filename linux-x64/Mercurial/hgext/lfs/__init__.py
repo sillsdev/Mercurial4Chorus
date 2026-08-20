@@ -120,6 +120,7 @@ Configs::
     usercache = /path/to/global/cache
 """
 
+from __future__ import annotations
 
 import sys
 
@@ -137,6 +138,7 @@ from mercurial import (
     filesetlang,
     localrepo,
     logcmdutil,
+    merge,
     minifileset,
     pycompat,
     revlog,
@@ -233,6 +235,7 @@ def featuresetup(ui, supported):
 
 @eh.uisetup
 def _uisetup(ui):
+    merge.MAYBE_USE_RUST_UPDATE = False
     localrepo.featuresetupfuncs.add(featuresetup)
 
 
@@ -249,7 +252,7 @@ def _reposetup(ui, repo):
         @localrepo.unfilteredmethod
         def commitctx(self, ctx, error=False, origctx=None):
             repo.svfs.options[b'lfstrack'] = _trackedmatcher(self)
-            return super(lfsrepo, self).commitctx(ctx, error, origctx=origctx)
+            return super().commitctx(ctx, error, origctx=origctx)
 
     repo.__class__ = lfsrepo
 
@@ -342,7 +345,7 @@ def wrapfilelog(filelog):
     wrapfunction(filelog, 'size', wrapper.filelogsize)
 
 
-@eh.wrapfunction(localrepo, b'resolverevlogstorevfsoptions')
+@eh.wrapfunction(localrepo, 'resolverevlogstorevfsoptions')
 def _resolverevlogstorevfsoptions(orig, ui, requirements, features):
     opts = orig(ui, requirements, features)
     for name, module in extensions.extensions(ui):

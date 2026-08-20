@@ -25,6 +25,7 @@ The following config options can influence operation.
    performed.
 """
 
+from __future__ import annotations
 
 from mercurial.i18n import _
 from mercurial.node import nullrev
@@ -513,7 +514,7 @@ def _updatedocstring():
     entries = []
     for key in sorted(showview._table.keys()):
         entries.append(
-            r'    %s   %s'
+            r'%s   %s'
             % (
                 pycompat.sysstr(key.ljust(longest)),
                 showview._table[key]._origdoc,
@@ -521,7 +522,7 @@ def _updatedocstring():
         )
 
     cmdtable[b'show'][0].__doc__ = pycompat.sysstr(b'%s\n\n%s\n    ') % (
-        cmdtable[b'show'][0].__doc__.rstrip(),
+        pycompat.cleandoc(cmdtable[b'show'][0].__doc__),
         pycompat.sysstr(b'\n\n').join(entries),
     )
 

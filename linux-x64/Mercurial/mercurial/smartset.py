@@ -5,8 +5,8 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
 
-from .pycompat import getattr
 from . import (
     encoding,
     error,
@@ -137,7 +137,7 @@ class abstractsmartset:
 
         This is part of the mandatory API for smartset."""
         # builtin cannot be cached. but do not needs to
-        if cache and util.safehasattr(condition, '__code__'):
+        if cache and hasattr(condition, '__code__'):
             condition = util.cachefunc(condition)
         return filteredset(self, condition, condrepr)
 
@@ -355,14 +355,14 @@ class baseset(abstractsmartset):
             )
             s._ascending = self._ascending
         else:
-            s = getattr(super(baseset, self), op)(other)
+            s = getattr(super(), op)(other)
         return s
 
     def __and__(self, other):
-        return self._fastsetop(other, b'__and__')
+        return self._fastsetop(other, '__and__')
 
     def __sub__(self, other):
-        return self._fastsetop(other, b'__sub__')
+        return self._fastsetop(other, '__sub__')
 
     def _slice(self, start, stop):
         # creating new list should be generally cheaper than iterating items
@@ -544,8 +544,7 @@ def _iterordered(ascending, iter1, iter2):
         elif val2 is not None:
             # might have been equality and both are empty
             yield val2
-        for val in it:
-            yield val
+        yield from it
 
 
 class addset(abstractsmartset):
@@ -786,7 +785,7 @@ class generatorset(abstractsmartset):
         else:
             typ = _generatorsetdesc
 
-        return super(generatorset, cls).__new__(typ)
+        return super().__new__(typ)
 
     def __init__(self, gen, iterasc=None):
         """
@@ -1093,7 +1092,7 @@ class _spanset(abstractsmartset):
     def _slice(self, start, stop):
         if self._hiddenrevs:
             # unoptimized since all hidden revisions in range has to be scanned
-            return super(_spanset, self)._slice(start, stop)
+            return super()._slice(start, stop)
         if self._ascending:
             x = min(self._start + start, self._end)
             y = min(self._start + stop, self._end)
@@ -1116,9 +1115,7 @@ class fullreposet(_spanset):
     """
 
     def __init__(self, repo):
-        super(fullreposet, self).__init__(
-            0, len(repo), True, repo.changelog.filteredrevs
-        )
+        super().__init__(0, len(repo), True, repo.changelog.filteredrevs)
 
     def __and__(self, other):
         """As self contains the whole repo, all of the other set should also be
@@ -1127,13 +1124,16 @@ class fullreposet(_spanset):
         This boldly assumes the other contains valid revs only.
         """
         # other not a smartset, make is so
-        if not util.safehasattr(other, 'isascending'):
+        if not hasattr(other, 'isascending'):
             # filter out hidden revision
             # (this boldly assumes all smartset are pure)
             #
             # `other` was used with "&", let's assume this is a set like
             # object.
-            other = baseset(other - self._hiddenrevs)
+            other = baseset(other)
+
+        if self._hiddenrevs:
+            other = other - self._hiddenrevs
 
         other.sort(reverse=self.isdescending())
         return other

@@ -62,6 +62,7 @@ This extension used to provide a strip command. This command now lives
 in the strip extension.
 '''
 
+from __future__ import annotations
 
 import os
 import re
@@ -73,11 +74,6 @@ from mercurial.node import (
     hex,
     nullrev,
     short,
-)
-from mercurial.pycompat import (
-    delattr,
-    getattr,
-    open,
 )
 from mercurial import (
     cmdutil,
@@ -323,57 +319,61 @@ class patchheader:
         nodeid = None
         diffstart = 0
 
-        for line in open(pf, b'rb'):
-            line = line.rstrip()
-            if line.startswith(b'diff --git') or (
-                diffstart and line.startswith(b'+++ ')
-            ):
-                diffstart = 2
-                break
-            diffstart = 0  # reset
-            if line.startswith(b"--- "):
-                diffstart = 1
-                continue
-            elif format == b"hgpatch":
-                # parse values when importing the result of an hg export
-                if line.startswith(b"# User "):
-                    user = line[7:]
-                elif line.startswith(b"# Date "):
-                    date = line[7:]
-                elif line.startswith(b"# Parent "):
-                    parent = line[9:].lstrip()  # handle double trailing space
-                elif line.startswith(b"# Branch "):
-                    branch = line[9:]
-                elif line.startswith(b"# Node ID "):
-                    nodeid = line[10:]
-                elif not line.startswith(b"# ") and line:
+        with open(pf, 'rb') as fp:
+            for line in fp:
+                line = line.rstrip()
+                if line.startswith(b'diff --git') or (
+                    diffstart and line.startswith(b'+++ ')
+                ):
+                    diffstart = 2
+                    break
+                diffstart = 0  # reset
+                if line.startswith(b"--- "):
+                    diffstart = 1
+                    continue
+                elif format == b"hgpatch":
+                    # parse values when importing the result of an hg export
+                    if line.startswith(b"# User "):
+                        user = line[7:]
+                    elif line.startswith(b"# Date "):
+                        date = line[7:]
+                    elif line.startswith(b"# Parent "):
+                        parent = line[
+                            9:
+                        ].lstrip()  # handle double trailing space
+                    elif line.startswith(b"# Branch "):
+                        branch = line[9:]
+                    elif line.startswith(b"# Node ID "):
+                        nodeid = line[10:]
+                    elif not line.startswith(b"# ") and line:
+                        message.append(line)
+                        format = None
+                elif line == b'# HG changeset patch':
+                    message = []
+                    format = b"hgpatch"
+                elif format != b"tagdone" and (
+                    line.startswith(b"Subject: ")
+                    or line.startswith(b"subject: ")
+                ):
+                    subject = line[9:]
+                    format = b"tag"
+                elif format != b"tagdone" and (
+                    line.startswith(b"From: ") or line.startswith(b"from: ")
+                ):
+                    user = line[6:]
+                    format = b"tag"
+                elif format != b"tagdone" and (
+                    line.startswith(b"Date: ") or line.startswith(b"date: ")
+                ):
+                    date = line[6:]
+                    format = b"tag"
+                elif format == b"tag" and line == b"":
+                    # when looking for tags (subject: from: etc) they
+                    # end once you find a blank line in the source
+                    format = b"tagdone"
+                elif message or line:
                     message.append(line)
-                    format = None
-            elif line == b'# HG changeset patch':
-                message = []
-                format = b"hgpatch"
-            elif format != b"tagdone" and (
-                line.startswith(b"Subject: ") or line.startswith(b"subject: ")
-            ):
-                subject = line[9:]
-                format = b"tag"
-            elif format != b"tagdone" and (
-                line.startswith(b"From: ") or line.startswith(b"from: ")
-            ):
-                user = line[6:]
-                format = b"tag"
-            elif format != b"tagdone" and (
-                line.startswith(b"Date: ") or line.startswith(b"date: ")
-            ):
-                date = line[6:]
-                format = b"tag"
-            elif format == b"tag" and line == b"":
-                # when looking for tags (subject: from: etc) they
-                # end once you find a blank line in the source
-                format = b"tagdone"
-            elif message or line:
-                message.append(line)
-            comments.append(line)
+                comments.append(line)
 
         eatdiff(message)
         eatdiff(comments)
@@ -504,7 +504,7 @@ class queue:
                 curpath = os.path.join(path, b'patches')
             else:
                 curpath = os.path.join(path, b'patches-' + cur)
-        except IOError:
+        except OSError:
             curpath = os.path.join(path, b'patches')
         self.path = patchdir or curpath
         self.opener = vfsmod.vfs(self.path)
@@ -1048,7 +1048,7 @@ class queue:
 
             try:
                 ph = patchheader(self.join(patchname), self.plainmode)
-            except IOError:
+            except OSError:
                 self.ui.warn(_(b"unable to read %s\n") % patchname)
                 err = 1
                 break
@@ -1257,7 +1257,7 @@ class queue:
             mar = changes[:3]
         else:
             mar = (changes.modified, changes.added, changes.removed)
-        if any((b'.hgsubstate' in files for files in mar)):
+        if any(b'.hgsubstate' in files for files in mar):
             return  # already listed up
         # not yet listed up
         if substatestate.added or not substatestate.any_tracked:
@@ -1394,7 +1394,7 @@ class queue:
             try:
                 # if patch file write fails, abort early
                 p = self.opener(patchfn, b"w")
-            except IOError as e:
+            except OSError as e:
                 raise error.Abort(
                     _(b'cannot write patch "%s": %s')
                     % (patchfn, encoding.strtolocal(e.strerror))
@@ -2533,7 +2533,7 @@ class queue:
                         fp = hg.openpath(self.ui, filename)
                         text = fp.read()
                         fp.close()
-                except (OSError, IOError):
+                except OSError:
                     raise error.Abort(_(b"unable to read file %s") % filename)
                 patchf = self.opener(patchname, b"w")
                 patchf.write(text)
@@ -3927,7 +3927,7 @@ def qqueue(ui, repo, name=None, **opts):
         try:
             fh = repo.vfs(_allqueues, b'r')
             fh.close()
-        except IOError:
+        except OSError:
             return True
 
         return False
@@ -3941,7 +3941,7 @@ def qqueue(ui, repo, name=None, **opts):
             fh.close()
             if current not in queues:
                 queues.append(current)
-        except IOError:
+        except OSError:
             queues = [_defaultqueue]
 
         return sorted(queues)
@@ -4075,7 +4075,7 @@ def mqphasedefaults(repo, roots):
         else:
             mqphase = phases.draft
         qbase = repo[repo.mq.applied[0].node]
-        roots[mqphase].add(qbase.node())
+        roots[mqphase].add(qbase.rev())
     return roots
 
 
@@ -4086,7 +4086,7 @@ def reposetup(ui, repo):
             return queue(self.ui, self.baseui, self.path)
 
         def invalidateall(self):
-            super(mqrepo, self).invalidateall()
+            super().invalidateall()
             if localrepo.hasunfilteredcache(self, 'mq'):
                 # recreate mq in case queue path was changed
                 delattr(self.unfiltered(), 'mq')
@@ -4114,9 +4114,7 @@ def reposetup(ui, repo):
                 _(b'cannot commit over an applied mq patch'), force
             )
 
-            return super(mqrepo, self).commit(
-                text, user, date, match, force, editor, extra
-            )
+            return super().commit(text, user, date, match, force, editor, extra)
 
         def checkpush(self, pushop):
             if self.mq.applied and self.mq.checkapplied and not pushop.force:
@@ -4136,11 +4134,11 @@ def reposetup(ui, repo):
                     if self[node].phase() < phases.secret:
                         raise error.Abort(_(b'source has mq patches applied'))
                 # no non-secret patches pushed
-            super(mqrepo, self).checkpush(pushop)
+            super().checkpush(pushop)
 
         def _findtags(self):
             '''augment tags from base class with patch tags'''
-            result = super(mqrepo, self)._findtags()
+            result = super()._findtags()
 
             q = self.mq
             if not q.applied:
@@ -4186,7 +4184,7 @@ def reposetup(ui, repo):
 
 
 def mqimport(orig, ui, repo, *args, **kwargs):
-    if util.safehasattr(repo, b'abortifwdirpatched') and not kwargs.get(
+    if hasattr(repo, 'abortifwdirpatched') and not kwargs.get(
         'no_commit', False
     ):
         repo.abortifwdirpatched(

@@ -7,6 +7,7 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
 
 import errno
 
@@ -51,11 +52,14 @@ class httprangereader:
     def seek(self, pos):
         self.pos = pos
 
-    def read(self, bytes=None):
+    def read(self, n: int = -1):
         req = urlreq.request(pycompat.strurl(self.url))
-        end = b''
-        if bytes:
-            end = self.pos + bytes - 1
+        end = ''
+
+        if n == 0:
+            return b''
+        elif n > 0:
+            end = "%d" % (self.pos + n - 1)
         if self.pos or end:
             req.add_header('Range', 'bytes=%d-%s' % (self.pos, end))
 
@@ -68,19 +72,21 @@ class httprangereader:
             # Explicitly convert the exception to str as Py3 will try
             # convert it to local encoding and with as the HTTPResponse
             # instance doesn't support encode.
-            raise IOError(num, str(inst))
+            raise OSError(num, str(inst))
         except urlerr.urlerror as inst:
-            raise IOError(None, inst.reason)
+            raise OSError(None, inst.reason)
 
         if code == 200:
             # HTTPRangeHandler does nothing if remote does not support
             # Range headers and returns the full entity. Let's slice it.
-            if bytes:
-                data = data[self.pos : self.pos + bytes]
-            else:
+            if n > 0 and (self.pos + n) < len(data):
+                data = data[self.pos : self.pos + n]
+            elif self.pos < len(data):
                 data = data[self.pos :]
-        elif bytes:
-            data = data[:bytes]
+            else:
+                data = b''
+        elif 0 < n < len(data):
+            data = data[:n]
         self.pos += len(data)
         return data
 
@@ -134,9 +140,12 @@ def build_opener(ui, authinfo):
 
         def __call__(self, path, mode=b'r', *args, **kw):
             if mode not in (b'r', b'rb'):
-                raise IOError('Permission denied')
+                raise OSError('Permission denied')
             f = b"/".join((self.base, urlreq.quote(path)))
             return httprangereader(f, urlopener)
+
+        def _auditpath(self, path: bytes, mode: bytes) -> None:
+            raise NotImplementedError
 
         def join(self, path, *insidef):
             if path:
@@ -159,6 +168,8 @@ class statichttprepository(
     localrepo.localrepository, localrepo.revlogfilestorage
 ):
     supported = localrepo.localrepository._basesupported
+
+    manifestlog: manifest.manifestlog
 
     def __init__(self, ui, path):
         self._url = path
@@ -186,9 +197,8 @@ class statichttprepository(
 
             # check if it is a non-empty old-style repository
             try:
-                fp = self.vfs(b"00changelog.i")
-                fp.read(1)
-                fp.close()
+                with self.vfs(b"00changelog.i") as fp:
+                    fp.read(1)
             except FileNotFoundError:
                 # we do not care about empty old-style repositories here
                 msg = _(b"'%s' does not appear to be an hg repository") % path
@@ -209,6 +219,9 @@ class statichttprepository(
         self.store = localrepo.makestore(requirements, self.path, vfsclass)
         self.spath = self.store.path
         self.svfs = self.store.opener
+        # We can't use Rust because the Rust code cannot cope with the
+        # `httprangereader` (yet?)
+        self.svfs.rust_compatible = False
         self.sjoin = self.store.join
         self._filecache = {}
         self.requirements = requirements
@@ -228,7 +241,7 @@ class statichttprepository(
         self._dirstate = None
 
     def _restrictcapabilities(self, caps):
-        caps = super(statichttprepository, self)._restrictcapabilities(caps)
+        caps = super()._restrictcapabilities(caps)
         return caps.difference([b"pushkey"])
 
     def url(self):
@@ -240,18 +253,18 @@ class statichttprepository(
     def peer(self, path=None, remotehidden=False):
         return statichttppeer(self, path=path, remotehidden=remotehidden)
 
-    def wlock(self, wait=True):
+    def wlock(self, wait=True, steal_from=None):
         raise error.LockUnavailable(
             0,
-            _(b'lock not available'),
+            pycompat.sysstr(_(b'lock not available')),
             b'lock',
             _(b'cannot lock static-http repository'),
         )
 
-    def lock(self, wait=True):
+    def lock(self, wait=True, steal_from=None):
         raise error.LockUnavailable(
             0,
-            _(b'lock not available'),
+            pycompat.sysstr(_(b'lock not available')),
             b'lock',
             _(b'cannot lock static-http repository'),
         )

@@ -5,6 +5,7 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
 
 import errno
 import getopt
@@ -16,9 +17,11 @@ import signal
 import sys
 import traceback
 
+from typing import (
+    Iterable,
+)
 
 from .i18n import _
-from .pycompat import getattr
 
 from hgdemandimport import tracing
 
@@ -26,6 +29,7 @@ from . import (
     cmdutil,
     color,
     commands,
+    config as configmod,
     demandimport,
     encoding,
     error,
@@ -34,18 +38,15 @@ from . import (
     help,
     hg,
     hook,
-    localrepo,
     profiling,
     pycompat,
-    rcutil,
     registrar,
-    requirements as requirementsmod,
     scmutil,
     ui as uimod,
     util,
-    vfs,
 )
 
+from .configuration import rcutil
 from .utils import (
     procutil,
     stringutil,
@@ -86,7 +87,7 @@ class request:
         # store the parsed and canonical command
         self.canonical_command = None
 
-    def _runexithandlers(self):
+    def _runexithandlers(self) -> None:
         exc = None
         handlers = self.ui._exithandlers
         try:
@@ -107,16 +108,16 @@ class request:
 def _flushstdio(ui, err):
     status = None
     # In all cases we try to flush stdio streams.
-    if util.safehasattr(ui, 'fout'):
+    if hasattr(ui, 'fout'):
         assert ui is not None  # help pytype
         assert ui.fout is not None  # help pytype
         try:
             ui.fout.flush()
-        except IOError as e:
+        except OSError as e:
             err = e
             status = -1
 
-    if util.safehasattr(ui, 'ferr'):
+    if hasattr(ui, 'ferr'):
         assert ui is not None  # help pytype
         assert ui.ferr is not None  # help pytype
         try:
@@ -127,7 +128,7 @@ def _flushstdio(ui, err):
             ui.ferr.flush()
         # There's not much we can do about an I/O error here. So (possibly)
         # change the status code and move on.
-        except IOError:
+        except OSError:
             status = -1
 
     return status
@@ -170,7 +171,7 @@ def initstdio():
             "newline": "\n",
             "line_buffering": sys.stdout.line_buffering,
         }
-        if util.safehasattr(sys.stdout, "write_through"):
+        if hasattr(sys.stdout, "write_through"):
             # pytype: disable=attribute-error
             kwargs["write_through"] = sys.stdout.write_through
             # pytype: enable=attribute-error
@@ -183,7 +184,7 @@ def initstdio():
             "newline": "\n",
             "line_buffering": sys.stderr.line_buffering,
         }
-        if util.safehasattr(sys.stderr, "write_through"):
+        if hasattr(sys.stderr, "write_through"):
             # pytype: disable=attribute-error
             kwargs["write_through"] = sys.stderr.write_through
             # pytype: enable=attribute-error
@@ -211,13 +212,13 @@ def _silencestdio():
         try:
             fp.flush()
             continue
-        except IOError:
+        except OSError:
             pass
         # Otherwise mark it as closed to silence "Exception ignored in"
         # message emitted by the interpreter finalizer.
         try:
             fp.close()
-        except IOError:
+        except OSError:
             pass
 
 
@@ -240,7 +241,7 @@ def dispatch(req):
     return status
 
 
-def _rundispatch(req):
+def _rundispatch(req) -> int:
     with tracing.log('dispatch._rundispatch'):
         if req.ferr:
             ferr = req.ferr
@@ -301,7 +302,7 @@ def _rundispatch(req):
                 req.ui.log(
                     b'uiblocked',
                     b'ui blocked ms\n',
-                    **pycompat.strkwargs(req.ui._blockedtimes)
+                    **pycompat.strkwargs(req.ui._blockedtimes),
                 )
             return_code = ret & 255
             req.ui.log(
@@ -390,13 +391,22 @@ def _runcatch(req):
                 debugtrace = {b'pdb': pdb.set_trace}
                 debugmortem = {b'pdb': pdb.post_mortem}
 
-                # read --config before doing anything else
-                # (e.g. to change trust settings for reading .hg/hgrc)
+                # read --config-file and --config before doing anything else
+                # (e.g. to change trust settings for reading .hg/hgrc).
+
+                # cmdargs may not have been initialized here (in the case of an
+                # error), so use pycompat.sysargv instead.
+                file_cfgs = _parse_config_files(
+                    req.ui, pycompat.sysargv, req.earlyoptions[b'config_file']
+                )
                 cfgs = _parseconfig(req.ui, req.earlyoptions[b'config'])
 
                 if req.repo:
                     # copy configs that were passed on the cmdline (--config) to
                     # the repo ui
+                    for sec, name, val, source in file_cfgs:
+                        req.repo.ui.setconfig(sec, name, val, source=source)
+
                     for sec, name, val in cfgs:
                         req.repo.ui.setconfig(
                             sec, name, val, source=b'--config'
@@ -414,7 +424,7 @@ def _runcatch(req):
                     # debugging has been requested
                     with demandimport.deactivated():
                         try:
-                            debugmod = __import__(debugger)
+                            debugmod = __import__(pycompat.sysstr(debugger))
                         except ImportError:
                             pass  # Leave debugmod = pdb
 
@@ -503,7 +513,7 @@ def _callcatch(ui, func):
             if not suggested:
                 ui.warn(nocmdmsg)
                 ui.warn(_(b"(use 'hg help' for a list of commands)\n"))
-    except IOError:
+    except OSError:
         raise
     except KeyboardInterrupt:
         raise
@@ -520,7 +530,7 @@ def _callcatch(ui, func):
 def aliasargs(fn, givenargs):
     args = []
     # only care about alias 'args', ignore 'args' set by extensions.wrapfunction
-    if not util.safehasattr(fn, '_origfunc'):
+    if not hasattr(fn, '_origfunc'):
         args = getattr(fn, 'args', args)
     if args:
         cmd = b' '.join(map(procutil.shellquote, args))
@@ -708,7 +718,7 @@ class cmdalias:
         }
         if name not in adefaults:
             raise AttributeError(name)
-        if self.badalias or util.safehasattr(self, 'shell'):
+        if self.badalias or hasattr(self, 'shell'):
             return adefaults[name]
         return getattr(self.fn, name)
 
@@ -734,7 +744,7 @@ class cmdalias:
             self.name,
             self.definition,
         )
-        if util.safehasattr(self, 'shell'):
+        if hasattr(self, 'shell'):
             return self.fn(ui, *args, **opts)
         else:
             try:
@@ -825,9 +835,20 @@ def _parse(ui, args):
         cmd = None
         c = []
 
+    def global_opt_to_fancy_opt(opt_name):
+        # fancyopts() does this transform on `options`, but globalopts uses a
+        # '-', so that it is displayed in the help and accepted as input that
+        # way.
+        return opt_name.replace(b'-', b'_')
+
     # combine global options into local
     for o in commands.globalopts:
-        c.append((o[0], o[1], options[o[1]], o[3]))
+        name = global_opt_to_fancy_opt(o[1])
+
+        # The fancyopts name is needed for `options`, but the original name
+        # needs to be used in the second element here, or the parsing for the
+        # command verb fails, saying the command has no such option.
+        c.append((o[0], o[1], options[name], o[3]))
 
     try:
         args = fancyopts.fancyopts(args, c, cmdoptions, gnu=True)
@@ -836,7 +857,7 @@ def _parse(ui, args):
 
     # separate global options back out
     for o in commands.globalopts:
-        n = o[1]
+        n = global_opt_to_fancy_opt(o[1])
         options[n] = cmdoptions[n]
         del cmdoptions[n]
 
@@ -849,7 +870,7 @@ def _parseconfig(ui, config):
 
     for cfg in config:
         try:
-            name, value = [cfgelem.strip() for cfgelem in cfg.split(b'=', 1)]
+            name, value = (cfgelem.strip() for cfgelem in cfg.split(b'=', 1))
             section, name = name.split(b'.', 1)
             if not section or not name:
                 raise IndexError
@@ -863,6 +884,48 @@ def _parseconfig(ui, config):
                 )
                 % pycompat.bytestr(cfg)
             )
+
+    return configs
+
+
+def _parse_config_files(
+    ui, cmdargs: list[bytes], config_files: Iterable[bytes]
+) -> list[tuple[bytes, bytes, bytes, bytes]]:
+    """parse the --config-file options from the command line
+
+    A list of tuples containing (section, name, value, source) is returned,
+    in the order they were read.
+    """
+
+    configs: list[tuple[bytes, bytes, bytes, bytes]] = []
+
+    cfg = configmod.config()
+
+    for file in config_files:
+        try:
+            cfg.read(file)
+        except error.ConfigError as e:
+            raise error.InputError(
+                _(b'invalid --config-file content at %s') % e.location,
+                hint=e.message,
+            )
+        except FileNotFoundError:
+            hint = None
+            if b'--cwd' in cmdargs:
+                hint = _(b"this file is resolved before --cwd is processed")
+
+            raise error.InputError(
+                _(b'missing file "%s" for --config-file') % file, hint=hint
+            )
+
+    for section in cfg.sections():
+        for item in cfg.items(section):
+            name = item[0]
+            value = item[1]
+            src = cfg.source(section, name)
+
+            ui.setconfig(section, name, value, src)
+            configs.append((section, name, value, src))
 
     return configs
 
@@ -884,7 +947,13 @@ def _earlysplitopts(args):
     """Split args into a list of possible early options and remainder args"""
     shortoptions = b'R:'
     # TODO: perhaps 'debugger' should be included
-    longoptions = [b'cwd=', b'repository=', b'repo=', b'config=']
+    longoptions = [
+        b'cwd=',
+        b'repository=',
+        b'repo=',
+        b'config=',
+        b'config-file=',
+    ]
     return fancyopts.earlygetopt(
         args, shortoptions, longoptions, gnu=True, keepsep=True
     )
@@ -929,30 +998,6 @@ def runcommand(lui, repo, cmd, fullargs, ui, options, d, cmdpats, cmdoptions):
     return ret
 
 
-def _readsharedsourceconfig(ui, path):
-    """if the current repository is shared one, this tries to read
-    .hg/hgrc of shared source if we are in share-safe mode
-
-    Config read is loaded into the ui object passed
-
-    This should be called before reading .hg/hgrc or the main repo
-    as that overrides config set in shared source"""
-    try:
-        with open(os.path.join(path, b".hg", b"requires"), "rb") as fp:
-            requirements = set(fp.read().splitlines())
-            if not (
-                requirementsmod.SHARESAFE_REQUIREMENT in requirements
-                and requirementsmod.SHARED_REQUIREMENT in requirements
-            ):
-                return
-            hgvfs = vfs.vfs(os.path.join(path, b".hg"))
-            sharedvfs = localrepo._getsharedvfs(hgvfs, requirements)
-            root = sharedvfs.base
-            ui.readconfig(sharedvfs.join(b"hgrc"), root)
-    except IOError:
-        pass
-
-
 def _getlocal(ui, rpath, wd=None):
     """Return (path, local ui object) for the given target path.
 
@@ -981,18 +1026,21 @@ def _getlocal(ui, rpath, wd=None):
     else:
         lui = ui.copy()
         if rcutil.use_repo_hgrc():
-            _readsharedsourceconfig(lui, path)
-            lui.readconfig(os.path.join(path, b".hg", b"hgrc"), path)
-            lui.readconfig(os.path.join(path, b".hg", b"hgrc-not-shared"), path)
+            for __, c_type, rc_path in rcutil.repo_components(path):
+                assert c_type == b'path'
+                lui.readconfig(rc_path, root=path)
 
     if rpath:
+        # the specified path, might be defined in the [paths] section of the
+        # local repository. So we had to read the local config first even if it
+        # get overriden here.
         path_obj = urlutil.get_clone_path_obj(lui, rpath)
         path = path_obj.rawloc
         lui = ui.copy()
         if rcutil.use_repo_hgrc():
-            _readsharedsourceconfig(lui, path)
-            lui.readconfig(os.path.join(path, b".hg", b"hgrc"), path)
-            lui.readconfig(os.path.join(path, b".hg", b"hgrc-not-shared"), path)
+            for __, c_type, rc_path in rcutil.repo_components(path):
+                assert c_type == b'path'
+                lui.readconfig(rc_path, root=path)
 
     if oldcwd:
         os.chdir(oldcwd)
@@ -1024,7 +1072,7 @@ def _checkshellalias(lui, ui, args):
     cmd = aliases[0]
     fn = entry[0]
 
-    if cmd and util.safehasattr(fn, 'shell'):
+    if cmd and hasattr(fn, 'shell'):
         # shell alias shouldn't receive early options which are consumed by hg
         _earlyopts, args = _earlysplitopts(args)
         d = lambda: fn(ui, *args[1:])
@@ -1103,13 +1151,32 @@ def _dispatch(req):
             encoding.fallbackencoding = fallback
 
         fullargs = args
-        cmd, func, args, options, cmdoptions = _parse(lui, args)
+        try:
+            cmd, func, args, options, cmdoptions = _parse(lui, args)
+        except error.CommandError as e:
+            cause = e.__context__
+            if isinstance(cause, getopt.GetoptError):
+                if cause.opt and "config".startswith(cause.opt):
+                    # pycompat._getoptbwrapper() decodes bytes with latin-1
+                    opt = cause.opt.encode('latin-1')
+                    all_long = {o[1] for o in commands.globalopts}
+                    possible = [o for o in all_long if o.startswith(opt)]
+
+                    if len(possible) != 1:
+                        raise error.InputError(
+                            _(b"option --config may not be abbreviated")
+                        )
+            raise
 
         # store the canonical command name in request object for later access
         req.canonical_command = cmd
 
         if options[b"config"] != req.earlyoptions[b"config"]:
             raise error.InputError(_(b"option --config may not be abbreviated"))
+        if options[b"config_file"] != req.earlyoptions[b"config_file"]:
+            raise error.InputError(
+                _(b"option --config-file may not be abbreviated")
+            )
         if options[b"cwd"] != req.earlyoptions[b"cwd"]:
             raise error.InputError(_(b"option --cwd may not be abbreviated"))
         if options[b"repository"] != req.earlyoptions[b"repository"]:

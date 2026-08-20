@@ -5,6 +5,8 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
+
 import os
 
 from mercurial.i18n import _
@@ -69,7 +71,7 @@ class convert_git(common.converter_source, common.commandline):
         return self._gitcmd(self._run3, *args, **kwargs)
 
     def __init__(self, ui, repotype, path, revs=None):
-        super(convert_git, self).__init__(ui, repotype, path, revs=revs)
+        super().__init__(ui, repotype, path, revs=revs)
         common.commandline.__init__(self, ui, b'git')
 
         # Pass an absolute path to git to prevent from ever being interpreted
@@ -193,7 +195,7 @@ class convert_git(common.converter_source, common.commandline):
 
     def catfile(self, rev, ftype):
         if rev == sha1nodeconstants.nullhex:
-            raise IOError
+            raise OSError
         self.catfilepipe[0].write(rev + b'\n')
         self.catfilepipe[0].flush()
         info = self.catfilepipe[1].readline().split()

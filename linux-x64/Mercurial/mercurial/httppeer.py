@@ -6,16 +6,16 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
 
 import errno
 import io
 import os
-import socket
 import struct
+import typing
 
 from concurrent import futures
 from .i18n import _
-from .pycompat import getattr
 from . import (
     bundle2,
     error,
@@ -27,6 +27,11 @@ from . import (
     wireprotov1peer,
 )
 from .utils import urlutil
+
+if typing.TYPE_CHECKING:
+    from typing import (
+        Set,
+    )
 
 httplib = util.httplib
 urlerr = util.urlerr
@@ -65,7 +70,7 @@ def encodevalueinheaders(value, header, limit):
 class _multifile:
     def __init__(self, *fileobjs):
         for f in fileobjs:
-            if not util.safehasattr(f, 'length'):
+            if not hasattr(f, 'length'):
                 raise ValueError(
                     b'_multifile only supports file objects that '
                     b'have a length but this one does not:',
@@ -180,7 +185,7 @@ def makev1commandrequest(
     qs = b'?%s' % urlreq.urlencode(q)
     cu = b"%s%s" % (repobaseurl, qs)
     size = 0
-    if util.safehasattr(data, 'length'):
+    if hasattr(data, 'length'):
         size = data.length
     elif data is not None:
         size = len(data)
@@ -246,8 +251,9 @@ def sendrequest(ui, opener, req):
     Returns the response object.
     """
     dbg = ui.debug
+    line = b'devel-peer-request: %s\n'
+
     if ui.debugflag and ui.configbool(b'devel', b'debug.peer-request'):
-        line = b'devel-peer-request: %s\n'
         dbg(
             line
             % b'%s %s'
@@ -296,7 +302,7 @@ def sendrequest(ui, opener, req):
             % urlutil.hidepassword(req.get_full_url())
         )
         ui.traceback()
-        raise IOError(None, inst)
+        raise OSError(None, inst)
     finally:
         if ui.debugflag and ui.configbool(b'devel', b'debug.peer-request'):
             code = res.code if res else -1
@@ -314,7 +320,7 @@ def sendrequest(ui, opener, req):
 
 class RedirectedRepoError(error.RepoError):
     def __init__(self, msg, respurl):
-        super(RedirectedRepoError, self).__init__(msg)
+        super().__init__(msg)
         self.respurl = respurl
 
 
@@ -436,10 +442,12 @@ class httppeer(wireprotov1peer.wirepeer):
 
     # End of ipeerconnection interface.
 
-    # Begin of ipeercommands interface.
+    # Begin of ipeercapabilities interface.
 
-    def capabilities(self):
+    def capabilities(self) -> Set[bytes]:
         return self._caps
+
+    # End of ipeercapabilities interface.
 
     def _finish_inline_clone_bundle(self, stream):
         # HTTP streams must hit the end to process the last empty
@@ -447,8 +455,6 @@ class httppeer(wireprotov1peer.wirepeer):
         chunk = stream.read(1)
         if chunk:
             self._abort(error.ResponseError(_(b"unexpected response:"), chunk))
-
-    # End of ipeercommands interface.
 
     def _callstream(self, cmd, _compressible=False, **args):
         args = pycompat.byteskwargs(args)
@@ -492,6 +498,9 @@ class httppeer(wireprotov1peer.wirepeer):
             # boolean capability. They only support headerless/uncompressed
             # bundles.
             types = [b""]
+
+        type = b""
+
         for x in types:
             if x in bundle2.bundletypes:
                 type = x
@@ -512,7 +521,7 @@ class httppeer(wireprotov1peer.wirepeer):
             # like generic socket errors. They lack any values in
             # .args on Python 3 which breaks our socket.error block.
             raise
-        except socket.error as err:
+        except OSError as err:
             if err.args[0] in (errno.ECONNRESET, errno.EPIPE):
                 raise error.Abort(_(b'push failed: %s') % err.args[1])
             raise error.Abort(err.args[1])
@@ -521,10 +530,9 @@ class httppeer(wireprotov1peer.wirepeer):
             os.unlink(tempname)
 
     def _calltwowaystream(self, cmd, fp, **args):
-        filename = None
+        # dump bundle to disk
+        fd, filename = pycompat.mkstemp(prefix=b"hg-bundle-", suffix=b".hg")
         try:
-            # dump bundle to disk
-            fd, filename = pycompat.mkstemp(prefix=b"hg-bundle-", suffix=b".hg")
             with os.fdopen(fd, "wb") as fh:
                 d = fp.read(4096)
                 while d:
@@ -535,8 +543,7 @@ class httppeer(wireprotov1peer.wirepeer):
                 headers = {'Content-Type': 'application/mercurial-0.1'}
                 return self._callstream(cmd, data=fp_, headers=headers, **args)
         finally:
-            if filename is not None:
-                os.unlink(filename)
+            os.unlink(filename)
 
     def _callcompressable(self, cmd, **args):
         return self._callstream(cmd, _compressible=True, **args)
@@ -663,7 +670,8 @@ def make_peer(
         return inst
     except error.RepoError as httpexception:
         try:
-            r = statichttprepo.make_peer(ui, b"static-" + path.loc, create)
+            path = path.copy(new_raw_location=b"static-" + path.rawloc)
+            r = statichttprepo.make_peer(ui, path, create)
             ui.note(_(b'(falling back to static-http)\n'))
             return r
         except error.RepoError:

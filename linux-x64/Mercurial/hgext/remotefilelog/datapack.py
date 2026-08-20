@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import struct
 import zlib
 
@@ -30,7 +32,7 @@ class datapackstore(basepack.basepackstore):
     PACKSUFFIX = PACKSUFFIX
 
     def __init__(self, ui, path):
-        super(datapackstore, self).__init__(ui, path)
+        super().__init__(ui, path)
 
     def getpack(self, path):
         return datapack(path)
@@ -414,7 +416,7 @@ class mutabledatapack(basepack.mutablebasepack):
 
     def add(self, name, node, deltabasenode, delta, metadata=None):
         # metadata is a dict, ex. {METAKEYFLAG: flag}
-        if len(name) > 2 ** 16:
+        if len(name) > 2**16:
             raise RuntimeError(_(b"name too long %s") % name)
         if len(node) != 20:
             raise RuntimeError(_(b"node should be 20 bytes %s") % node)

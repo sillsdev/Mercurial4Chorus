@@ -5,6 +5,7 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
 
 import contextlib
 import errno
@@ -12,10 +13,10 @@ import os
 import signal
 import socket
 import time
+import typing
 import warnings
 
 from .i18n import _
-from .pycompat import getattr
 
 from . import (
     encoding,
@@ -110,11 +111,30 @@ def _delayedinterrupt():
         raiseinterrupt(assertedsigs[0])
 
 
-def trylock(ui, vfs, lockname, timeout, warntimeout, *args, **kwargs):
+def steal_lock(ui, vfs, lockname, stolen_lock, *args, **kwargs) -> lock:
+    """return a new lock that "steal" the locking made by a source lock
+
+    This is used during local clone when reloading a repository. If we could
+    remove the need for this during copy clone, we could remove this function.
+    """
+    new_lock = lock(vfs, lockname, 0, *args, dolock=False, **kwargs)
+
+    assert stolen_lock.f == new_lock.f
+    assert stolen_lock.held > 0
+    assert new_lock.held == 0
+    new_lock.held += 1
+    stolen_lock.held = None
+    if new_lock.acquirefn is not None:
+        new_lock.acquirefn()
+    return new_lock
+
+
+def trylock(ui, vfs, lockname, timeout, warntimeout, *args, **kwargs) -> lock:
     """return an acquired lock or raise an a LockHeld exception
 
     This function is responsible to issue warnings and or debug messages about
     the held lock while trying to acquires it."""
+    devel_wait_file = kwargs.pop("devel_wait_sync_file", None)
 
     def printwarning(printer, locker):
         """issue the usual "waiting on lock" message through any channel"""
@@ -150,13 +170,22 @@ def trylock(ui, vfs, lockname, timeout, warntimeout, *args, **kwargs):
             l._trylock()
             break
         except error.LockHeld as inst:
+            if devel_wait_file is not None:
+                # create the file to signal we are waiting
+                with open(devel_wait_file, 'w'):
+                    pass
+
             if delay == debugidx:
                 printwarning(ui.debug, inst.locker)
             if delay == warningidx:
                 printwarning(ui.warn, inst.locker)
             if timeout <= delay:
+                assert isinstance(inst.filename, bytes)
                 raise error.LockHeld(
-                    errno.ETIMEDOUT, inst.filename, l.desc, inst.locker
+                    errno.ETIMEDOUT,
+                    typing.cast(bytes, inst.filename),
+                    l.desc,
+                    inst.locker,
                 )
             time.sleep(1)
             delay += 1
@@ -229,7 +258,11 @@ class lock:
         self.release(success=success)
 
     def __del__(self):
-        if self.held:
+        if self.held is None:
+            # lock has been stolen (during a local clone) and should never be
+            # touched again.
+            return
+        if self.held > 0:
             warnings.warn(
                 "use lock.release instead of del lock",
                 category=DeprecationWarning,
@@ -246,7 +279,7 @@ class lock:
         # wrapper around procutil.getpid() to make testing easier
         return procutil.getpid()
 
-    def lock(self):
+    def lock(self) -> int:
         timeout = self.timeout
         while True:
             try:
@@ -262,8 +295,11 @@ class lock:
                     errno.ETIMEDOUT, inst.filename, self.desc, inst.locker
                 )
 
-    def _trylock(self):
-        if self.held:
+    def _trylock(self) -> None:
+        if self.held is None:
+            msg = "cannot acquire a lock after it was stolen"
+            raise error.ProgrammingError(msg)
+        if self.held > 0:
             self.held += 1
             return
         if lock._host is None:
@@ -276,7 +312,7 @@ class lock:
                 with self._maybedelayedinterrupt():
                     self.vfs.makelock(lockname, self.f)
                     self.held = 1
-            except (OSError, IOError) as why:
+            except OSError as why:
                 if why.errno == errno.EEXIST:
                     locker = self._readlock()
                     if locker is None:
@@ -291,8 +327,13 @@ class lock:
                             locker,
                         )
                 else:
+                    assert isinstance(why.filename, bytes)
+                    assert isinstance(why.strerror, str)
                     raise error.LockUnavailable(
-                        why.errno, why.strerror, why.filename, self.desc
+                        why.errno,
+                        why.strerror,
+                        typing.cast(bytes, why.filename),
+                        self.desc,
                     )
 
         if not self.held:
@@ -364,6 +405,9 @@ class lock:
 
         If the lock has been acquired multiple times, the actual release is
         delayed to the last release call."""
+        if self.held is None:
+            msg = "cannot release a lock after it was stolen"
+            raise error.ProgrammingError(msg)
         if self.held > 1:
             self.held -= 1
         elif self.held == 1:

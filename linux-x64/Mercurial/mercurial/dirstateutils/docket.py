@@ -5,6 +5,7 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
 
 import struct
 
@@ -24,7 +25,7 @@ V2_FORMAT_MARKER = b"dirstate-v2\n"
 # Node IDs are null-padded if shorter than 32 bytes.
 # A data file shorter than the specified used size is corrupted (truncated)
 HEADER = struct.Struct(
-    ">{}s32s32s{}sLB".format(len(V2_FORMAT_MARKER), v2.TREE_METADATA_SIZE)
+    f">{len(V2_FORMAT_MARKER)}s32s32s{v2.TREE_METADATA_SIZE}sLB"
 )
 
 

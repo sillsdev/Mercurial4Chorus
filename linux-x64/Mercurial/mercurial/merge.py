@@ -5,13 +5,23 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
 
 import collections
+import os
 import struct
+import typing
+from typing import Dict, Iterable, Iterator, Optional, Tuple
 
 from .i18n import _
 from .node import nullrev
 from .thirdparty import attr
+
+# Force pytype to use the non-vendored package
+if typing.TYPE_CHECKING:
+    # noinspection PyPackageRequirements
+    import attr
+
 from .utils import stringutil
 from .dirstateutils import timestamp
 from . import (
@@ -30,6 +40,20 @@ from . import (
     util,
     worker,
 )
+
+if typing.TYPE_CHECKING:
+    # TODO: figure out what exactly is in this tuple
+    MergeResultData = tuple
+    MergeResultAction = tuple[bytes, Optional[MergeResultData], bytes]
+    """The filename, data about the merge, and message about the merge."""
+
+    FileMappingValue = tuple[
+        mergestatemod.MergeAction, Optional[MergeResultData], bytes
+    ]
+    """The merge action, data about the merge, and message about the merge, for
+    the keyed file."""
+
+rust_update_mod = policy.importrust("update", pyo3=True)
 
 _pack = struct.pack
 _unpack = struct.unpack
@@ -120,7 +144,9 @@ class _unknowndirschecker:
         return None
 
 
-def _checkunknownfiles(repo, wctx, mctx, force, mresult, mergeforce):
+def _checkunknownfiles(
+    repo, wctx, mctx, force, mresult: mergeresult, mergeforce
+):
     """
     Considers any actions that care about the presence of conflicting unknown
     files. For some actions, the result is to abort; for others, it is to
@@ -138,6 +164,8 @@ def _checkunknownfiles(repo, wctx, mctx, force, mresult, mergeforce):
     dircache = dict()
     dirstate = repo.dirstate
     wvfs = repo.wvfs
+    # wouldn't it be easier to loop over unknown files (and dirs)?
+
     if not force:
 
         def collectconflicts(conflicts, config):
@@ -263,7 +291,7 @@ def _checkunknownfiles(repo, wctx, mctx, force, mresult, mergeforce):
     )
 
 
-def _forgetremoved(wctx, mctx, branchmerge, mresult):
+def _forgetremoved(wctx, mctx, branchmerge, mresult: mergeresult) -> None:
     """
     Forget removed files
 
@@ -296,7 +324,7 @@ def _forgetremoved(wctx, mctx, branchmerge, mresult):
                 )
 
 
-def _checkcollision(repo, wmf, mresult):
+def _checkcollision(repo, wmf, mresult: mergeresult | None) -> None:
     """
     Check for case-folding collisions.
     """
@@ -364,7 +392,7 @@ def _checkcollision(repo, wmf, mresult):
         lastfull = f
 
 
-def _filesindirs(repo, manifest, dirs):
+def _filesindirs(repo, manifest, dirs) -> Iterator[tuple[bytes, bytes]]:
     """
     Generator that yields pairs of all the files in the manifest that are found
     inside the directories listed in dirs, and which directory they are found
@@ -377,7 +405,7 @@ def _filesindirs(repo, manifest, dirs):
                 break
 
 
-def checkpathconflicts(repo, wctx, mctx, mresult):
+def checkpathconflicts(repo, wctx, mctx, mresult: mergeresult) -> None:
     """
     Check if any actions introduce path conflicts in the repository, updating
     actions to record or handle the path conflict accordingly.
@@ -420,11 +448,11 @@ def checkpathconflicts(repo, wctx, mctx, mresult):
     # Track the names of all deleted files.
     for f in mresult.files((mergestatemod.ACTION_REMOVE,)):
         deletedfiles.add(f)
-    for (f, args, msg) in mresult.getactions((mergestatemod.ACTION_MERGE,)):
+    for f, args, msg in mresult.getactions((mergestatemod.ACTION_MERGE,)):
         f1, f2, fa, move, anc = args
         if move:
             deletedfiles.add(f1)
-    for (f, args, msg) in mresult.getactions(
+    for f, args, msg in mresult.getactions(
         (mergestatemod.ACTION_DIR_RENAME_MOVE_LOCAL,)
     ):
         f2, flags = args
@@ -478,7 +506,13 @@ def checkpathconflicts(repo, wctx, mctx, mresult):
         ctxname = bytes(mctx).rstrip(b'+')
         for f, p in _filesindirs(repo, mf, remoteconflicts):
             if f not in deletedfiles:
-                m, args, msg = mresult.getfile(p)
+                mapping_value = mresult.getfile(p)
+
+                # Help pytype- in theory, this could be None since no default
+                # value is passed to getfile() above.
+                assert mapping_value is not None
+
+                m, args, msg = mapping_value
                 pnew = util.safename(p, ctxname, wctx, set(mresult.files()))
                 if m in (
                     mergestatemod.ACTION_DELETED_CHANGED,
@@ -512,7 +546,9 @@ def checkpathconflicts(repo, wctx, mctx, mresult):
         )
 
 
-def _filternarrowactions(narrowmatch, branchmerge, mresult):
+def _filternarrowactions(
+    narrowmatch, branchmerge, mresult: mergeresult
+) -> None:
     """
     Filters out actions that can ignored because the repo is narrowed.
 
@@ -521,7 +557,7 @@ def _filternarrowactions(narrowmatch, branchmerge, mresult):
     """
     # We mutate the items in the dict during iteration, so iterate
     # over a copy.
-    for f, action in mresult.filemap():
+    for f, action in list(mresult.filemap()):
         if narrowmatch(f):
             pass
         elif not branchmerge:
@@ -553,7 +589,12 @@ class mergeresult:
     It has information about what actions need to be performed on dirstate
     mapping of divergent renames and other such cases."""
 
-    def __init__(self):
+    _filemapping: dict[bytes, FileMappingValue]
+    _actionmapping: dict[
+        mergestatemod.MergeAction, dict[bytes, tuple[MergeResultData, bytes]]
+    ]
+
+    def __init__(self) -> None:
         """
         filemapping: dict of filename as keys and action related info as values
         diverge: mapping of source name -> list of dest name for
@@ -575,7 +616,13 @@ class mergeresult:
         self._diverge = diverge
         self._renamedelete = renamedelete
 
-    def addfile(self, filename, action, data, message):
+    def addfile(
+        self,
+        filename: bytes,
+        action: mergestatemod.MergeAction,
+        data: MergeResultData | None,
+        message,
+    ) -> None:
         """adds a new file to the mergeresult object
 
         filename: file which we are adding
@@ -592,7 +639,12 @@ class mergeresult:
         self._filemapping[filename] = (action, data, message)
         self._actionmapping[action][filename] = (data, message)
 
-    def mapaction(self, actionfrom, actionto, transform):
+    def mapaction(
+        self,
+        actionfrom: mergestatemod.MergeAction,
+        actionto: mergestatemod.MergeAction,
+        transform,
+    ):
         """changes all occurrences of action `actionfrom` into `actionto`,
         transforming its args with the function `transform`.
         """
@@ -604,7 +656,9 @@ class mergeresult:
             self._filemapping[f] = (actionto, data, msg)
             dest[f] = (data, msg)
 
-    def getfile(self, filename, default_return=None):
+    def getfile(
+        self, filename: bytes, default_return: FileMappingValue | None = None
+    ) -> FileMappingValue | None:
         """returns (action, args, msg) about this file
 
         returns default_return if the file is not present"""
@@ -612,7 +666,9 @@ class mergeresult:
             return self._filemapping[filename]
         return default_return
 
-    def files(self, actions=None):
+    def files(
+        self, actions: Iterable[mergestatemod.MergeAction] | None = None
+    ) -> Iterator[bytes]:
         """returns files on which provided action needs to perfromed
 
         If actions is None, all files are returned
@@ -620,22 +676,22 @@ class mergeresult:
         # TODO: think whether we should return renamedelete and
         # diverge filenames also
         if actions is None:
-            for f in self._filemapping:
-                yield f
+            yield from self._filemapping
 
         else:
             for a in actions:
-                for f in self._actionmapping[a]:
-                    yield f
+                yield from self._actionmapping[a]
 
-    def removefile(self, filename):
+    def removefile(self, filename: bytes) -> None:
         """removes a file from the mergeresult object as the file might
         not merging anymore"""
         action, data, message = self._filemapping[filename]
         del self._filemapping[filename]
         del self._actionmapping[action][filename]
 
-    def getactions(self, actions, sort=False):
+    def getactions(
+        self, actions: Iterable[mergestatemod.MergeAction], sort: bool = False
+    ) -> Iterator[MergeResultAction]:
         """get list of files which are marked with these actions
         if sort is true, files for each action is sorted and then added
 
@@ -650,7 +706,9 @@ class mergeresult:
                 for f, (args, msg) in self._actionmapping[a].items():
                     yield f, args, msg
 
-    def len(self, actions=None):
+    def len(
+        self, actions: Iterable[mergestatemod.MergeAction] | None = None
+    ) -> int:
         """returns number of files which needs actions
 
         if actions is passed, total of number of files in that action
@@ -661,15 +719,15 @@ class mergeresult:
 
         return sum(len(self._actionmapping[a]) for a in actions)
 
-    def filemap(self, sort=False):
-        if sorted:
-            for key, val in sorted(self._filemapping.items()):
-                yield key, val
+    def filemap(
+        self, sort: bool = False
+    ) -> Iterator[tuple[bytes, MergeResultData]]:
+        if sort:
+            yield from sorted(self._filemapping.items())
         else:
-            for key, val in self._filemapping.items():
-                yield key, val
+            yield from self._filemapping.items()
 
-    def addcommitinfo(self, filename, key, value):
+    def addcommitinfo(self, filename: bytes, key, value) -> None:
         """adds key-value information about filename which will be required
         while committing this merge"""
         self._commitinfo[filename][key] = value
@@ -687,7 +745,9 @@ class mergeresult:
         return self._commitinfo
 
     @property
-    def actionsdict(self):
+    def actionsdict(
+        self,
+    ) -> dict[mergestatemod.MergeAction, list[MergeResultAction]]:
         """returns a dictionary of actions to be perfomed with action as key
         and a list of files and related arguments as values"""
         res = collections.defaultdict(list)
@@ -696,13 +756,13 @@ class mergeresult:
                 res[a].append((f, args, msg))
         return res
 
-    def setactions(self, actions):
+    def setactions(self, actions) -> None:
         self._filemapping = actions
         self._actionmapping = collections.defaultdict(dict)
         for f, (act, data, msg) in self._filemapping.items():
             self._actionmapping[act][f] = data, msg
 
-    def hasconflicts(self):
+    def hasconflicts(self) -> bool:
         """tells whether this merge resulted in some actions which can
         result in conflicts or not"""
         for a in self._actionmapping.keys():
@@ -733,7 +793,7 @@ def manifestmerge(
     acceptremote,
     followcopies,
     forcefulldiff=False,
-):
+) -> mergeresult:
     """
     Merge wctx and p2 with ancestor pa and generate merge action list
 
@@ -1107,7 +1167,7 @@ def manifestmerge(
     return mresult
 
 
-def _resolvetrivial(repo, wctx, mctx, ancestor, mresult):
+def _resolvetrivial(repo, wctx, mctx, ancestor, mresult: mergeresult) -> None:
     """Resolves false conflicts where the nodeid changed but the content
     remained the same."""
     # We force a copy of actions.items() because we're going to mutate
@@ -1136,7 +1196,7 @@ def calculateupdates(
     followcopies,
     matcher=None,
     mergeforce=False,
-):
+) -> mergeresult:
     """
     Calculate the actions needed to merge mctx into wctx using ancestors
 
@@ -1459,7 +1519,7 @@ def batchget(repo, mctx, wctx, wantfiledata, actions):
     yield True, filedata
 
 
-def _prefetchfiles(repo, ctx, mresult):
+def _prefetchfiles(repo, ctx, mresult: mergeresult) -> None:
     """Invoke ``scmutil.prefetchfiles()`` for the files relevant to the dict
     of merge actions.  ``ctx`` is the context being merged in."""
 
@@ -1506,7 +1566,7 @@ class updateresult:
 
 def applyupdates(
     repo,
-    mresult,
+    mresult: mergeresult,
     wctx,
     mctx,
     overwrite,
@@ -1784,7 +1844,7 @@ def _advertisefsmonitor(repo, num_gets, p1node):
         b'fsmonitor', b'warn_update_file_count'
     )
     # avoid cycle dirstate -> sparse -> merge -> dirstate
-    dirstate_rustmod = policy.importrust("dirstate")
+    dirstate_rustmod = policy.importrust("dirstate", pyo3=True)
 
     if dirstate_rustmod is not None:
         # When using rust status, fsmonitor becomes necessary at higher sizes
@@ -1825,6 +1885,12 @@ UPDATECHECK_ABORT = b'abort'  # handled at higher layers
 UPDATECHECK_NONE = b'none'
 UPDATECHECK_LINEAR = b'linear'
 UPDATECHECK_NO_CONFLICT = b'noconflict'
+
+# Let extensions turn off any Rust code in the update code if that interferes
+# will their patching.
+# This being `True` does not mean that you have Rust extensions installed or
+# that the Rust path will be taken for any given invocation.
+MAYBE_USE_RUST_UPDATE = True
 
 
 def _update(
@@ -1999,6 +2065,66 @@ def _update(
         if not branchmerge and not wc.dirty(missing=True):
             followcopies = False
 
+        update_from_null = False
+        update_from_null_fallback = False
+        if (
+            MAYBE_USE_RUST_UPDATE
+            and repo.ui.configbool(b"rust", b"update-from-null")
+            and rust_update_mod is not None
+            and p1.rev() == nullrev
+            and not branchmerge
+            # TODO it's probably not too hard to pass down the transaction and
+            # respect the write patterns from Rust. But since it doesn't affect
+            # a simple update from null, then it doesn't matter yet.
+            and repo.currenttransaction() is None
+            and matcher is None
+            and not wc.mergestate().active()
+            and b'.hgsubstate' not in p2
+        ):
+            working_dir_iter = os.scandir(repo.root)
+            maybe_hg_folder = next(working_dir_iter)
+            assert maybe_hg_folder is not None
+            if maybe_hg_folder.name == b".hg":
+                try:
+                    next(working_dir_iter)
+                except StopIteration:
+                    update_from_null = True
+
+        if update_from_null:
+            # Check the narrowspec and sparsespec here to display warnings
+            # more easily.
+            # TODO figure out of a way of bubbling up warnings to Python
+            # while not polluting the Rust code (probably a channel)
+            repo.narrowmatch()
+            sparse.matcher(repo, [nullrev, p2.rev()])
+            repo.hook(b'preupdate', throw=True, parent1=xp1, parent2=xp2)
+            # note that we're in the middle of an update
+            repo.vfs.write(b'updatestate', p2.hex())
+            num_cpus = (
+                repo.ui.configint(b"worker", b"numcpus", None)
+                if repo.ui.configbool(b"worker", b"enabled")
+                else 1
+            )
+            try:
+                updated_count = rust_update_mod.update_from_null(
+                    repo.root, p2.rev(), num_cpus
+                )
+            except rust_update_mod.FallbackError:
+                update_from_null_fallback = True
+            else:
+                # We've changed the dirstate from Rust, we need to tell Python
+                repo.dirstate.invalidate()
+                # This includes setting the parents, since they are not read
+                # again on invalidation
+                with repo.dirstate.changing_parents(repo):
+                    repo.dirstate.setparents(fp2)
+                repo.dirstate.setbranch(p2.branch(), repo.currenttransaction())
+                sparse.prunetemporaryincludes(repo)
+                repo.hook(b'update', parent1=xp1, parent2=xp2, error=0)
+                # update completed, clear state
+                util.unlink(repo.vfs.join(b'updatestate'))
+                return updateresult(updated_count, 0, 0, 0)
+
         ### calculate phase
         mresult = calculateupdates(
             repo,
@@ -2122,11 +2248,13 @@ def _update(
         # the dirstate.
         always = matcher is None or matcher.always()
         updatedirstate = updatedirstate and always and not wc.isinmemory()
-        if updatedirstate:
+        # If we're in the fallback case, we've already done this
+        if updatedirstate and not update_from_null_fallback:
             repo.hook(b'preupdate', throw=True, parent1=xp1, parent2=xp2)
             # note that we're in the middle of an update
             repo.vfs.write(b'updatestate', p2.hex())
 
+        # TODO don't run if Rust is available
         _advertisefsmonitor(
             repo, mresult.len((mergestatemod.ACTION_GET,)), p1.node()
         )
@@ -2156,82 +2284,20 @@ def _update(
                 mresult.len((mergestatemod.ACTION_GET,)) if wantfiledata else 0
             )
             with repo.dirstate.changing_parents(repo):
-                ### Filter Filedata
-                #
-                # We gathered "cache" information for the clean file while
-                # updating them: mtime, size and mode.
-                #
-                # At the time this comment is written, they are various issues
-                # with how we gather the `mode` and `mtime` information (see
-                # the comment in `batchget`).
-                #
-                # We are going to smooth one of this issue here : mtime ambiguity.
-                #
-                # i.e. even if the mtime gathered during `batchget` was
-                # correct[1] a change happening right after it could change the
-                # content while keeping the same mtime[2].
-                #
-                # When we reach the current code, the "on disk" part of the
-                # update operation is finished. We still assume that no other
-                # process raced that "on disk" part, but we want to at least
-                # prevent later file change to alter the content of the file
-                # right after the update operation. So quickly that the same
-                # mtime is record for the operation.
-                # To prevent such ambiguity to happens, we will only keep the
-                # "file data" for files with mtime that are stricly in the past,
-                # i.e. whose mtime is strictly lower than the current time.
-                #
-                # This protect us from race conditions from operation that could
-                # run right after this one, especially other Mercurial
-                # operation that could be waiting for the wlock to touch files
-                # content and the dirstate.
-                #
-                # In an ideal world, we could only get reliable information in
-                # `getfiledata` (from `getbatch`), however the current approach
-                # have been a successful compromise since many years.
-                #
-                # At the time this comment is written, not using any "cache"
-                # file data at all here would not be viable. As it would result is
-                # a very large amount of work (equivalent to the previous `hg
-                # update` during the next status after an update).
-                #
-                # [1] the current code cannot grantee that the `mtime` and
-                # `mode` are correct, but the result is "okay in practice".
-                # (see the comment in `batchget`).                #
-                #
-                # [2] using nano-second precision can greatly help here because
-                # it makes the "different write with same mtime" issue
-                # virtually vanish. However, dirstate v1 cannot store such
-                # precision and a bunch of python-runtime, operating-system and
-                # filesystem does not provide use with such precision, so we
-                # have to operate as if it wasn't available.
                 if getfiledata:
-                    ambiguous_mtime = {}
-                    now = timestamp.get_fs_now(repo.vfs)
-                    if now is None:
-                        # we can't write to the FS, so we won't actually update
-                        # the dirstate content anyway, no need to put cache
-                        # information.
-                        getfiledata = None
-                    else:
-                        now_sec = now[0]
-                        for f, m in getfiledata.items():
-                            if m is not None and m[2][0] >= now_sec:
-                                ambiguous_mtime[f] = (m[0], m[1], None)
-                        for f, m in ambiguous_mtime.items():
-                            getfiledata[f] = m
+                    getfiledata = filter_ambiguous_files(repo, getfiledata)
 
                 repo.setparents(fp1, fp2)
                 mergestatemod.recordupdates(
                     repo, mresult.actionsdict, branchmerge, getfiledata
                 )
-                # update completed, clear state
-                util.unlink(repo.vfs.join(b'updatestate'))
-
                 if not branchmerge:
                     repo.dirstate.setbranch(
                         p2.branch(), repo.currenttransaction()
                     )
+
+                # update completed, clear state
+                util.unlink(repo.vfs.join(b'updatestate'))
 
                 # If we're updating to a location, clean up any stale temporary includes
                 # (ex: this happens during hg rebase --abort).
@@ -2243,6 +2309,128 @@ def _update(
             b'update', parent1=xp1, parent2=xp2, error=stats.unresolvedcount
         )
     return stats
+
+
+# filename -> (mode, size, timestamp)
+FileData = Dict[bytes, Optional[Tuple[int, int, Optional[timestamp.timestamp]]]]
+
+
+def filter_ambiguous_files(repo, file_data: FileData) -> Optional[FileData]:
+    """We've gathered "cache" information for the clean files while updating
+    them: their mtime, size and mode.
+
+    At the time this comment is written, there are various issues with how we
+    gather the `mode` and `mtime` information (see the comment in `batchget`).
+
+    We are going to smooth one of these issues here: mtime ambiguity.
+
+    i.e. even if the mtime gathered during `batchget` was correct[1] a change
+    happening right after it could change the content while keeping
+    the same mtime[2].
+
+    When we reach the current code, the "on disk" part of the update operation
+    is finished. We still assume that no other process raced that "on disk"
+    part, but we want to at least prevent later file changes to alter the
+    contents of the file right after the update operation so quickly that the
+    same mtime is recorded for the operation.
+
+    To prevent such ambiguities from happenning, we will do (up to) two things:
+        - wait until the filesystem clock has ticked
+        - only keep the "file data" for files with mtimes that are strictly in
+          the past, i.e. whose mtime is strictly lower than the current time.
+
+    We only wait for the system clock to tick if using dirstate-v2, since v1
+    only has second-level granularity and waiting for a whole second is
+    too much of a penalty in the general case.
+
+    Although we're assuming that people running dirstate-v2 on Linux
+    don't have a second-granularity FS (with the exclusion of NFS), users
+    can be surprising, and at some point in the future, dirstate-v2 will become
+    the default. To that end, we limit the wait time to 100ms and fall back
+    to the filtering method in case of a timeout.
+
+    +------------+------+--------------+
+    |   version  | wait | filter level |
+    +------------+------+--------------+
+    |     V1     | No   | Second       |
+    |     V2     | Yes  | Nanosecond   |
+    | V2-slow-fs | No   | Second       |
+    +------------+------+--------------+
+
+    This protects us from race conditions from operations that could run right
+    after this one, especially other Mercurial operations that could be waiting
+    for the wlock to touch files contents and the dirstate.
+
+    In an ideal world, we could only get reliable information in `getfiledata`
+    (from `getbatch`), however this filtering approach has been a successful
+    compromise for many years. A patch series of the linux kernel might change
+    this in 6.12³.
+
+    At the time this comment is written, not using any "cache" file data at all
+    here would not be viable, as it would result is a very large amount of work
+    (equivalent to the previous `hg update` during the next status after an
+    update).
+
+    [1] the current code cannot grantee that the `mtime` and `mode`
+    are correct, but the result is "okay in practice".
+    (see the comment in `batchget`)
+
+    [2] using nano-second precision can greatly help here because it makes the
+    "different write with same mtime" issue virtually vanish. However,
+    dirstate v1 cannot store such precision and a bunch of python-runtime,
+    operating-system and filesystem parts do not provide us with such
+    precision, so we have to operate as if it wasn't available.
+
+    [3] https://lore.kernel.org/all/20241002-mgtime-v10-8-d1c4717f5284@kernel.org
+    """
+    ambiguous_mtime: FileData = {}
+    dirstate_v2 = repo.dirstate._use_dirstate_v2
+    fs_now_result = None
+    fast_enough_fs = True
+    if dirstate_v2:
+        fstype = util.getfstype(repo.vfs.base)
+        # Exclude NFS right off the bat
+        fast_enough_fs = fstype != b'nfs'
+        if fstype is not None and fast_enough_fs:
+            fs_now_result = timestamp.wait_until_fs_tick(repo.vfs)
+
+    if fs_now_result is None:
+        try:
+            now = timestamp.get_fs_now(repo.vfs)
+            fs_now_result = (now, False)
+        except OSError:
+            pass
+
+    if fs_now_result is None:
+        # we can't write to the FS, so we won't actually update
+        # the dirstate content anyway, no need to put cache
+        # information.
+        return None
+    else:
+        now, timed_out = fs_now_result
+        if timed_out:
+            fast_enough_fs = False
+        for f, m in file_data.items():
+            if m is not None:
+                reliable = timestamp.make_mtime_reliable(m[2], now)
+                if reliable is None or (
+                    reliable[2] and (not dirstate_v2 or not fast_enough_fs)
+                ):
+                    # Either it's not reliable, or it's second ambiguous
+                    # and we're in dirstate-v1 or in a slow fs, so discard
+                    # the mtime.
+                    ambiguous_mtime[f] = (m[0], m[1], None)
+                elif reliable[2]:
+                    # We need to remember that this time is "second ambiguous"
+                    # otherwise the next status might miss a subsecond change
+                    # if its "stat" doesn't provide nanoseconds.
+                    #
+                    # TODO make osutil.c understand nanoseconds when possible
+                    # (see timestamp.py for the same note)
+                    ambiguous_mtime[f] = (m[0], m[1], reliable)
+        for f, m in ambiguous_mtime.items():
+            file_data[f] = m
+    return file_data
 
 
 def merge(ctx, labels=None, force=False, wc=None):

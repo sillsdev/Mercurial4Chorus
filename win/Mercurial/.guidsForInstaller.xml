@@ -27,4 +27,5 @@
   <File Id="mercurial.python39.dll" Guid="23ee5caf-04ba-438e-8a71-a6b5db737450" />
   <File Id="mercurial.vcruntime140.dll" Guid="43f601f6-c480-477f-9ad1-a41a042f1bf8" />
   <File Id="mercurial.vcruntime140_1.dll" Guid="dd1db127-a458-4147-a988-1e0e7a8aaa07" />
+  <File Id="mercurial.configitems.toml" Guid="f41c0178-54ae-4fcb-a6ea-caf2131c6e31" />
 </InstallerMetadata>

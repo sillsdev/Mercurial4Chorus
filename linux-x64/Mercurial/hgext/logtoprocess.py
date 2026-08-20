@@ -32,6 +32,7 @@ not ensure that they exit cleanly.
 
 """
 
+from __future__ import annotations
 
 import os
 

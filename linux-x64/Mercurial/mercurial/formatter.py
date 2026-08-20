@@ -105,11 +105,13 @@ bar
 baz: foo, bar
 """
 
+from __future__ import annotations
 
 import contextlib
 import itertools
 import os
 import pickle
+import typing
 
 from .i18n import _
 from .node import (
@@ -117,6 +119,11 @@ from .node import (
     short,
 )
 from .thirdparty import attr
+
+# Force pytype to use the non-vendored package
+if typing.TYPE_CHECKING:
+    # noinspection PyPackageRequirements
+    import attr
 
 from . import (
     error,
@@ -141,7 +148,7 @@ def isprintable(obj):
     Returns False if the object is unsupported or must be pre-processed by
     formatdate(), formatdict(), or formatlist().
     """
-    return isinstance(obj, (type(None), bool, int, int, float, bytes))
+    return isinstance(obj, (type(None), bool, int, float, bytes))
 
 
 class _nullconverter:
@@ -176,7 +183,6 @@ class _nullconverter:
 
 
 class baseformatter:
-
     # set to True if the formater output a strict format that does not support
     # arbitrary output in the stream.
     strict_format = False
@@ -421,7 +427,6 @@ class cborformatter(baseformatter):
 
 
 class jsonformatter(baseformatter):
-
     strict_format = True
 
     def __init__(self, ui, out, topic, opts):

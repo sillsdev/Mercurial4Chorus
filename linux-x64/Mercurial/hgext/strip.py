@@ -7,6 +7,8 @@ This extension allows you to strip changesets and all their descendants from the
 repository. See the command help for details.
 """
 
+from __future__ import annotations
+
 from mercurial import commands
 
 # Note for extension authors: ONLY specify testedwith = 'ships-with-hg-core' for

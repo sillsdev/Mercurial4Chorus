@@ -57,6 +57,7 @@ Config::
     example.phabtoken = cli-xxxxxxxxxxxxxxxxxxxxxxxxxxxx
 """
 
+from __future__ import annotations
 
 import base64
 import contextlib
@@ -68,11 +69,17 @@ import mimetypes
 import operator
 import re
 import time
+import typing
 
 from mercurial.node import bin, short
 from mercurial.i18n import _
-from mercurial.pycompat import getattr
 from mercurial.thirdparty import attr
+
+# Force pytype to use the non-vendored package
+if typing.TYPE_CHECKING:
+    # noinspection PyPackageRequirements
+    import attr
+
 from mercurial import (
     cmdutil,
     context,
@@ -226,7 +233,7 @@ def _loadhgrc(orig, ui, wdirvfs, hgvfs, requirements, *args, **opts):
         result = True
     except ValueError:
         ui.warn(_(b"invalid JSON in %s\n") % wdirvfs.join(b".arcconfig"))
-    except IOError:
+    except OSError:
         pass
 
     cfg = util.sortdict()
@@ -483,7 +490,7 @@ def debugcallconduit(ui, repo, name):
         lambda x: encoding.unifromlocal(x) if isinstance(x, bytes) else x,
         callconduit(ui, name, params),
     )
-    s = json.dumps(result, sort_keys=True, indent=2, separators=(u',', u': '))
+    s = json.dumps(result, sort_keys=True, indent=2, separators=(',', ': '))
     ui.write(b'%s\n' % encoding.unitolocal(s))
 
 
@@ -699,7 +706,7 @@ class phabhunk(dict):
     oldLength = attr.ib(default=0)  # camelcase-required
     newOffset = attr.ib(default=0)  # camelcase-required
     newLength = attr.ib(default=0)  # camelcase-required
-    corpus = attr.ib(default='')
+    corpus = attr.ib(default=b'')
     # These get added to the phabchange's equivalents
     addLines = attr.ib(default=0)  # camelcase-required
     delLines = attr.ib(default=0)  # camelcase-required
@@ -1927,7 +1934,9 @@ def querydrev(ui, spec):
                 raise error.Abort(_(b'unknown symbol: %s') % tree[1])
         elif op in {b'and_', b'add', b'sub'}:
             assert len(tree) == 3
-            return getattr(operator, op)(walk(tree[1]), walk(tree[2]))
+            return getattr(operator, pycompat.sysstr(op))(
+                walk(tree[1]), walk(tree[2])
+            )
         elif op == b'group':
             return walk(tree[1])
         elif op == b'ancestors':

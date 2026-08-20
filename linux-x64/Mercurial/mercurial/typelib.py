@@ -5,7 +5,13 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
+
 import typing
+
+from typing import (
+    Callable,
+)
 
 # Note: this is slightly different from pycompat.TYPE_CHECKING, as using
 # pycompat causes the BinaryIO_Proxy type to be resolved to ``object`` when
@@ -21,8 +27,29 @@ TYPE_CHECKING = typing.TYPE_CHECKING
 if TYPE_CHECKING:
     from typing import (
         BinaryIO,
+        Union,
+    )
+
+    from . import (
+        node,
+        posix,
+        util,
+        windows,
     )
 
     BinaryIO_Proxy = BinaryIO
+    CacheStat = Union[
+        posix.cachestat,
+        windows.cachestat,
+        util.uncacheable_cachestat,
+    ]
+    NodeConstants = node.sha1nodeconstants
 else:
+    from typing import Any
+
     BinaryIO_Proxy = object
+    CacheStat = Any
+    NodeConstants = Any
+
+# scmutil.getuipathfn() related callback.
+UiPathFn = Callable[[bytes], bytes]

@@ -5,6 +5,7 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
 
 from .i18n import _
 from . import (
@@ -118,14 +119,14 @@ def findrenames(repo, added, removed, threshold):
 
     # Find exact matches.
     matchedfiles = set()
-    for (a, b) in _findexactmatches(repo, addedfiles, removedfiles):
+    for a, b in _findexactmatches(repo, addedfiles, removedfiles):
         matchedfiles.add(b)
         yield (a.path(), b.path(), 1.0)
 
     # If the user requested similar files to be matched, search for them also.
     if threshold < 1.0:
         addedfiles = [x for x in addedfiles if x not in matchedfiles]
-        for (a, b, score) in _findsimilarmatches(
+        for a, b, score in _findsimilarmatches(
             repo, addedfiles, removedfiles, threshold
         ):
             yield (a.path(), b.path(), score)

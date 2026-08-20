@@ -16,6 +16,7 @@
 # mbp: "you know that thing where cvs gives you conflict markers?"
 # s: "i hate that."
 
+from __future__ import annotations
 
 from .i18n import _
 from . import (
@@ -48,6 +49,30 @@ def intersect(ra, rb):
         return None
 
 
+def intersect_or_touch(ra, rb):
+    """Given two ranges return the range where they intersect or touch or None.
+
+    >>> intersect_or_touch((0, 10), (0, 6))
+    (0, 6)
+    >>> intersect_or_touch((0, 10), (5, 15))
+    (5, 10)
+    >>> intersect_or_touch((0, 10), (10, 15))
+    (10, 10)
+    >>> intersect_or_touch((0, 9), (10, 15))
+    >>> intersect_or_touch((0, 9), (7, 15))
+    (7, 9)
+    """
+    assert ra[0] <= ra[1]
+    assert rb[0] <= rb[1]
+
+    sa = max(ra[0], rb[0])
+    sb = min(ra[1], rb[1])
+    if sa <= sb:
+        return sa, sb
+    else:
+        return None
+
+
 def compare_range(a, astart, aend, b, bstart, bend):
     """Compare a[astart:aend] == b[bstart:bend], without slicing."""
     if (aend - astart) != (bend - bstart):
@@ -65,7 +90,16 @@ class Merge3Text:
     Given strings BASE, OTHER, THIS, tries to produce a combined text
     incorporating the changes from both BASE->OTHER and BASE->THIS."""
 
-    def __init__(self, basetext, atext, btext, base=None, a=None, b=None):
+    def __init__(
+        self,
+        basetext,
+        atext,
+        btext,
+        base=None,
+        a=None,
+        b=None,
+        relaxed_sync=False,
+    ):
         self.basetext = basetext
         self.atext = atext
         self.btext = btext
@@ -75,6 +109,7 @@ class Merge3Text:
             a = mdiff.splitnewlines(atext)
         if b is None:
             b = mdiff.splitnewlines(btext)
+        self.relaxed_sync = relaxed_sync
         self.base = base
         self.a = a
         self.b = b
@@ -219,6 +254,11 @@ class Merge3Text:
         len_a = len(amatches)
         len_b = len(bmatches)
 
+        if self.relaxed_sync:
+            intersect_fun = intersect_or_touch
+        else:
+            intersect_fun = intersect
+
         sl = []
 
         while ia < len_a and ib < len_b:
@@ -227,7 +267,7 @@ class Merge3Text:
 
             # there is an unconflicted block at i; how long does it
             # extend?  until whichever one ends earlier.
-            i = intersect((abase, abase + alen), (bbase, bbase + blen))
+            i = intersect_fun((abase, abase + alen), (bbase, bbase + blen))
             if i:
                 intbase = i[0]
                 intend = i[1]
@@ -257,13 +297,41 @@ class Merge3Text:
             # advance whichever one ends first in the base text
             if (abase + alen) < (bbase + blen):
                 ia += 1
-            else:
+            elif not self.relaxed_sync:
+                # if the blocks end at the same time we know they can't overlap
+                # any other block, so no need for the complicated checks below
                 ib += 1
+            elif (abase + alen) > (bbase + blen):
+                ib += 1
+            else:
+                # If both end at the same time, either may touching the
+                # follow-up matching block on the other side.
+                # Advance the one whose next block comes sooner.
+                if ia + 1 == len_a:
+                    # if we run out of blocks on A side, we may as well advance B
+                    # since there's nothing on A side for that to touch
+                    ib += 1
+                elif ib + 1 == len_b:
+                    ia += 1
+                elif amatches[ia + 1][0] > bmatches[ib + 1][0]:
+                    ib += 1
+                elif amatches[ia + 1][0] < bmatches[ib + 1][0]:
+                    ia += 1
+                else:
+                    # symmetric situation: both sides added lines to the same place
+                    # it's less surprising if we treat it as a conflict, so skip
+                    # both without a preferred order
+                    ia += 1
+                    ib += 1
 
         intbase = len(self.base)
         abase = len(self.a)
         bbase = len(self.b)
-        sl.append((intbase, intbase, abase, abase, bbase, bbase))
+        sentinel_hunk = (intbase, intbase, abase, abase, bbase, bbase)
+        # we avoid duplicate sentinel hunk at the end to make the
+        # test output cleaner
+        if not (sl and sl[len(sl) - 1] == sentinel_hunk):
+            sl.append(sentinel_hunk)
 
         return sl
 
@@ -497,6 +565,7 @@ def simplemerge(
     other,
     mode=b'merge',
     allow_binary=False,
+    relaxed_sync=False,
 ):
     """Performs the simplemerge algorithm.
 
@@ -508,7 +577,9 @@ def simplemerge(
         _verifytext(base)
         _verifytext(other)
 
-    m3 = Merge3Text(base.text(), local.text(), other.text())
+    m3 = Merge3Text(
+        base.text(), local.text(), other.text(), relaxed_sync=relaxed_sync
+    )
     conflicts = False
     if mode == b'union':
         lines = _resolve(m3, (1, 2))

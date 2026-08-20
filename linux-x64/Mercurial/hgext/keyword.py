@@ -83,12 +83,13 @@ like CVS' $Log$, are not supported. A keyword template map "Log =
 '''
 
 
+from __future__ import annotations
+
 import os
 import re
 import weakref
 
 from mercurial.i18n import _
-from mercurial.pycompat import getattr
 from mercurial.hgweb import webcommands
 
 from mercurial import (
@@ -101,6 +102,7 @@ from mercurial import (
     localrepo,
     logcmdutil,
     match,
+    merge,
     patch,
     pathutil,
     pycompat,
@@ -131,7 +133,7 @@ nokwcommands = (
 )
 
 # webcommands that do not act on keywords
-nokwwebcommands = b'annotate changeset rev filediff diff comparison'
+nokwwebcommands = 'annotate changeset rev filediff diff comparison'
 
 # hg commands that trigger expansion only when writing to working dir,
 # not when reading filelog, and unexpand when reading from working dir
@@ -161,6 +163,8 @@ configitem(
     b'svn',
     default=False,
 )
+
+
 # date like in cvs' $Date
 @templatefilter(b'utcdate', intype=templateutil.date)
 def utcdate(date):
@@ -394,13 +398,13 @@ class kwfilelog(filelog.filelog):
     """
 
     def __init__(self, opener, kwt, path):
-        super(kwfilelog, self).__init__(opener, path)
+        super().__init__(opener, path)
         self.kwt = kwt
         self.path = path
 
     def read(self, node):
         '''Expands keywords when reading filelog.'''
-        data = super(kwfilelog, self).read(node)
+        data = super().read(node)
         if self.renamed(node):
             return data
         return self.kwt.expand(self.path, node, data)
@@ -408,23 +412,22 @@ class kwfilelog(filelog.filelog):
     def add(self, text, meta, tr, link, p1=None, p2=None):
         '''Removes keyword substitutions when adding to filelog.'''
         text = self.kwt.shrink(self.path, text)
-        return super(kwfilelog, self).add(text, meta, tr, link, p1, p2)
+        return super().add(text, meta, tr, link, p1, p2)
 
     def cmp(self, node, text):
         '''Removes keyword substitutions for comparison.'''
         text = self.kwt.shrink(self.path, text)
-        return super(kwfilelog, self).cmp(node, text)
+        return super().cmp(node, text)
 
 
 def _status(ui, repo, wctx, kwt, *pats, **opts):
     """Bails out if [keyword] configuration is not active.
     Returns status of working directory."""
     if kwt:
-        opts = pycompat.byteskwargs(opts)
         return repo.status(
-            match=scmutil.match(wctx, pats, opts),
+            match=scmutil.match(wctx, pats, pycompat.byteskwargs(opts)),
             clean=True,
-            unknown=opts.get(b'unknown') or opts.get(b'all'),
+            unknown=opts.get('unknown') or opts.get('all'),
         )
     if ui.configitems(b'keyword'):
         raise error.Abort(_(b'[keyword] patterns cannot match'))
@@ -540,7 +543,7 @@ def demo(ui, repo, *args, **opts):
             if name.split(b'.', 1)[0].find(b'commit') > -1:
                 repo.ui.setconfig(b'hooks', name, b'', b'keyword')
         msg = _(b'hg keyword configuration and expansion example')
-        ui.note((b"hg ci -m '%s'\n" % msg))
+        ui.notenoi18n(b"hg ci -m '%s'\n" % msg)
         repo.commit(text=msg)
     ui.status(_(b'\n\tkeywords expanded\n'))
     ui.write(repo.wread(fn))
@@ -604,26 +607,26 @@ def files(ui, repo, *pats, **opts):
     else:
         cwd = b''
     files = []
-    opts = pycompat.byteskwargs(opts)
-    if not opts.get(b'unknown') or opts.get(b'all'):
+
+    if not opts.get('unknown') or opts.get('all'):
         files = sorted(status.modified + status.added + status.clean)
     kwfiles = kwt.iskwfile(files, wctx)
     kwdeleted = kwt.iskwfile(status.deleted, wctx)
     kwunknown = kwt.iskwfile(status.unknown, wctx)
-    if not opts.get(b'ignore') or opts.get(b'all'):
+    if not opts.get('ignore') or opts.get('all'):
         showfiles = kwfiles, kwdeleted, kwunknown
     else:
         showfiles = [], [], []
-    if opts.get(b'all') or opts.get(b'ignore'):
+    if opts.get('all') or opts.get('ignore'):
         showfiles += (
             [f for f in files if f not in kwfiles],
             [f for f in status.unknown if f not in kwunknown],
         )
     kwlabels = b'enabled deleted enabledunknown ignored ignoredunknown'.split()
     kwstates = zip(kwlabels, pycompat.bytestr(b'K!kIi'), showfiles)
-    fm = ui.formatter(b'kwfiles', opts)
+    fm = ui.formatter(b'kwfiles', pycompat.byteskwargs(opts))
     fmt = b'%.0s%s\n'
-    if opts.get(b'all') or ui.verbose:
+    if opts.get('all') or ui.verbose:
         fmt = b'%s %s\n'
     for kwstate, char, filenames in kwstates:
         label = b'kwfiles.' + kwstate
@@ -671,8 +674,7 @@ def kwdiff(orig, repo, *args, **kwargs):
         restrict = kwt.restrict
         kwt.restrict = True
     try:
-        for chunk in orig(repo, *args, **kwargs):
-            yield chunk
+        yield from orig(repo, *args, **kwargs)
     finally:
         if kwt:
             kwt.restrict = restrict
@@ -685,8 +687,7 @@ def kwweb_skip(orig, web):
         origmatch = kwt.match
         kwt.match = util.never
     try:
-        for chunk in orig(web):
-            yield chunk
+        yield from orig(web)
     finally:
         if kwt:
             kwt.match = origmatch
@@ -806,16 +807,17 @@ def uisetup(ui):
         kwtools[b'hgcmd'] = cmd
         return cmd, func, args, options, cmdoptions
 
-    extensions.wrapfunction(dispatch, b'_parse', kwdispatch_parse)
+    extensions.wrapfunction(dispatch, '_parse', kwdispatch_parse)
 
-    extensions.wrapfunction(context.filectx, b'cmp', kwfilectx_cmp)
-    extensions.wrapfunction(patch.patchfile, b'__init__', kwpatchfile_init)
-    extensions.wrapfunction(patch, b'diff', kwdiff)
-    extensions.wrapfunction(cmdutil, b'amend', kw_amend)
-    extensions.wrapfunction(cmdutil, b'copy', kw_copy)
-    extensions.wrapfunction(cmdutil, b'dorecord', kw_dorecord)
+    extensions.wrapfunction(context.filectx, 'cmp', kwfilectx_cmp)
+    extensions.wrapfunction(patch.patchfile, '__init__', kwpatchfile_init)
+    extensions.wrapfunction(patch, 'diff', kwdiff)
+    extensions.wrapfunction(cmdutil, 'amend', kw_amend)
+    extensions.wrapfunction(cmdutil, 'copy', kw_copy)
+    extensions.wrapfunction(cmdutil, 'dorecord', kw_dorecord)
     for c in nokwwebcommands.split():
         extensions.wrapfunction(webcommands, c, kwweb_skip)
+    merge.MAYBE_USE_RUST_UPDATE = False
 
 
 def reposetup(ui, repo):
@@ -850,7 +852,7 @@ def reposetup(ui, repo):
             return kwfilelog(self.svfs, kwt, f)
 
         def wread(self, filename):
-            data = super(kwrepo, self).wread(filename)
+            data = super().wread(filename)
             return kwt.wread(filename, data)
 
         def commit(self, *args, **opts):
@@ -858,12 +860,12 @@ def reposetup(ui, repo):
             # other extensions can still wrap repo.commitctx directly
             self.commitctx = self.kwcommitctx
             try:
-                return super(kwrepo, self).commit(*args, **opts)
+                return super().commit(*args, **opts)
             finally:
                 del self.commitctx
 
         def kwcommitctx(self, ctx, error=False, origctx=None):
-            n = super(kwrepo, self).commitctx(ctx, error, origctx)
+            n = super().commitctx(ctx, error, origctx)
             # no lock needed, only called from repo.commit() which already locks
             if not kwt.postcommit:
                 restrict = kwt.restrict
@@ -880,7 +882,7 @@ def reposetup(ui, repo):
                 try:
                     if not dryrun:
                         changed = self[b'.'].files()
-                    ret = super(kwrepo, self).rollback(dryrun, force)
+                    ret = super().rollback(dryrun, force)
                     if not dryrun:
                         ctx = self[b'.']
                         modified, added = _preselect(ctx.status(), changed)

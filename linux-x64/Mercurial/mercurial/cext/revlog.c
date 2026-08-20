@@ -90,6 +90,7 @@ struct indexObjectStruct {
 	int ntlookups;          /* # lookups */
 	int ntmisses;           /* # lookups that miss the cache */
 	int inlined;
+	int uses_generaldelta; /* whether this index uses generaldelta */
 	long entry_size; /* size of index headers. Differs in v1 v.s. v2 format
 	                  */
 	long rust_ext_compat; /* compatibility with being used in rust
@@ -909,6 +910,19 @@ static inline void set_phase_from_parents(char *phases, int parent_1,
 		phases[i] = phases[parent_2];
 }
 
+/* Take ownership of a given Python value and add it to a Python list.
+   Return -1 on failure (including if [elem] is NULL). */
+static int pylist_append_owned(PyObject *list, PyObject *elem)
+{
+	int res;
+
+	if (elem == NULL)
+		return -1;
+	res = PyList_Append(list, elem);
+	Py_DECREF(elem);
+	return res;
+}
+
 static PyObject *reachableroots2(indexObject *self, PyObject *args)
 {
 
@@ -921,7 +935,6 @@ static PyObject *reachableroots2(indexObject *self, PyObject *args)
 	PyObject *roots = NULL;
 	PyObject *reachable = NULL;
 
-	PyObject *val;
 	Py_ssize_t len = index_length(self);
 	long revnum;
 	Py_ssize_t k;
@@ -1002,11 +1015,8 @@ static PyObject *reachableroots2(indexObject *self, PyObject *args)
 		revnum = tovisit[k++];
 		if (revstates[revnum + 1] & RS_ROOT) {
 			revstates[revnum + 1] |= RS_REACHABLE;
-			val = PyLong_FromLong(revnum);
-			if (val == NULL)
-				goto bail;
-			r = PyList_Append(reachable, val);
-			Py_DECREF(val);
+			r = pylist_append_owned(reachable,
+			                        PyLong_FromLong(revnum));
 			if (r < 0)
 				goto bail;
 			if (includepath == 0)
@@ -1047,11 +1057,8 @@ static PyObject *reachableroots2(indexObject *self, PyObject *args)
 			     RS_REACHABLE) &&
 			    !(revstates[i + 1] & RS_REACHABLE)) {
 				revstates[i + 1] |= RS_REACHABLE;
-				val = PyLong_FromSsize_t(i);
-				if (val == NULL)
-					goto bail;
-				r = PyList_Append(reachable, val);
-				Py_DECREF(val);
+				r = pylist_append_owned(reachable,
+				                        PyLong_FromSsize_t(i));
 				if (r < 0)
 					goto bail;
 			}
@@ -1075,7 +1082,6 @@ static int add_roots_get_min(indexObject *self, PyObject *roots, char *phases,
 	PyObject *item;
 	PyObject *iterator;
 	int rev, minrev = -1;
-	char *node;
 
 	if (!PySet_Check(roots)) {
 		PyErr_SetString(PyExc_TypeError,
@@ -1086,9 +1092,10 @@ static int add_roots_get_min(indexObject *self, PyObject *roots, char *phases,
 	if (iterator == NULL)
 		return -2;
 	while ((item = PyIter_Next(iterator))) {
-		if (node_check(self->nodelen, item, &node) == -1)
+		rev = (int)PyLong_AsLong(item);
+		if (rev == -1 && PyErr_Occurred()) {
 			goto failed;
-		rev = index_find_node(self, node);
+		}
 		/* null is implicitly public, so negative is invalid */
 		if (rev < 0 || rev >= len)
 			goto failed;
@@ -1231,22 +1238,36 @@ release:
 
 static PyObject *index_headrevs(indexObject *self, PyObject *args)
 {
-	Py_ssize_t i, j, len;
+	Py_ssize_t i, j, len, stop_rev;
 	char *nothead = NULL;
 	PyObject *heads = NULL;
 	PyObject *filter = NULL;
 	PyObject *filteredrevs = Py_None;
+	PyObject *stop_rev_obj = Py_None;
 
-	if (!PyArg_ParseTuple(args, "|O", &filteredrevs)) {
+	if (!PyArg_ParseTuple(args, "|OO", &filteredrevs, &stop_rev_obj)) {
 		return NULL;
 	}
 
-	if (self->headrevs && filteredrevs == self->filteredrevs)
+	len = index_length(self);
+	if (stop_rev_obj == Py_None) {
+		stop_rev = len;
+	} else {
+		stop_rev = PyLong_AsSsize_t(stop_rev_obj);
+		if (stop_rev == -1 && PyErr_Occurred() != NULL) {
+			return NULL;
+		}
+	}
+
+	if (self->headrevs && filteredrevs == self->filteredrevs &&
+	    stop_rev == len)
 		return list_copy(self->headrevs);
 
-	Py_DECREF(self->filteredrevs);
-	self->filteredrevs = filteredrevs;
-	Py_INCREF(filteredrevs);
+	if (stop_rev == len) {
+		Py_DECREF(self->filteredrevs);
+		self->filteredrevs = filteredrevs;
+		Py_INCREF(filteredrevs);
+	}
 
 	if (filteredrevs != Py_None) {
 		filter = PyObject_GetAttrString(filteredrevs, "__contains__");
@@ -1258,26 +1279,24 @@ static PyObject *index_headrevs(indexObject *self, PyObject *args)
 		}
 	}
 
-	len = index_length(self);
 	heads = PyList_New(0);
 	if (heads == NULL)
 		goto bail;
-	if (len == 0) {
-		PyObject *nullid = PyLong_FromLong(-1);
-		if (nullid == NULL || PyList_Append(heads, nullid) == -1) {
+	if (stop_rev == 0) {
+		if (pylist_append_owned(heads, PyLong_FromLong(-1)) == -1) {
 			Py_XDECREF(nullid);
 			goto bail;
 		}
 		goto done;
 	}
 
-	nothead = calloc(len, 1);
+	nothead = calloc(stop_rev, 1);
 	if (nothead == NULL) {
 		PyErr_NoMemory();
 		goto bail;
 	}
 
-	for (i = len - 1; i >= 0; i--) {
+	for (i = stop_rev - 1; i >= 0; i--) {
 		int isfiltered;
 		int parents[2];
 
@@ -1299,7 +1318,7 @@ static PyObject *index_headrevs(indexObject *self, PyObject *args)
 			}
 		}
 
-		if (index_get_parents(self, i, parents, (int)len - 1) < 0)
+		if (index_get_parents(self, i, parents, (int)stop_rev - 1) < 0)
 			goto bail;
 		for (j = 0; j < 2; j++) {
 			if (parents[j] >= 0)
@@ -1307,27 +1326,218 @@ static PyObject *index_headrevs(indexObject *self, PyObject *args)
 		}
 	}
 
-	for (i = 0; i < len; i++) {
-		PyObject *head;
-
+	for (i = 0; i < stop_rev; i++) {
 		if (nothead[i])
 			continue;
-		head = PyLong_FromSsize_t(i);
-		if (head == NULL || PyList_Append(heads, head) == -1) {
-			Py_XDECREF(head);
+		if (pylist_append_owned(heads, PyLong_FromSsize_t(i)) == -1) {
 			goto bail;
 		}
 	}
 
 done:
-	self->headrevs = heads;
 	Py_XDECREF(filter);
 	free(nothead);
-	return list_copy(self->headrevs);
+	if (stop_rev == len) {
+		self->headrevs = heads;
+		return list_copy(self->headrevs);
+	} else {
+		return heads;
+	}
 bail:
 	Py_XDECREF(filter);
 	Py_XDECREF(heads);
 	free(nothead);
+	return NULL;
+}
+
+/* "rgs" stands for "reverse growable set".
+   It is a representation of a set of integers that can't exceed, but
+   tend to be close to `max`.
+
+   `body` is a growable bit array covering the range `max-len+1..max`,
+   in reverse order.
+   `sum` keeps track of the cardinality of the set.
+*/
+typedef struct rgs {
+	int max;
+	int len;
+	char *body;
+	int sum;
+} rgs;
+
+static int rgs_offset(rgs *rgs, int i)
+{
+	return rgs->max - i;
+}
+
+/* returns 1 on success, 0 on failure */
+static int rgs_alloc(rgs *rgs, int max)
+{
+	int new_len = 64;
+	char *new_body = calloc(new_len, 1);
+	if (new_body == NULL)
+		return 0;
+	rgs->len = new_len;
+	rgs->body = new_body;
+	rgs->max = max;
+	rgs->sum = 0;
+	return 1;
+}
+
+static bool rgs_get(rgs *rgs, int i)
+{
+	int offset = rgs_offset(rgs, i);
+	if (offset >= rgs->len) {
+		return 0;
+	}
+	if (offset < 0) {
+		abort();
+	}
+	return rgs->body[offset];
+}
+
+/* Realloc `body` to length `new_len`.
+   Returns -1 when out of memory. */
+static int rgs_realloc(rgs *rgs, int new_len)
+{
+	int old_len = rgs->len;
+	char *old_body = rgs->body;
+	char *new_body = calloc(new_len, 1);
+	assert(new_len >= old_len);
+	if (new_body == NULL)
+		return -1;
+	memcpy(new_body, old_body, old_len);
+	free(old_body);
+	rgs->body = new_body;
+	rgs->len = new_len;
+	return 0;
+}
+
+/* Realloc the rgs `body` to include the `offset` */
+static int rgs_realloc_amortized(rgs *rgs, int offset)
+{
+	int old_len = rgs->len;
+	int new_len = old_len * 4;
+	if (offset >= new_len)
+		new_len = offset + 1;
+	return rgs_realloc(rgs, new_len);
+}
+
+/* returns 0 on success, -1 on error */
+static int rgs_set(rgs *rgs, int i, bool v)
+{
+	int offset = rgs_offset(rgs, i);
+	if (offset >= rgs->len) {
+		if (v == 0) {
+			/* no-op change: no need to resize */
+			return 0;
+		}
+		if (rgs_realloc_amortized(rgs, offset) == -1)
+			return -1;
+	}
+	if (offset < 0) {
+		abort();
+	}
+	rgs->sum -= rgs->body[offset];
+	rgs->sum += v;
+	rgs->body[offset] = v;
+	return 0;
+}
+
+/* Add a size_t value to a Python list. Return -1 on failure. */
+static inline int pylist_append_size_t(PyObject *list, size_t v)
+{
+	return pylist_append_owned(list, PyLong_FromSsize_t(v));
+}
+
+static PyObject *index_headrevsdiff(indexObject *self, PyObject *args)
+{
+	int begin, end;
+	Py_ssize_t i, j;
+	PyObject *heads_added = NULL;
+	PyObject *heads_removed = NULL;
+	PyObject *res = NULL;
+	rgs rgs;
+	rgs.body = NULL;
+
+	if (!PyArg_ParseTuple(args, "ii", &begin, &end))
+		goto bail;
+
+	if (!rgs_alloc(&rgs, end))
+		goto bail;
+
+	heads_added = PyList_New(0);
+	if (heads_added == NULL)
+		goto bail;
+	heads_removed = PyList_New(0);
+	if (heads_removed == NULL)
+		goto bail;
+
+	for (i = end - 1; i >= begin; i--) {
+		int parents[2];
+
+		if (rgs_get(&rgs, i)) {
+			if (rgs_set(&rgs, i, false) == -1) {
+				goto bail;
+			};
+		} else {
+			if (pylist_append_size_t(heads_added, i) == -1) {
+				goto bail;
+			}
+		}
+
+		if (index_get_parents(self, i, parents, i) < 0)
+			goto bail;
+		for (j = 0; j < 2; j++) {
+			if (parents[j] >= 0)
+				if (rgs_set(&rgs, parents[j], true) == -1) {
+					goto bail;
+				}
+		}
+	}
+
+	while (rgs.sum) {
+		int parents[2];
+
+		if (rgs_get(&rgs, i)) {
+			if (rgs_set(&rgs, i, false) == -1) {
+				goto bail;
+			}
+			if (pylist_append_size_t(heads_removed, i) == -1) {
+				goto bail;
+			}
+		}
+
+		if (index_get_parents(self, i, parents, i) < 0)
+			goto bail;
+		for (j = 0; j < 2; j++) {
+			if (parents[j] >= 0)
+				if (rgs_set(&rgs, parents[j], false) == -1) {
+					/* can't actually fail */
+					goto bail;
+				}
+		}
+		i--;
+	}
+
+	if (begin == 0 && end > 0) {
+		if (pylist_append_size_t(heads_removed, -1) == -1) {
+			goto bail;
+		}
+	}
+
+	if (!(res = PyTuple_Pack(2, heads_removed, heads_added))) {
+		goto bail;
+	}
+
+	Py_XDECREF(heads_removed);
+	Py_XDECREF(heads_added);
+	free(rgs.body);
+	return res;
+bail:
+	Py_XDECREF(heads_added);
+	Py_XDECREF(heads_removed);
+	free(rgs.body);
 	return NULL;
 }
 
@@ -1515,14 +1725,14 @@ bail:
 
 static PyObject *index_deltachain(indexObject *self, PyObject *args)
 {
-	int rev, generaldelta;
+	int rev;
 	PyObject *stoparg;
 	int stoprev, iterrev, baserev = -1;
 	int stopped;
 	PyObject *chain = NULL, *result = NULL;
 	const Py_ssize_t length = index_length(self);
 
-	if (!PyArg_ParseTuple(args, "iOi", &rev, &stoparg, &generaldelta)) {
+	if (!PyArg_ParseTuple(args, "iO", &rev, &stoparg)) {
 		return NULL;
 	}
 
@@ -1561,17 +1771,11 @@ static PyObject *index_deltachain(indexObject *self, PyObject *args)
 	iterrev = rev;
 
 	while (iterrev != baserev && iterrev != stoprev) {
-		PyObject *value = PyLong_FromLong(iterrev);
-		if (value == NULL) {
+		if (pylist_append_owned(chain, PyLong_FromLong(iterrev))) {
 			goto bail;
 		}
-		if (PyList_Append(chain, value)) {
-			Py_DECREF(value);
-			goto bail;
-		}
-		Py_DECREF(value);
 
-		if (generaldelta) {
+		if (self->uses_generaldelta) {
 			iterrev = baserev;
 		} else {
 			iterrev--;
@@ -1600,15 +1804,9 @@ static PyObject *index_deltachain(indexObject *self, PyObject *args)
 	if (iterrev == stoprev) {
 		stopped = 1;
 	} else {
-		PyObject *value = PyLong_FromLong(iterrev);
-		if (value == NULL) {
+		if (pylist_append_owned(chain, PyLong_FromLong(iterrev))) {
 			goto bail;
 		}
-		if (PyList_Append(chain, value)) {
-			Py_DECREF(value);
-			goto bail;
-		}
-		Py_DECREF(value);
 
 		stopped = 0;
 	}
@@ -1727,7 +1925,6 @@ static PyObject *index_slicechunktodensity(indexObject *self, PyObject *args)
 	    0; /* total number of notable gap recorded so far */
 	Py_ssize_t *selected_indices = NULL; /* indices of gap skipped over */
 	Py_ssize_t num_selected = 0;         /* number of gaps skipped */
-	PyObject *chunk = NULL;              /* individual slice */
 	PyObject *allchunks = NULL;          /* all slices */
 	Py_ssize_t previdx;
 
@@ -1872,15 +2069,11 @@ static PyObject *index_slicechunktodensity(indexObject *self, PyObject *args)
 			goto bail;
 		}
 		if (previdx < endidx) {
-			chunk = PyList_GetSlice(list_revs, previdx, endidx);
-			if (chunk == NULL) {
+			PyObject *chunk =
+			    PyList_GetSlice(list_revs, previdx, endidx);
+			if (pylist_append_owned(allchunks, chunk) == -1) {
 				goto bail;
 			}
-			if (PyList_Append(allchunks, chunk) == -1) {
-				goto bail;
-			}
-			Py_DECREF(chunk);
-			chunk = NULL;
 		}
 		previdx = idx;
 	}
@@ -1889,7 +2082,6 @@ static PyObject *index_slicechunktodensity(indexObject *self, PyObject *args)
 
 bail:
 	Py_XDECREF(allchunks);
-	Py_XDECREF(chunk);
 done:
 	free(revs);
 	free(gaps);
@@ -2534,11 +2726,8 @@ static PyObject *find_gca_candidates(indexObject *self, const int *revs,
 		if (sv < poison) {
 			interesting -= 1;
 			if (sv == allseen) {
-				PyObject *obj = PyLong_FromLong(v);
-				if (obj == NULL)
-					goto bail;
-				if (PyList_Append(gca, obj) == -1) {
-					Py_DECREF(obj);
+				if (pylist_append_owned(
+				        gca, PyLong_FromLong(v)) == -1) {
 					goto bail;
 				}
 				sv |= poison;
@@ -3018,10 +3207,11 @@ static Py_ssize_t inline_scan(indexObject *self, const char **offsets)
 
 static int index_init(indexObject *self, PyObject *args, PyObject *kwargs)
 {
-	PyObject *data_obj, *inlined_obj;
+	PyObject *data_obj, *inlined_obj, *generaldelta_obj;
 	Py_ssize_t size;
 
-	static char *kwlist[] = {"data", "inlined", "format", NULL};
+	static char *kwlist[] = {"data", "inlined", "uses_generaldelta",
+	                         "format", NULL};
 
 	/* Initialize before argument-checking to avoid index_dealloc() crash.
 	 */
@@ -3037,12 +3227,13 @@ static int index_init(indexObject *self, PyObject *args, PyObject *kwargs)
 	self->offsets = NULL;
 	self->nodelen = 20;
 	self->nullentry = NULL;
-	self->rust_ext_compat = 1;
+	self->uses_generaldelta = 0;
+	self->rust_ext_compat = 0;
 	self->format_version = format_v1;
 
-	if (!PyArg_ParseTupleAndKeywords(args, kwargs, "OO|l", kwlist,
-	                                 &data_obj, &inlined_obj,
-	                                 &(self->format_version)))
+	if (!PyArg_ParseTupleAndKeywords(
+	        args, kwargs, "OOO|l", kwlist, &data_obj, &inlined_obj,
+	        &generaldelta_obj, &(self->format_version)))
 		return -1;
 	if (!PyObject_CheckBuffer(data_obj)) {
 		PyErr_SetString(PyExc_TypeError,
@@ -3075,6 +3266,8 @@ static int index_init(indexObject *self, PyObject *args, PyObject *kwargs)
 	size = self->buf.len;
 
 	self->inlined = inlined_obj && PyObject_IsTrue(inlined_obj);
+	self->uses_generaldelta =
+	    generaldelta_obj && PyObject_IsTrue(generaldelta_obj);
 	self->data = data_obj;
 
 	self->ntlookups = self->ntmisses = 0;
@@ -3160,6 +3353,8 @@ static PyMappingMethods index_mapping_methods = {
 static PyMethodDef index_methods[] = {
     {"ancestors", (PyCFunction)index_ancestors, METH_VARARGS,
      "return the gca set of the given revs"},
+    {"headrevsdiff", (PyCFunction)index_headrevsdiff, METH_VARARGS,
+     "return the set of heads removed/added by a range of commits"},
     {"commonancestorsheads", (PyCFunction)index_commonancestorsheads,
      METH_VARARGS,
      "return the heads of the common ancestors of the given revs"},
@@ -3179,9 +3374,7 @@ static PyMethodDef index_methods[] = {
     {"replace_sidedata_info", (PyCFunction)index_replace_sidedata_info,
      METH_VARARGS, "replace an existing index entry with a new value"},
     {"headrevs", (PyCFunction)index_headrevs, METH_VARARGS,
-     "get head revisions"}, /* Can do filtering since 3.2 */
-    {"headrevsfiltered", (PyCFunction)index_headrevs, METH_VARARGS,
-     "get filtered head revisions"}, /* Can always do filtering */
+     "get head revisions"},
     {"issnapshot", (PyCFunction)index_issnapshot, METH_O,
      "True if the object is a snapshot"},
     {"findsnapshots", (PyCFunction)index_findsnapshots, METH_VARARGS,

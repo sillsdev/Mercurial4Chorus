@@ -1,0 +1,101 @@
+#!/usr/bin/make -f
+# Uncomment this to turn on verbose mode.
+# export DH_VERBOSE=1
+
+# By default we build a .deb where the native components are built with the
+# current "default" version of py3 on the build machine. If you wish to build a
+# .deb that has native components built for multiple versions of py3:
+#
+#   1. install python3.x and python3.x-dev for each version you want
+#   2. set DEB_HG_MULTI_VERSION=1 or DEB_HG_PYTHON_VERSIONS in your environment
+#      (if both are set, DEB_HG_PYTHON_VERSIONS has precedence)
+#
+# If you choose `DEB_HG_MULTI_VERSION=1`, it will build for every "supported"
+# version of py3 that's installed on the build machine. This may not be equal to
+# the actual versions that are installed, see the comment above where we set
+# DEB_HG_PYTHON_VERSIONS below. If you choose to set `DEB_HG_PYTHON_VERSIONS`
+# yourself, set it to a space-separated string of python version numbers, like:
+#   DEB_HG_PYTHON_VERSIONS="3.8" make deb
+DEB_HG_MULTI_VERSION?=0
+
+# Set to 1 to make /usr/bin/hg a symlink to chg, and move hg to
+# /usr/lib/mercurial/hg.
+DEB_HG_CHG_BY_DEFAULT?=0
+
+CPUS=$(shell cat /proc/cpuinfo | grep -E ^processor | wc -l)
+
+# By default, only build for the version of python3 that the system considers
+# the 'default' (which should be the one invoked by just running 'python3'
+# without a minor version). If DEB_HG_PYTHON_VERSIONS is set, this is ignored.
+ifeq ($(DEB_HG_MULTI_VERSION), 1)
+	# If we're building for multiple versions, use all of the "supported" versions
+	# on the build machine. Note: the mechanism in use here (`py3versions`) is the
+	# recommended one, but it relies on a file written by the python3-minimal
+	# package, and this file is not dynamic and does not account for manual
+	# installations, just the ones that would be installed by `python3-all`. This
+	# includes the `-i` flag, which claims it's to list all "installed" versions,
+	# but it doesn't. This was quite confusing, hence this tale of woe. :)
+	DEB_HG_PYTHON_VERSIONS?=$(shell py3versions -vs)
+else
+	# If we're building for only one version, identify the "default" version on
+	# the build machine and use that when building; this is just so that we don't
+	# have to duplicate the rules below for multi-version vs. single-version. The
+	# shebang line will still be /usr/bin/python3 (no minor version).
+	DEB_HG_PYTHON_VERSIONS?=$(shell py3versions -vd)
+endif
+
+ifeq ($(DEB_HG_CHG_BY_DEFAULT), 1)
+	# Important: the "real" hg must have a 'basename' of 'hg'. Otherwise, hg
+	# behaves differently when setting $HG and breaks aliases that use that.
+	export HGPATH=/usr/lib/mercurial/hg
+endif
+
+export HGPYTHON3=1
+export PYTHON=python3
+
+%:
+	dh $@ --with python3
+
+# Note: testing can be disabled using the standard `DEB_BUILD_OPTIONS=nocheck`
+override_dh_auto_test:
+	http_proxy='' dh_auto_test -- TESTFLAGS="-j$(CPUS)"
+
+override_dh_python3:
+	dh_python3 --shebang=/usr/bin/python3
+
+override_dh_auto_clean:
+	$(MAKE) cleanbutpackages
+	$(MAKE) -C contrib/chg clean
+
+override_dh_auto_build:
+	$(MAKE) all
+	$(MAKE) -C contrib/chg all
+
+# Build the native extensions for a specfic python3 version (which must be
+# installed on the build machine).
+install-python%:
+	python$* setup.py install --root "$(CURDIR)"/debian/mercurial --install-layout=deb
+
+# Build the final package. This rule has a dependencies section that causes the
+# native extensions to be compiled for every version of python3 listed in
+# DEB_HG_PYTHON_VERSIONS.
+override_dh_auto_install: $(DEB_HG_PYTHON_VERSIONS:%=install-python%)
+	# chg
+	make -C contrib/chg \
+		DESTDIR="$(CURDIR)"/debian/mercurial \
+		PREFIX=/usr \
+		install
+	make install-doc PREFIX="$(CURDIR)"/debian/mercurial/usr
+	cp contrib/hg-ssh "$(CURDIR)"/debian/mercurial/usr/bin
+	mkdir -p "$(CURDIR)"/debian/mercurial/usr/share/mercurial
+	cp contrib/hgk "$(CURDIR)"/debian/mercurial/usr/share/mercurial
+	mkdir -p "$(CURDIR)"/debian/mercurial/etc/mercurial/hgrc.d/
+	cp contrib/packaging/debian/*.rc "$(CURDIR)"/debian/mercurial/etc/mercurial/hgrc.d/
+	# completions
+	mkdir -p "$(CURDIR)"/debian/mercurial/usr/share/zsh/vendor-completions
+	mv "$(CURDIR)"/debian/mercurial/usr/share/zsh/site-functions/_hg "$(CURDIR)"/debian/mercurial/usr/share/zsh/vendor-completions/_hg
+	if [ "$(DEB_HG_CHG_BY_DEFAULT)" -eq 1 ]; then \
+		mkdir -p "$(CURDIR)"/debian/mercurial/usr/lib/mercurial; \
+		mv "$(CURDIR)"/debian/mercurial/usr/bin/hg "$(CURDIR)"/debian/mercurial/usr/lib/mercurial/hg; \
+		ln -s chg "$(CURDIR)"/debian/mercurial/usr/bin/hg; \
+	fi

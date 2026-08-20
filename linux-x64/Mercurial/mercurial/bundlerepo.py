@@ -11,9 +11,12 @@ This provides a read-only repository interface to bundles as if they
 were part of the actual repository.
 """
 
+from __future__ import annotations
 
+import contextlib
 import os
 import shutil
+import typing
 
 from .i18n import _
 from .node import (
@@ -52,7 +55,11 @@ from .revlogutils import (
 
 
 class bundlerevlog(revlog.revlog):
-    def __init__(self, opener, target, radix, cgunpacker, linkmapper):
+    def __init__(
+        self, opener: typing.Any, target, radix, cgunpacker, linkmapper
+    ):
+        # TODO: figure out real type of opener
+        #
         # How it works:
         # To retrieve a revision, we need to know the offset of the revision in
         # the bundle (an unbundle object). We store this offset in the index
@@ -108,12 +115,20 @@ class bundlerevlog(revlog.revlog):
             self.bundlerevs.add(n)
             n += 1
 
-    def _chunk(self, rev, df=None):
+    @contextlib.contextmanager
+    def reading(self):
+        if self.repotiprev < 0:
+            yield
+        else:
+            with super().reading() as x:
+                yield x
+
+    def _chunk(self, rev):
         # Warning: in case of bundle, the diff is against what we stored as
         # delta base, not against rev - 1
         # XXX: could use some caching
         if rev <= self.repotiprev:
-            return revlog.revlog._chunk(self, rev)
+            return super()._inner._chunk(rev)
         self.bundle.seek(self.start(rev))
         return self.bundle.read(self.length(rev))
 
@@ -129,7 +144,7 @@ class bundlerevlog(revlog.revlog):
 
         return mdiff.textdiff(self.rawdata(rev1), self.rawdata(rev2))
 
-    def _rawtext(self, node, rev, _df=None):
+    def _rawtext(self, node, rev):
         if rev is None:
             rev = self.rev(node)
         validated = False
@@ -138,16 +153,20 @@ class bundlerevlog(revlog.revlog):
         iterrev = rev
         # reconstruct the revision if it is from a changegroup
         while iterrev > self.repotiprev:
-            if self._revisioncache and self._revisioncache[1] == iterrev:
-                rawtext = self._revisioncache[2]
+            if (
+                self._inner._revisioncache
+                and self._inner._revisioncache[1] == iterrev
+            ):
+                rawtext = self._inner._revisioncache[2]
                 break
             chain.append(iterrev)
             iterrev = self.index[iterrev][3]
         if iterrev == nullrev:
             rawtext = b''
         elif rawtext is None:
-            r = super(bundlerevlog, self)._rawtext(
-                self.node(iterrev), iterrev, _df=_df
+            r = super()._rawtext(
+                self.node(iterrev),
+                iterrev,
             )
             __, rawtext, validated = r
         if chain:
@@ -194,6 +213,8 @@ class bundlemanifest(bundlerevlog, manifest.manifestrevlog):
         dirlogstarts=None,
         dir=b'',
     ):
+        # XXX manifestrevlog is not actually a revlog , so mixing it with
+        # bundlerevlog is not a good idea.
         manifest.manifestrevlog.__init__(self, nodeconstants, opener, tree=dir)
         bundlerevlog.__init__(
             self,
@@ -221,7 +242,7 @@ class bundlemanifest(bundlerevlog, manifest.manifestrevlog):
                 self._dirlogstarts,
                 dir=d,
             )
-        return super(bundlemanifest, self).dirlog(d)
+        return super().dirlog(d)
 
 
 class bundlefilelog(filelog.filelog):
@@ -244,19 +265,20 @@ class bundlepeer(localrepo.localpeer):
 
 class bundlephasecache(phases.phasecache):
     def __init__(self, *args, **kwargs):
-        super(bundlephasecache, self).__init__(*args, **kwargs)
-        if util.safehasattr(self, 'opener'):
+        super().__init__(*args, **kwargs)
+        if hasattr(self, 'opener'):
             self.opener = vfsmod.readonlyvfs(self.opener)
 
-    def write(self):
+    def write(self, repo):
         raise NotImplementedError
 
-    def _write(self, fp):
+    def _write(self, repo, fp):
         raise NotImplementedError
 
-    def _updateroots(self, phase, newroots, tr):
-        self.phaseroots[phase] = newroots
-        self.invalidate()
+    def _updateroots(self, repo, phase, newroots, tr, invalidate=True):
+        self._phaseroots[phase] = newroots
+        if invalidate:
+            self.invalidate()
         self.dirty = True
 
 
@@ -270,7 +292,13 @@ def _getfilestarts(cgunpacker):
     return filespos
 
 
-class bundlerepository:
+_bundle_repo_baseclass = object
+
+if typing.TYPE_CHECKING:
+    _bundle_repo_baseclass = localrepo.localrepository
+
+
+class bundlerepository(_bundle_repo_baseclass):
     """A repository instance that is a union of a local repo and a bundle.
 
     Instances represent a read-only repository composed of a local repository
@@ -392,7 +420,7 @@ class bundlerepository:
         with os.fdopen(fdtemp, 'wb') as fptemp:
             fptemp.write(header)
             while True:
-                chunk = readfn(2 ** 18)
+                chunk = readfn(2**18)
                 if not chunk:
                     break
                 fptemp.write(chunk)
@@ -471,7 +499,7 @@ class bundlerepository:
             linkmapper = self.unfiltered().changelog.rev
             return bundlefilelog(self.svfs, f, self._cgunpacker, linkmapper)
         else:
-            return super(bundlerepository, self).file(f)
+            return super().file(f)
 
     def close(self):
         """Close assigned bundle file immediately."""
@@ -501,7 +529,7 @@ class bundlerepository:
             self.ui.warn(msg % hex(p1))
         if self.changelog.repotiprev < p2rev:
             self.ui.warn(msg % hex(p2))
-        return super(bundlerepository, self).setparents(p1, p2)
+        return super().setparents(p1, p2)
 
 
 def instance(ui, path, create, intents=None, createopts=None):
@@ -589,6 +617,36 @@ class bundletransactionmanager:
         raise NotImplementedError
 
 
+class getremotechanges_state_tracker:
+    def __init__(self, peer, incoming, common, rheads):
+        # bundle file to be deleted
+        self.bundle = None
+        # bundle repo to be closed
+        self.bundlerepo = None
+        # remote peer connection to be closed
+        self.peer = peer
+        # if peer is remote, `localrepo` will be equal to
+        # `bundlerepo` when bundle is created.
+        self.localrepo = peer.local()
+
+        # `incoming` operation parameters:
+        # (these get mutated by _create_bundle)
+        self.incoming = incoming
+        self.common = common
+        self.rheads = rheads
+
+    def cleanup(self):
+        try:
+            if self.bundlerepo:
+                self.bundlerepo.close()
+        finally:
+            try:
+                if self.bundle:
+                    os.unlink(self.bundle)
+            finally:
+                self.peer.close()
+
+
 def getremotechanges(
     ui, repo, peer, onlyheads=None, bundlename=None, force=False
 ):
@@ -624,101 +682,127 @@ def getremotechanges(
     commonset = set(common)
     rheads = [x for x in rheads if x not in commonset]
 
-    bundle = None
-    bundlerepo = None
-    localrepo = peer.local()
-    if bundlename or not localrepo:
-        # create a bundle (uncompressed if peer repo is not local)
+    state = getremotechanges_state_tracker(peer, incoming, common, rheads)
 
-        # developer config: devel.legacy.exchange
-        legexc = ui.configlist(b'devel', b'legacy.exchange')
-        forcebundle1 = b'bundle2' not in legexc and b'bundle1' in legexc
-        canbundle2 = (
-            not forcebundle1
-            and peer.capable(b'getbundle')
-            and peer.capable(b'bundle2')
+    try:
+        csets = _getremotechanges_slowpath(
+            state, ui, repo, bundlename=bundlename, onlyheads=onlyheads
         )
-        if canbundle2:
-            with peer.commandexecutor() as e:
-                b2 = e.callcommand(
+        return (state.localrepo, csets, state.cleanup)
+    except:  # re-raises
+        state.cleanup()
+        raise
+
+
+def _create_bundle(state, ui, repo, bundlename, onlyheads):
+    # create a bundle (uncompressed if peer repo is not local)
+
+    # developer config: devel.legacy.exchange
+    legexc = ui.configlist(b'devel', b'legacy.exchange')
+    forcebundle1 = b'bundle2' not in legexc and b'bundle1' in legexc
+    canbundle2 = (
+        not forcebundle1
+        and state.peer.capable(b'getbundle')
+        and state.peer.capable(b'bundle2')
+    )
+    if canbundle2:
+        with state.peer.commandexecutor() as e:
+            b2 = e.callcommand(
+                b'getbundle',
+                {
+                    b'source': b'incoming',
+                    b'common': state.common,
+                    b'heads': state.rheads,
+                    b'bundlecaps': exchange.caps20to10(repo, role=b'client'),
+                    b'cg': True,
+                },
+            ).result()
+
+            fname = state.bundle = changegroup.writechunks(
+                ui, b2._forwardchunks(), bundlename
+            )
+    else:
+        if state.peer.capable(b'getbundle'):
+            with state.peer.commandexecutor() as e:
+                cg = e.callcommand(
                     b'getbundle',
                     {
                         b'source': b'incoming',
-                        b'common': common,
-                        b'heads': rheads,
-                        b'bundlecaps': exchange.caps20to10(
-                            repo, role=b'client'
-                        ),
-                        b'cg': True,
+                        b'common': state.common,
+                        b'heads': state.rheads,
+                    },
+                ).result()
+        elif onlyheads is None and not state.peer.capable(b'changegroupsubset'):
+            # compat with older servers when pulling all remote heads
+
+            with state.peer.commandexecutor() as e:
+                cg = e.callcommand(
+                    b'changegroup',
+                    {
+                        b'nodes': state.incoming,
+                        b'source': b'incoming',
                     },
                 ).result()
 
-                fname = bundle = changegroup.writechunks(
-                    ui, b2._forwardchunks(), bundlename
-                )
+            state.rheads = None
         else:
-            if peer.capable(b'getbundle'):
-                with peer.commandexecutor() as e:
-                    cg = e.callcommand(
-                        b'getbundle',
-                        {
-                            b'source': b'incoming',
-                            b'common': common,
-                            b'heads': rheads,
-                        },
-                    ).result()
-            elif onlyheads is None and not peer.capable(b'changegroupsubset'):
-                # compat with older servers when pulling all remote heads
+            with state.peer.commandexecutor() as e:
+                cg = e.callcommand(
+                    b'changegroupsubset',
+                    {
+                        b'bases': state.incoming,
+                        b'heads': state.rheads,
+                        b'source': b'incoming',
+                    },
+                ).result()
 
-                with peer.commandexecutor() as e:
-                    cg = e.callcommand(
-                        b'changegroup',
-                        {
-                            b'nodes': incoming,
-                            b'source': b'incoming',
-                        },
-                    ).result()
+        if state.localrepo:
+            bundletype = b"HG10BZ"
+        else:
+            bundletype = b"HG10UN"
+        fname = state.bundle = bundle2.writebundle(
+            ui, cg, bundlename, bundletype
+        )
+    # keep written bundle?
+    if bundlename:
+        state.bundle = None
 
-                rheads = None
-            else:
-                with peer.commandexecutor() as e:
-                    cg = e.callcommand(
-                        b'changegroupsubset',
-                        {
-                            b'bases': incoming,
-                            b'heads': rheads,
-                            b'source': b'incoming',
-                        },
-                    ).result()
+    return fname
 
-            if localrepo:
-                bundletype = b"HG10BZ"
-            else:
-                bundletype = b"HG10UN"
-            fname = bundle = bundle2.writebundle(ui, cg, bundlename, bundletype)
-        # keep written bundle?
-        if bundlename:
-            bundle = None
-        if not localrepo:
+
+def _getremotechanges_slowpath(
+    state, ui, repo, bundlename=None, onlyheads=None
+):
+    if bundlename or not state.localrepo:
+        fname = _create_bundle(
+            state,
+            ui,
+            repo,
+            bundlename=bundlename,
+            onlyheads=onlyheads,
+        )
+        if not state.localrepo:
             # use the created uncompressed bundlerepo
-            localrepo = bundlerepo = makebundlerepository(
+            state.localrepo = state.bundlerepo = makebundlerepository(
                 repo.baseui, repo.root, fname
             )
 
             # this repo contains local and peer now, so filter out local again
-            common = repo.heads()
-    if localrepo:
+            state.common = repo.heads()
+
+    if state.localrepo:
         # Part of common may be remotely filtered
         # So use an unfiltered version
         # The discovery process probably need cleanup to avoid that
-        localrepo = localrepo.unfiltered()
+        state.localrepo = state.localrepo.unfiltered()
 
-    csets = localrepo.changelog.findmissing(common, rheads)
+    csets = state.localrepo.changelog.findmissing(state.common, state.rheads)
 
-    if bundlerepo:
+    if state.bundlerepo:
+        bundlerepo = state.bundlerepo
         reponodes = [ctx.node() for ctx in bundlerepo[bundlerepo.firstnewrev :]]
 
-        with peer.commandexecutor() as e:
+        with state.peer.commandexecutor() as e:
             remotephases = e.callcommand(
                 b'listkeys',
                 {
@@ -727,16 +811,9 @@ def getremotechanges(
             ).result()
 
         pullop = exchange.pulloperation(
-            bundlerepo, peer, path=None, heads=reponodes
+            bundlerepo, state.peer, path=None, heads=reponodes
         )
         pullop.trmanager = bundletransactionmanager()
         exchange._pullapplyphases(pullop, remotephases)
 
-    def cleanup():
-        if bundlerepo:
-            bundlerepo.close()
-        if bundle:
-            os.unlink(bundle)
-        peer.close()
-
-    return (localrepo, csets, cleanup)
+    return csets

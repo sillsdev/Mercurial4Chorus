@@ -26,6 +26,8 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+from __future__ import annotations
+
 import sys
 
 from . import compat
@@ -45,7 +47,6 @@ if compat.PYTHON3:
         # On the Python 3 versions we support, sys.getfilesystemencoding never
         # returns None.
         return sys.getfilesystemencoding()
-
 
 else:
     # Python 2 doesn't support surrogateescape, so use 'strict' by

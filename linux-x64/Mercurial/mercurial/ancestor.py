@@ -5,6 +5,7 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
 
 import heapq
 
@@ -88,7 +89,7 @@ def ancestors(pfunc, *orignodes):
         depth = [0] * count
         seen = [0] * count
         mapping = []
-        for (i, n) in enumerate(sorted(nodes)):
+        for i, n in enumerate(sorted(nodes)):
             depth[n] = 1
             b = 1 << i
             seen[n] = b

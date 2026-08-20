@@ -17,6 +17,7 @@ removed in the changeset will be left unchanged, and so will remain modified,
 added and removed in the working directory.
 """
 
+from __future__ import annotations
 
 from mercurial.i18n import _
 
@@ -152,15 +153,13 @@ def uncommit(ui, repo, *pats, **opts):
     """
     cmdutil.check_note_size(opts)
     cmdutil.resolve_commit_options(ui, opts)
-    opts = pycompat.byteskwargs(opts)
 
     with repo.wlock(), repo.lock():
-
         st = repo.status()
         m, a, r, d = st.modified, st.added, st.removed, st.deleted
         isdirtypath = any(set(m + a + r + d) & set(pats))
         allowdirtywcopy = opts[
-            b'allow_dirty_working_copy'
+            'allow_dirty_working_copy'
         ] or repo.ui.configbool(b'experimental', b'uncommitondirtywdir')
         if not allowdirtywcopy and (not pats or isdirtypath):
             cmdutil.bailifchanged(
@@ -172,7 +171,7 @@ def uncommit(ui, repo, *pats, **opts):
         if len(old.parents()) > 1:
             raise error.InputError(_(b"cannot uncommit merge changeset"))
 
-        match = scmutil.match(old, pats, opts)
+        match = scmutil.match(old, pats, pycompat.byteskwargs(opts))
 
         # Check all explicitly given files; abort if there's a problem.
         if match.files():
@@ -203,14 +202,14 @@ def uncommit(ui, repo, *pats, **opts):
                 )
 
         with repo.transaction(b'uncommit'):
-            if not (opts[b'message'] or opts[b'logfile']):
-                opts[b'message'] = old.description()
-            message = cmdutil.logmessage(ui, opts)
+            if not (opts['message'] or opts['logfile']):
+                opts['message'] = old.description()
+            message = cmdutil.logmessage(ui, pycompat.byteskwargs(opts))
 
             keepcommit = pats
             if not keepcommit:
-                if opts.get(b'keep') is not None:
-                    keepcommit = opts.get(b'keep')
+                if opts.get('keep') is not None:
+                    keepcommit = opts.get('keep')
                 else:
                     keepcommit = ui.configbool(
                         b'experimental', b'uncommit.keep'
@@ -221,8 +220,8 @@ def uncommit(ui, repo, *pats, **opts):
                 match,
                 keepcommit,
                 message=message,
-                user=opts.get(b'user'),
-                date=opts.get(b'date'),
+                user=opts.get('user'),
+                date=opts.get('date'),
             )
             if newid is None:
                 ui.status(_(b"nothing to uncommit\n"))
@@ -265,7 +264,6 @@ def unamend(ui, repo, **opts):
 
     unfi = repo.unfiltered()
     with repo.wlock(), repo.lock(), repo.transaction(b'unamend'):
-
         # identify the commit from which to unamend
         curctx = repo[b'.']
 

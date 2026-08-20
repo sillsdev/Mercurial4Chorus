@@ -5,12 +5,15 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
 
 import re
+import typing
 import uuid
 
+from typing import Callable, Optional
+
 from .i18n import _
-from .pycompat import getattr
 from . import (
     error,
     pycompat,
@@ -24,6 +27,11 @@ from .utils import (
     stringutil,
     urlutil,
 )
+
+if typing.TYPE_CHECKING:
+    from typing import (
+        Set,
+    )
 
 
 def _serverquote(s):
@@ -45,6 +53,31 @@ def _forwardoutput(ui, pipe, warn=False):
             display = ui.warn if warn else ui.status
             for l in s.splitlines():
                 display(_(b"remote: "), l, b'\n')
+
+
+def _write_all(
+    write_once: Callable[[bytes], Optional[int]],
+    data: bytes,
+) -> Optional[int]:
+    """write data with a non blocking function
+
+    In case not all data were written, keep writing until everything is
+    written.
+    """
+    to_write = len(data)
+    written = write_once(data)
+    if written is None:
+        written = 0
+    if written < to_write:
+        data = memoryview(data)
+        while written < to_write:
+            wrote = write_once(data[written:])
+            # XXX if number of written bytes is "None", the destination is
+            # full. Some `select` call would be better than the current active
+            # polling.
+            if wrote is not None:
+                written += wrote
+    return written
 
 
 class doublepipe:
@@ -91,8 +124,13 @@ class doublepipe:
             act = fds
         return (self._main.fileno() in act, self._side.fileno() in act)
 
-    def write(self, data):
+    def _write_once(self, data: bytes) -> Optional[int]:
+        """Write as much data as possible in a non blocking way"""
         return self._call(b'write', data)
+
+    def write(self, data: bytes) -> Optional[int]:
+        """write all data in a blocking way"""
+        return _write_all(self._write_once, data)
 
     def read(self, size):
         r = self._call(b'read', size)
@@ -124,13 +162,15 @@ class doublepipe:
         # data can be '' or 0
         if (data is not None and not data) or self._main.closed:
             _forwardoutput(self._ui, self._side)
+            if methname == b'write':
+                return 0
             return b''
         while True:
             mainready, sideready = self._wait()
             if sideready:
                 _forwardoutput(self._ui, self._side)
             if mainready:
-                meth = getattr(self._main, methname)
+                meth = getattr(self._main, pycompat.sysstr(methname))
                 if data is None:
                     return meth()
                 else:
@@ -163,7 +203,7 @@ def _cleanuppipes(ui, pipei, pipeo, pipee, warn):
         try:
             for l in pipee:
                 ui.status(_(b'remote: '), l)
-        except (IOError, ValueError):
+        except (OSError, ValueError):
             pass
 
         pipee.close()
@@ -308,9 +348,9 @@ def _performhandshake(ui, stdin, stdout, stderr):
         ui.debug(b'sending hello command\n')
         ui.debug(b'sending between command\n')
 
-        stdin.write(b''.join(handshake))
+        _write_all(stdin.write, b''.join(handshake))
         stdin.flush()
-    except IOError:
+    except OSError:
         badresponse()
 
     # Assume version 1 of wire protocol by default.
@@ -344,7 +384,7 @@ def _performhandshake(ui, stdin, stdout, stderr):
                 ui.debug(b'remote: ', l)
             lines.append(l)
             max_noise -= 1
-        except IOError:
+        except OSError:
             badresponse()
     else:
         badresponse()
@@ -439,12 +479,12 @@ class sshv1peer(wireprotov1peer.wirepeer):
 
     # End of ipeerconnection interface.
 
-    # Begin of ipeercommands interface.
+    # Begin of ipeercapabilities interface.
 
-    def capabilities(self):
+    def capabilities(self) -> Set[bytes]:
         return self._caps
 
-    # End of ipeercommands interface.
+    # End of ipeercapabilities interface.
 
     def _readerr(self):
         _forwardoutput(self.ui, self._pipee)
@@ -641,7 +681,7 @@ def make_peer(
     """
     u = urlutil.url(path.loc, parsequery=False, parsefragment=False)
     if u.scheme != b'ssh' or not u.host or u.path is None:
-        raise error.RepoError(_(b"couldn't parse location %s") % path)
+        raise error.RepoError(_(b"couldn't parse location %s") % path.loc)
 
     urlutil.checksafessh(path.loc)
 
@@ -703,7 +743,7 @@ def make_peer(
             peer._call(
                 b"protocaps", caps=b' '.join(sorted(_clientcapabilities()))
             )
-        except IOError:
+        except OSError:
             peer._cleanup()
             raise error.RepoError(_(b'capability exchange failed'))
 

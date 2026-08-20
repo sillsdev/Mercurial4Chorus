@@ -3,10 +3,11 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
+
 import os
 
 from mercurial.i18n import _
-from mercurial.pycompat import open
 
 from mercurial import (
     error,
@@ -45,10 +46,10 @@ def putlfile(repo, proto, sha):
                 tmpfp.write(p)
             tmpfp._fp.seek(0)
             if sha != lfutil.hexsha1(tmpfp._fp):
-                raise IOError(0, _(b'largefile contents do not match hash'))
+                raise OSError(0, _(b'largefile contents do not match hash'))
             tmpfp.close()
             lfutil.linktousercache(repo, sha)
-        except IOError as e:
+        except OSError as e:
             repo.ui.warn(
                 _(b'largefiles: failed to put %s into store: %s\n')
                 % (sha, e.strerror)
@@ -70,8 +71,10 @@ def getlfile(repo, proto, sha):
         raise error.Abort(
             _(b'requested largefile %s not present in cache') % sha
         )
-    f = open(filename, b'rb')
-    length = os.fstat(f.fileno())[6]
+
+    # TODO: fix the fd leak here
+    f = open(filename, 'rb')
+    length = os.fstat(f.fileno()).st_size
 
     # Since we can't set an HTTP content-length header here, and
     # Mercurial core provides no way to give the length of a streamres
@@ -80,8 +83,7 @@ def getlfile(repo, proto, sha):
     # ssh proto does for string responses.
     def generator():
         yield b'%d\n' % length
-        for chunk in util.filechunkiter(f):
-            yield chunk
+        yield from util.filechunkiter(f)
 
     return wireprototypes.streamreslegacy(gen=generator())
 
@@ -151,7 +153,7 @@ def wirereposetup(ui, repo):
                             _(b'putlfile failed:'), output
                         )
                     return int(ret)
-                except IOError:
+                except OSError:
                     return 1
                 except ValueError:
                     raise error.ResponseError(
@@ -200,7 +202,7 @@ def wirereposetup(ui, repo):
 
 
 # advertise the largefiles=serve capability
-@eh.wrapfunction(wireprotov1server, b'_capabilities')
+@eh.wrapfunction(wireprotov1server, '_capabilities')
 def _capabilities(orig, repo, proto):
     '''announce largefile server capability'''
     caps = orig(repo, proto)

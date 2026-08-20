@@ -5,6 +5,7 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
 
 import os
 
@@ -17,6 +18,7 @@ from . import (
     pycompat,
     requirements,
     revlog,
+    transaction,
     util,
 )
 
@@ -30,7 +32,7 @@ def verify(repo, level=None):
         return v.verify()
 
 
-def _normpath(f):
+def _normpath(f: bytes) -> bytes:
     # under hg < 2.4, convert didn't sanitize paths properly, so a
     # converted repo may contain repeated slashes
     while b'//' in f:
@@ -195,7 +197,7 @@ class verifier:
         if not repo.url().startswith(b'file:'):
             raise error.Abort(_(b"cannot verify bundle or remote repos"))
 
-        if os.path.exists(repo.sjoin(b"journal")):
+        if transaction.has_abandoned_transaction(repo):
             ui.warn(_(b"abandoned transaction found - run hg recover\n"))
 
         if ui.verbose or not self.revlogv1:
@@ -269,22 +271,23 @@ class verifier:
         progress = ui.makeprogress(
             _(b'checking'), unit=_(b'changesets'), total=len(repo)
         )
-        for i in repo:
-            progress.update(i)
-            n = cl.node(i)
-            self._checkentry(cl, i, n, seen, [i], b"changelog")
+        with cl.reading():
+            for i in repo:
+                progress.update(i)
+                n = cl.node(i)
+                self._checkentry(cl, i, n, seen, [i], b"changelog")
 
-            try:
-                changes = cl.read(n)
-                if changes[0] != self.repo.nullid:
-                    mflinkrevs.setdefault(changes[0], []).append(i)
+                try:
+                    changes = cl.read(n)
+                    if changes[0] != self.repo.nullid:
+                        mflinkrevs.setdefault(changes[0], []).append(i)
+                        self.refersmf = True
+                    for f in changes[3]:
+                        if match(f):
+                            filelinkrevs.setdefault(_normpath(f), []).append(i)
+                except Exception as inst:
                     self.refersmf = True
-                for f in changes[3]:
-                    if match(f):
-                        filelinkrevs.setdefault(_normpath(f), []).append(i)
-            except Exception as inst:
-                self.refersmf = True
-                self._exc(i, _(b"unpacking changeset %s") % short(n), inst)
+                    self._exc(i, _(b"unpacking changeset %s") % short(n), inst)
         progress.complete()
         return mflinkrevs, filelinkrevs
 
@@ -358,7 +361,7 @@ class verifier:
                 self._err(lr, _(b"%s not in changesets") % short(n), label)
 
             try:
-                mfdelta = mfl.get(dir, n).readdelta(shallow=True)
+                mfdelta = mfl.get(dir, n).read_delta_new_entries(shallow=True)
                 for f, fn, fl in mfdelta.iterentries():
                     if not f:
                         self._err(lr, _(b"entry without name in manifest"))

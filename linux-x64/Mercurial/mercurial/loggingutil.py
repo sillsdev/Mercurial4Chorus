@@ -6,6 +6,7 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
 
 import errno
 
@@ -96,7 +97,7 @@ class filelogger:
                 maxsize=self._maxsize,
             ) as fp:
                 fp.write(line)
-        except IOError as err:
+        except OSError as err:
             ui.debug(
                 b'cannot write to %s: %s\n'
                 % (self._name, stringutil.forcebytestr(err))
@@ -118,7 +119,7 @@ class fileobjectlogger:
         try:
             self._fp.write(line)
             self._fp.flush()
-        except IOError as err:
+        except OSError as err:
             ui.debug(
                 b'cannot write to %s: %s\n'
                 % (

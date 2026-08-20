@@ -5,6 +5,8 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
+
 import os
 
 from mercurial.i18n import _
@@ -31,6 +33,7 @@ from . import (
     remotefilelog,
     shallowutil,
 )
+
 
 # These make*stores functions are global so that other extensions can replace
 # them.
@@ -180,15 +183,13 @@ def wraprepo(repo):
             if self.shallowmatch(f):
                 return remotefilelog.remotefilelog(self.svfs, f, self)
             else:
-                return super(shallowrepository, self).file(f)
+                return super().file(f)
 
         def filectx(self, path, *args, **kwargs):
             if self.shallowmatch(path):
                 return remotefilectx.remotefilectx(self, path, *args, **kwargs)
             else:
-                return super(shallowrepository, self).filectx(
-                    path, *args, **kwargs
-                )
+                return super().filectx(path, *args, **kwargs)
 
         @localrepo.unfilteredmethod
         def commitctx(self, ctx, error=False, origctx=None):
@@ -208,9 +209,7 @@ def wraprepo(repo):
                     if fparent1 != self.nullid:
                         files.append((f, hex(fparent1)))
                 self.fileservice.prefetch(files)
-            return super(shallowrepository, self).commitctx(
-                ctx, error=error, origctx=origctx
-            )
+            return super().commitctx(ctx, error=error, origctx=origctx)
 
         def backgroundprefetch(
             self, revs, base=None, repack=False, pats=None, opts=None
@@ -291,11 +290,7 @@ def wraprepo(repo):
 
                 # Decompressing manifests is expensive.
                 # When possible, only read the deltas.
-                p1, p2 = mfrevlog.parentrevs(mfrev)
-                if p1 in visited and p2 in visited:
-                    mfdict = mfl[mfnode].readfast()
-                else:
-                    mfdict = mfl[mfnode].read()
+                mfdict = mfl[mfnode].read_any_fast_delta(visited)[1]
 
                 diff = mfdict.items()
                 if pats:
@@ -325,7 +320,7 @@ def wraprepo(repo):
                 repo.fileservice.prefetch(results)
 
         def close(self):
-            super(shallowrepository, self).close()
+            super().close()
             self.connectionpool.close()
 
     repo.__class__ = shallowrepository
@@ -340,7 +335,7 @@ def wraprepo(repo):
     repo.excludepattern = repo.ui.configlist(
         b"remotefilelog", b"excludepattern", None
     )
-    if not util.safehasattr(repo, 'connectionpool'):
+    if not hasattr(repo, 'connectionpool'):
         repo.connectionpool = connectionpool.connectionpool(repo)
 
     if repo.includepattern or repo.excludepattern:

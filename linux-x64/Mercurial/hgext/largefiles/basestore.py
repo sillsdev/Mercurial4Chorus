@@ -8,6 +8,8 @@
 
 '''base class for store implementations and store-related utility code'''
 
+from __future__ import annotations
+
 from mercurial.i18n import _
 
 from mercurial.node import short

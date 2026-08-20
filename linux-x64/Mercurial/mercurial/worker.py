@@ -5,6 +5,7 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
 
 import os
 import pickle
@@ -13,6 +14,7 @@ import signal
 import sys
 import threading
 import time
+import warnings
 
 from .i18n import _
 from . import (
@@ -20,6 +22,18 @@ from . import (
     error,
     pycompat,
     scmutil,
+)
+
+# XXX TODO: We should seriously look into this fork + thread issues, however
+# this is wreaking havoc in the tests suites, so silencing for now.
+warnings.filterwarnings(
+    'ignore',
+    message=(
+        r'This process \(pid=\d+\) is multi-threaded,'
+        r' use of fork\(\) may lead to deadlocks in the child.'
+    ),
+    category=DeprecationWarning,
+    module='mercurial.worker',
 )
 
 
@@ -61,7 +75,9 @@ def ismainthread():
     return threading.current_thread() == threading.main_thread()
 
 
-if pycompat.isposix or pycompat.iswindows:
+if (
+    pycompat.isposix and pycompat.sysplatform != b'OpenVMS'
+) or pycompat.iswindows:
     _STARTUP_COST = 0.01
     # The Windows worker is thread based. If tasks are CPU bound, threads
     # in the presence of the GIL result in excessive context switching and

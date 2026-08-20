@@ -5,6 +5,8 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
+
 import itertools
 import os
 
@@ -87,16 +89,15 @@ def setup():
 
 def clonenarrowcmd(orig, ui, repo, *args, **opts):
     """Wraps clone command, so 'hg clone' first wraps localrepo.clone()."""
-    opts = pycompat.byteskwargs(opts)
     wrappedextraprepare = util.nullcontextmanager()
-    narrowspecfile = opts[b'narrowspec']
+    narrowspecfile = opts['narrowspec']
 
     if narrowspecfile:
         filepath = os.path.join(encoding.getcwd(), narrowspecfile)
         ui.status(_(b"reading narrowspec from '%s'\n") % filepath)
         try:
             fdata = util.readfile(filepath)
-        except IOError as inst:
+        except OSError as inst:
             raise error.Abort(
                 _(b"cannot read narrowspecs from '%s': %s")
                 % (filepath, encoding.strtolocal(inst.strerror))
@@ -115,24 +116,25 @@ def clonenarrowcmd(orig, ui, repo, *args, **opts):
         narrowspec.validatepatterns(excludes)
 
         # narrowspec is passed so we should assume that user wants narrow clone
-        opts[b'narrow'] = True
-        opts[b'include'].extend(includes)
-        opts[b'exclude'].extend(excludes)
+        opts['narrow'] = True
+        opts['include'].extend(includes)
+        opts['exclude'].extend(excludes)
 
-    if opts[b'narrow']:
+    if opts['narrow']:
 
         def pullbundle2extraprepare_widen(orig, pullop, kwargs):
             orig(pullop, kwargs)
 
-            if opts.get(b'depth'):
-                kwargs[b'depth'] = opts[b'depth']
+            if opts.get('depth'):
+                # TODO: fix exchange._pullbundle2extraprepare()
+                kwargs[b'depth'] = opts['depth']
 
         wrappedextraprepare = extensions.wrappedfunction(
-            exchange, b'_pullbundle2extraprepare', pullbundle2extraprepare_widen
+            exchange, '_pullbundle2extraprepare', pullbundle2extraprepare_widen
         )
 
     with wrappedextraprepare:
-        return orig(ui, repo, *args, **pycompat.strkwargs(opts))
+        return orig(ui, repo, *args, **opts)
 
 
 def pullnarrowcmd(orig, ui, repo, *args, **opts):
@@ -146,7 +148,7 @@ def pullnarrowcmd(orig, ui, repo, *args, **opts):
                 kwargs[b'depth'] = opts['depth']
 
         wrappedextraprepare = extensions.wrappedfunction(
-            exchange, b'_pullbundle2extraprepare', pullbundle2extraprepare_widen
+            exchange, '_pullbundle2extraprepare', pullbundle2extraprepare_widen
         )
 
     with wrappedextraprepare:
@@ -201,7 +203,7 @@ def pullbundle2extraprepare(orig, pullop, kwargs):
 
 
 extensions.wrapfunction(
-    exchange, b'_pullbundle2extraprepare', pullbundle2extraprepare
+    exchange, '_pullbundle2extraprepare', pullbundle2extraprepare
 )
 
 
@@ -296,7 +298,7 @@ def _narrow(
                     for file_ in entry.files():
                         todelete.append(file_.unencoded_path)
             elif entry.is_manifestlog:
-                dir = entry.target_id
+                dir = entry.target_id[:-1]
                 dirs = sorted(pathutil.dirs({dir})) + [dir]
                 include = True
                 for d in dirs:
@@ -366,7 +368,7 @@ def _widen(
         kwargs[b'excludepats'] = newexcludes
 
     wrappedextraprepare = extensions.wrappedfunction(
-        exchange, b'_pullbundle2extraprepare', pullbundle2extraprepare_widen
+        exchange, '_pullbundle2extraprepare', pullbundle2extraprepare_widen
     )
 
     # define a function that narrowbundle2 can call after creating the
@@ -511,7 +513,6 @@ def trackedcmd(ui, repo, remotepath=None, *pats, **opts):
     add --addinclude, --addexclude rules in bulk. Like the other include and
     exclude switches, the changes are applied immediately.
     """
-    opts = pycompat.byteskwargs(opts)
     if requirements.NARROW_REQUIREMENT not in repo.requirements:
         raise error.InputError(
             _(
@@ -522,16 +523,16 @@ def trackedcmd(ui, repo, remotepath=None, *pats, **opts):
 
     # Before supporting, decide whether it "hg tracked --clear" should mean
     # tracking no paths or all paths.
-    if opts[b'clear']:
+    if opts['clear']:
         raise error.InputError(_(b'the --clear option is not yet supported'))
 
     # import rules from a file
-    newrules = opts.get(b'import_rules')
+    newrules = opts.get('import_rules')
     if newrules:
+        filepath = os.path.join(encoding.getcwd(), newrules)
         try:
-            filepath = os.path.join(encoding.getcwd(), newrules)
             fdata = util.readfile(filepath)
-        except IOError as inst:
+        except OSError as inst:
             raise error.StorageError(
                 _(b"cannot read narrowspecs from '%s': %s")
                 % (filepath, encoding.strtolocal(inst.strerror))
@@ -546,16 +547,16 @@ def trackedcmd(ui, repo, remotepath=None, *pats, **opts):
                     b"is not supported in narrowspec"
                 )
             )
-        opts[b'addinclude'].extend(includepats)
-        opts[b'addexclude'].extend(excludepats)
+        opts['addinclude'].extend(includepats)
+        opts['addexclude'].extend(excludepats)
 
-    addedincludes = narrowspec.parsepatterns(opts[b'addinclude'])
-    removedincludes = narrowspec.parsepatterns(opts[b'removeinclude'])
-    addedexcludes = narrowspec.parsepatterns(opts[b'addexclude'])
-    removedexcludes = narrowspec.parsepatterns(opts[b'removeexclude'])
-    autoremoveincludes = opts[b'auto_remove_includes']
+    addedincludes = narrowspec.parsepatterns(opts['addinclude'])
+    removedincludes = narrowspec.parsepatterns(opts['removeinclude'])
+    addedexcludes = narrowspec.parsepatterns(opts['addexclude'])
+    removedexcludes = narrowspec.parsepatterns(opts['removeexclude'])
+    autoremoveincludes = opts['auto_remove_includes']
 
-    update_working_copy = opts[b'update_working_copy']
+    update_working_copy = opts['update_working_copy']
     only_show = not (
         addedincludes
         or removedincludes
@@ -570,7 +571,7 @@ def trackedcmd(ui, repo, remotepath=None, *pats, **opts):
     if only_show:
         oldincludes, oldexcludes = repo.narrowpats
         ui.pager(b'tracked')
-        fm = ui.formatter(b'narrow', opts)
+        fm = ui.formatter(b'narrow', pycompat.byteskwargs(opts))
         for i in sorted(oldincludes):
             fm.startitem()
             fm.write(b'status', b'%s ', b'I', label=b'narrow.included')
@@ -614,7 +615,7 @@ def trackedcmd(ui, repo, remotepath=None, *pats, **opts):
         # also define the set of revisions to update for widening.
         path = urlutil.get_unique_pull_path_obj(b'tracked', ui, remotepath)
         ui.status(_(b'comparing with %s\n') % urlutil.hidepassword(path.loc))
-        remote = hg.peer(repo, opts, path)
+        remote = hg.peer(repo, pycompat.byteskwargs(opts), path)
 
         try:
             # check narrow support before doing anything if widening needs to be
@@ -670,8 +671,8 @@ def trackedcmd(ui, repo, remotepath=None, *pats, **opts):
                     oldexcludes,
                     newincludes,
                     newexcludes,
-                    opts[b'force_delete_local_changes'],
-                    opts[b'backup'],
+                    opts['force_delete_local_changes'],
+                    opts['backup'],
                 )
                 # _narrow() updated the narrowspec and _widen() below needs to
                 # use the updated values as its base (otherwise removed includes

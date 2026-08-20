@@ -9,6 +9,7 @@ written by Barry Warsaw.
 
 # Regular expression that matches `special' characters in parameters, the
 # existence of which force quoting of the parameter value.
+from __future__ import annotations
 
 import re
 
@@ -47,8 +48,8 @@ class Headers:
         if type(value) is bytes:
             return value
         raise AssertionError(
-            u"Header names/values must be"
-            u" of type bytes (got %s)" % repr(value)
+            "Header names/values must be"
+            " of type bytes (got %s)" % repr(value)
         )
 
     def __len__(self):

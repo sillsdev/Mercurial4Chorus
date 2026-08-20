@@ -36,6 +36,12 @@
 #endif
 #endif
 
+#ifndef _WIN32
+#include <sys/mman.h>
+#include <pthread.h>
+#endif
+
+
 #ifdef __APPLE__
 #include <sys/attr.h>
 #include <sys/vnode.h>
@@ -1203,6 +1209,49 @@ static PyObject *isgui(PyObject *self)
 }
 #endif
 
+#ifdef MADV_POPULATE_READ
+
+typedef struct {
+    void * mmap_address;
+    size_t length;
+} mmap_info;
+
+static void _mmap_populate(mmap_info *info) {
+    /* We explicitly does not check the return value as we don't care about it.
+     * the madvise is here to help performance and we don't care if it fails
+     * (for example because the mapping is no longer valid) */
+    void * mmap_address = info->mmap_address;
+    size_t length = info->length;
+    free(info);
+    madvise(mmap_address, length, MADV_POPULATE_READ);
+}
+
+static PyObject *background_mmap_populate(PyObject *self, PyObject *mmap) {
+    Py_buffer b;
+    pthread_t thread_id;
+    mmap_info *info;
+    if (PyObject_GetBuffer(mmap, &b, PyBUF_CONTIG_RO | PyBUF_C_CONTIGUOUS) == -1) {
+        return NULL;
+    }
+    info = (mmap_info *)malloc(sizeof(mmap_info));
+    info->mmap_address=b.buf;
+    info->length=b.len;
+    /* note: for very large map, we could spin multiple thread populating
+     * different area */
+    pthread_create(&thread_id, NULL, (void *) &_mmap_populate, info);
+    /* We don't keep track of this thread as it is fine for it to die when we
+     * exit. */
+    pthread_detach(thread_id);
+    /* We release the PyBuffer in the main thread to let the object be garbage
+     * collected as soon as possible. This might result in the memory map being
+     * closed while the background thread is working. That will result in a
+     * error in the background thread we can ignore. */
+    PyBuffer_Release(&b);
+	Py_RETURN_NONE;
+}
+
+#endif
+
 static char osutil_doc[] = "Native operating system services.";
 
 static PyMethodDef methods[] = {
@@ -1236,6 +1285,10 @@ static PyMethodDef methods[] = {
 		"isgui", (PyCFunction)isgui, METH_NOARGS,
 		"Is a CoreGraphics session available?"
 	},
+#endif
+#ifdef MADV_POPULATE_READ
+	{"background_mmap_populate", (PyCFunction)background_mmap_populate, METH_O,
+	 "populate a mmap in the background\n"},
 #endif
 	{NULL, NULL}
 };

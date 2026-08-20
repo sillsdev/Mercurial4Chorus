@@ -5,6 +5,7 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
 
 import abc
 import functools
@@ -240,7 +241,7 @@ class _simpleopt(customopt):
 class _callableopt(customopt):
     def __init__(self, callablefn):
         self.callablefn = callablefn
-        super(_callableopt, self).__init__(None)
+        super().__init__(None)
 
     def newstate(self, oldstate, newparam, abort):
         return self.callablefn(newparam)
@@ -272,7 +273,7 @@ def _defaultopt(default):
         return _callableopt(default)
     elif isinstance(default, list):
         return _listopt(default[:])
-    elif type(default) is type(1):
+    elif type(default) is int:
         return _intopt(default)
     else:
         return _simpleopt(default)

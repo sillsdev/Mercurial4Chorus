@@ -5,12 +5,19 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
+
+import random
+
+from typing import (
+    List,
+    Type,
+)
 
 from ..i18n import _
 from .. import (
     error,
     localrepo,
-    pycompat,
     requirements,
     revlog,
     util,
@@ -18,12 +25,11 @@ from .. import (
 
 from ..utils import compression
 
-if pycompat.TYPE_CHECKING:
-    from typing import (
-        List,
-        Type,
-    )
-
+# keeps pyflakes happy
+assert [
+    List,
+    Type,
+]
 
 # list of requirements that request a clone of all revlog if added/removed
 RECLONES_REQUIREMENTS = {
@@ -104,7 +110,7 @@ class improvement:
     compatible_with_share = False
 
 
-allformatvariant = []  # type: List[Type['formatvariant']]
+allformatvariant: List[Type[formatvariant]] = []
 
 
 def registerformatvariant(cls):
@@ -289,8 +295,7 @@ class sharesafe(requirementformatvariant):
 
     postdowngrademessage = _(
         b'repository downgraded to not use share safe mode, '
-        b'existing shares will not work and needs to'
-        b' be reshared.'
+        b'existing shares will not work and need to be reshared.'
     )
 
     postupgrademessage = _(
@@ -359,7 +364,7 @@ class copiessdc(requirementformatvariant):
     description = _(b'Stores copies information alongside changesets.')
 
     upgrademessage = _(
-        b'Allows to use more efficient algorithm to deal with ' b'copy tracing.'
+        b'Allows to use more efficient algorithm to deal with copy tracing.'
     )
 
     touches_filelogs = False
@@ -410,9 +415,17 @@ class removecldeltachain(formatvariant):
     def fromrepo(repo):
         # Mercurial 4.0 changed changelogs to not use delta chains. Search for
         # changelogs with deltas.
-        cl = repo.changelog
+        cl = repo.unfiltered().changelog
+        if len(cl) <= 1000:
+            some_rev = list(cl)
+        else:
+            # do a random sampling to speeds things up Scanning the whole
+            # repository can get really slow on bigger repo.
+            some_rev = sorted(
+                {random.randint(0, len(cl) - 1) for x in range(1000)}
+            )
         chainbase = cl.chainbase
-        return all(rev == chainbase(rev) for rev in cl)
+        return all(rev == chainbase(rev) for rev in some_rev)
 
     @staticmethod
     def fromconfig(repo):
@@ -490,7 +503,7 @@ class compressionlevel(formatvariant):
             level = repo.ui.configint(b'storage', b'revlog.zstd.level')
         if level is None:
             return b'default'
-        return bytes(level)
+        return b"%d" % level
 
     @classmethod
     def fromconfig(cls, repo):
@@ -502,7 +515,7 @@ class compressionlevel(formatvariant):
             level = repo.ui.configint(b'storage', b'revlog.zstd.level')
         if level is None:
             return b'default'
-        return bytes(level)
+        return b"%d" % level
 
 
 def find_format_upgrades(repo):
@@ -671,7 +684,7 @@ def determine_upgrade_actions(
     newactions = []
 
     for d in format_upgrades:
-        if util.safehasattr(d, '_requirement'):
+        if hasattr(d, '_requirement'):
             name = d._requirement
         else:
             name = None
@@ -773,7 +786,7 @@ class UpgradeOperation(BaseOperation):
 
     @property
     def upgrade_actions_names(self):
-        return set([a.name for a in self.upgrade_actions])
+        return {a.name for a in self.upgrade_actions}
 
     @property
     def requirements_only(self):
@@ -869,19 +882,19 @@ class UpgradeOperation(BaseOperation):
         self._write_labeled(
             self._preserved_requirements, b"upgrade-repo.requirement.preserved"
         )
-        self.ui.write((b'\n'))
+        self.ui.writenoi18n(b'\n')
         if self._removed_requirements:
             self.ui.write(_(b'   removed: '))
             self._write_labeled(
                 self._removed_requirements, b"upgrade-repo.requirement.removed"
             )
-            self.ui.write((b'\n'))
+            self.ui.writenoi18n(b'\n')
         if self._added_requirements:
             self.ui.write(_(b'   added: '))
             self._write_labeled(
                 self._added_requirements, b"upgrade-repo.requirement.added"
             )
-            self.ui.write((b'\n'))
+            self.ui.writenoi18n(b'\n')
         self.ui.write(b'\n')
 
     def print_optimisations(self):
@@ -903,12 +916,12 @@ class UpgradeOperation(BaseOperation):
 
     def print_affected_revlogs(self):
         if not self.revlogs_to_process:
-            self.ui.write((b'no revlogs to process\n'))
+            self.ui.writenoi18n(b'no revlogs to process\n')
         else:
-            self.ui.write((b'processed revlogs:\n'))
+            self.ui.writenoi18n(b'processed revlogs:\n')
             for r in sorted(self.revlogs_to_process):
-                self.ui.write((b'  - %s\n' % r))
-        self.ui.write((b'\n'))
+                self.ui.writenoi18n(b'  - %s\n' % r)
+        self.ui.writenoi18n(b'\n')
 
     def print_unused_optimizations(self):
         for i in self.unused_optimizations:
@@ -916,7 +929,7 @@ class UpgradeOperation(BaseOperation):
 
     def has_upgrade_action(self, name):
         """Check whether the upgrade operation will perform this action"""
-        return name in self._upgrade_actions_names
+        return name in self.upgrade_actions_names
 
     def print_post_op_messages(self):
         """print post upgrade operation warning messages"""

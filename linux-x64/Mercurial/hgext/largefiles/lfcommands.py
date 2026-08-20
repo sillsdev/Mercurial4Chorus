@@ -8,6 +8,8 @@
 
 '''High-level command function for lfconvert, plus the cmdtable.'''
 
+from __future__ import annotations
+
 import binascii
 import os
 import shutil
@@ -27,7 +29,6 @@ from mercurial import (
     lock,
     logcmdutil,
     match as matchmod,
-    pycompat,
     scmutil,
     util,
 )
@@ -87,12 +88,11 @@ def lfconvert(ui, src, dest, *pats, **opts):
     Use --to-normal to convert largefiles back to normal files; after
     this, the DEST repository can be used without largefiles at all."""
 
-    opts = pycompat.byteskwargs(opts)
-    if opts[b'to_normal']:
+    if opts['to_normal']:
         tolfile = False
     else:
         tolfile = True
-        size = lfutil.getminsize(ui, True, opts.get(b'size'), default=None)
+        size = lfutil.getminsize(ui, True, opts.get('size'), default=None)
 
     if not hg.islocal(src):
         raise error.Abort(_(b'%s is not a local Mercurial repo') % src)
@@ -171,12 +171,12 @@ def lfconvert(ui, src, dest, *pats, **opts):
 
             class lfsource(filemap.filemap_source):
                 def __init__(self, ui, source):
-                    super(lfsource, self).__init__(ui, source, None)
+                    super().__init__(ui, source, None)
                     self.filemapper.rename[lfutil.shortname] = b'.'
 
                 def getfile(self, name, rev):
                     realname, realrev = rev
-                    f = super(lfsource, self).getfile(name, rev)
+                    f = super().getfile(name, rev)
 
                     if (
                         not realname.startswith(lfutil.shortnameslash)
@@ -199,9 +199,7 @@ def lfconvert(ui, src, dest, *pats, **opts):
                 def __init__(self, ui, source, dest, revmapfile, opts):
                     src = lfsource(ui, source)
 
-                    super(converter, self).__init__(
-                        ui, src, dest, revmapfile, opts
-                    )
+                    super().__init__(ui, src, dest, revmapfile, opts)
 
             found, missing = downloadlfiles(ui, rsrc)
             if missing != 0:

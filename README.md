@@ -13,11 +13,14 @@ to copy into instead of the solution's directory.
 To create a pre-release nuget package:
 
 ```bash
-msbuild /p:BuildCounter=1 build/SIL.Chorus.Mercurial.proj
+dotnet pack /p:BuildCounter=1
 ```
+
+Output will be found in `artifacts/package/release` directory
 
 To release a nuget package:
 
 ```bash
-msbuild /p:PreRelease=. build/SIL.Chorus.Mercurial.proj
+dotnet pack /p:PreRelease=.
+dotnet nuget push artifacts/package/release/*.nupkg --source https://api.nuget.org/v3/index.json --api-key INSERT_NUGET_API_KEY_HERE
 ```

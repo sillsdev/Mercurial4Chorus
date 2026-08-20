@@ -120,14 +120,19 @@ perform other post-fixing work. The supported hooks are::
     mapping fixer tool names to lists of metadata values returned from
     executions that modified a file. This aggregates the same metadata
     previously passed to the "postfixfile" hook.
+
+You can specify a list of directories to search the tool command in using the
+`fix.extra-bin-paths` configuration.
 """
 
+from __future__ import annotations
 
 import collections
 import itertools
 import os
 import re
 import subprocess
+import sys
 
 from mercurial.i18n import _
 from mercurial.node import (
@@ -142,6 +147,7 @@ from mercurial import (
     cmdutil,
     context,
     copies,
+    encoding,
     error,
     logcmdutil,
     match as matchmod,
@@ -191,6 +197,8 @@ configitem(b'fix', b'maxfilesize', default=b'2MB')
 # This helps users do shell scripts that stop when a fixer tool signals a
 # problem.
 configitem(b'fix', b'failure', default=b'continue')
+
+configitem(b'fix', b'extra-bin-paths', default=list)
 
 
 def checktoolfailureaction(ui, message, hint=None):
@@ -339,7 +347,7 @@ def fix(ui, repo, *pats, **opts):
                     repo.hook(
                         b'postfixfile',
                         throw=False,
-                        **pycompat.strkwargs(hookargs)
+                        **pycompat.strkwargs(hookargs),
                     )
                 numitems[rev] -= 1
                 # Apply the fixes for this and any other revisions that are
@@ -677,6 +685,28 @@ def _prefetchfiles(repo, workqueue, basepaths):
         )
 
 
+def _augmented_env(wvfs, extra_paths):
+    if os.supports_bytes_environ:
+        env = encoding.environ.copy()
+        raw_path = env.get(b'PATH', b'')
+        extra_paths = [wvfs.join(i) for i in extra_paths]
+        path_items = extra_paths + raw_path.split(pycompat.ospathsep)
+        env[b'PATH'] = pycompat.ospathsep.join(path_items)
+    else:
+        path_encoding = sys.getfilesystemencoding() or sys.getdefaultencoding()
+        extra_str = [p.decode(path_encoding, 'ignore') for p in extra_paths]
+        base = wvfs.base.decode(path_encoding, 'ignore')
+        extra_str = [os.path.join(base, i) for i in extra_str]
+
+        # use (os).xxx to bypass checkcode complains. We are doing this
+        # unicode access on purpose.
+        env = (os).environ.copy()
+        raw_path = env.get('PATH', '')
+        path_items = extra_str + raw_path.split((os).pathsep)
+        env['PATH'] = (os).pathsep.join(path_items)
+    return env
+
+
 def fixfile(ui, repo, opts, fixers, fixctx, path, basepaths, basectxs):
     """Run any configured fixers that should affect the file in this context
 
@@ -691,6 +721,11 @@ def fixfile(ui, repo, opts, fixers, fixctx, path, basepaths, basectxs):
     """
     metadata = {}
     newdata = fixctx[path].data()
+
+    env = None
+    extra_paths = ui.configlist(b'fix', b'extra-bin-paths')
+    if extra_paths:
+        env = _augmented_env(repo.wvfs, extra_paths)
     for fixername, fixer in fixers.items():
         if fixer.affects(opts, fixctx, path):
             ranges = lineranges(
@@ -710,6 +745,7 @@ def fixfile(ui, repo, opts, fixers, fixctx, path, basepaths, basectxs):
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
+                env=env,
             )
             stdout, stderr = proc.communicate(newdata)
             if stderr:

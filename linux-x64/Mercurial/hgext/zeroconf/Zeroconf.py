@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """ Multicast DNS Service Discovery for Python, v0.12
     Copyright (C) 2003, Paul Scott-Murphy
 
@@ -89,11 +91,11 @@ import traceback
 
 from mercurial import pycompat
 
-__all__ = [b"Zeroconf", b"ServiceInfo", b"ServiceBrowser"]
+__all__ = ["Zeroconf", "ServiceInfo", "ServiceBrowser"]
 
 # hook for threads
 
-globals()[b'_GLOBAL_DONE'] = 0
+globals()['_GLOBAL_DONE'] = 0
 
 # Some timing constants
 
@@ -229,6 +231,16 @@ class BadDomainNameCircular(BadDomainName):
 
 
 # implementation classes
+
+_SOL_IP = socket.SOL_IP
+
+if pycompat.iswindows:
+    # XXX: Not sure if there are newer versions of python where this would fail,
+    # but apparently socket.SOL_IP used to be 0, and socket.IPPROTO_IP is 0, so
+    # this would work with older versions of python.
+    #
+    # https://github.com/python/cpython/issues/101960
+    _SOL_IP = socket.IPPROTO_IP
 
 
 class DNSEntry:
@@ -367,7 +379,7 @@ class DNSRecord(DNSEntry):
         """Abstract method"""
         raise AbstractMethodException
 
-    def toString(self, other):
+    def toString(self, hdr, other):
         """String representation with additional information"""
         arg = b"%s/%s,%s" % (
             self.ttl,
@@ -445,7 +457,7 @@ class DNSPointer(DNSRecord):
 
     def __repr__(self):
         """String representation"""
-        return self.toString(self.alias)
+        return self.toString(b'', self.alias)
 
 
 class DNSText(DNSRecord):
@@ -468,9 +480,9 @@ class DNSText(DNSRecord):
     def __repr__(self):
         """String representation"""
         if len(self.text) > 10:
-            return self.toString(self.text[:7] + b"...")
+            return self.toString(b'', self.text[:7] + b"...")
         else:
-            return self.toString(self.text)
+            return self.toString(b'', self.text)
 
 
 class DNSService(DNSRecord):
@@ -503,7 +515,7 @@ class DNSService(DNSRecord):
 
     def __repr__(self):
         """String representation"""
-        return self.toString(b"%s:%s" % (self.server, self.port))
+        return self.toString(b'', b"%s:%s" % (self.server, self.port))
 
 
 class DNSIncoming:
@@ -937,7 +949,7 @@ class Engine(threading.Thread):
         self.start()
 
     def run(self):
-        while not globals()[b'_GLOBAL_DONE']:
+        while not globals()['_GLOBAL_DONE']:
             rs = self.getReaders()
             if len(rs) == 0:
                 # No sockets to manage, but we wait for the timeout
@@ -953,7 +965,7 @@ class Engine(threading.Thread):
                         try:
                             self.readers[sock].handle_read()
                         except Exception:
-                            if not globals()[b'_GLOBAL_DONE']:
+                            if not globals()['_GLOBAL_DONE']:
                                 traceback.print_exc()
                 except Exception:
                     pass
@@ -998,7 +1010,7 @@ class Listener:
         sock = self.zeroconf.socket
         try:
             data, (addr, port) = sock.recvfrom(_MAX_MSG_ABSOLUTE)
-        except socket.error as e:
+        except OSError as e:
             if e.errno == errno.EBADF:
                 # some other thread may close the socket
                 return
@@ -1033,7 +1045,7 @@ class Reaper(threading.Thread):
     def run(self):
         while True:
             self.zeroconf.wait(10 * 1000)
-            if globals()[b'_GLOBAL_DONE']:
+            if globals()['_GLOBAL_DONE']:
                 return
             now = currentTimeMillis()
             for record in self.zeroconf.cache.entries():
@@ -1106,7 +1118,7 @@ class ServiceBrowser(threading.Thread):
             now = currentTimeMillis()
             if len(self.list) == 0 and self.nexttime > now:
                 self.zeroconf.wait(self.nexttime - now)
-            if globals()[b'_GLOBAL_DONE'] or self.done:
+            if globals()['_GLOBAL_DONE'] or self.done:
                 return
             now = currentTimeMillis()
 
@@ -1307,6 +1319,7 @@ class ServiceInfo:
         delay = _LISTENER_TIME
         next = now + delay
         last = now + timeout
+        result = False
         try:
             zeroconf.addListener(
                 self, DNSQuestion(self.name, _TYPE_ANY, _CLASS_IN)
@@ -1352,7 +1365,7 @@ class ServiceInfo:
 
                 zeroconf.wait(min(next, last) - now)
                 now = currentTimeMillis()
-            result = 1
+            result = True
         finally:
             zeroconf.removeListener(self)
 
@@ -1395,7 +1408,7 @@ class Zeroconf:
     def __init__(self, bindaddress=None):
         """Creates an instance of the Zeroconf class, establishing
         multicast communications, listening and reaping threads."""
-        globals()[b'_GLOBAL_DONE'] = 0
+        globals()['_GLOBAL_DONE'] = 0
         if bindaddress is None:
             self.intf = socket.gethostbyname(socket.gethostname())
         else:
@@ -1416,8 +1429,8 @@ class Zeroconf:
             # work as expected.
             #
             pass
-        self.socket.setsockopt(socket.SOL_IP, socket.IP_MULTICAST_TTL, b"\xff")
-        self.socket.setsockopt(socket.SOL_IP, socket.IP_MULTICAST_LOOP, b"\x01")
+        self.socket.setsockopt(_SOL_IP, socket.IP_MULTICAST_TTL, b"\xff")
+        self.socket.setsockopt(_SOL_IP, socket.IP_MULTICAST_LOOP, b"\x01")
         try:
             self.socket.bind(self.group)
         except Exception:
@@ -1425,7 +1438,7 @@ class Zeroconf:
             # SO_REUSEADDR and SO_REUSEPORT have been set, so ignore it
             pass
         self.socket.setsockopt(
-            socket.SOL_IP,
+            _SOL_IP,
             socket.IP_ADD_MEMBERSHIP,
             socket.inet_aton(_MDNS_ADDR) + socket.inet_aton('0.0.0.0'),
         )
@@ -1835,13 +1848,13 @@ class Zeroconf:
     def close(self):
         """Ends the background threads, and prevent this instance from
         servicing further queries."""
-        if globals()[b'_GLOBAL_DONE'] == 0:
-            globals()[b'_GLOBAL_DONE'] = 1
+        if globals()['_GLOBAL_DONE'] == 0:
+            globals()['_GLOBAL_DONE'] = 1
             self.notifyAll()
             self.engine.notify()
             self.unregisterAllServices()
             self.socket.setsockopt(
-                socket.SOL_IP,
+                _SOL_IP,
                 socket.IP_DROP_MEMBERSHIP,
                 socket.inet_aton(_MDNS_ADDR) + socket.inet_aton('0.0.0.0'),
             )
@@ -1859,7 +1872,7 @@ if __name__ == '__main__':
     info = ServiceInfo(
         b"_http._tcp.local.",
         b"My Service Name._http._tcp.local.",
-        socket.inet_aton(b"127.0.0.1"),
+        socket.inet_aton("127.0.0.1"),
         1234,
         0,
         0,

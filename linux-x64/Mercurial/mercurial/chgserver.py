@@ -39,6 +39,7 @@ Config
   skiphash = False
 """
 
+from __future__ import annotations
 
 import inspect
 import os
@@ -48,11 +49,11 @@ import stat
 import struct
 import time
 
-from .i18n import _
-from .pycompat import (
-    getattr,
-    setattr,
+from typing import (
+    Optional,
 )
+
+from .i18n import _
 from .node import hex
 
 from . import (
@@ -151,7 +152,7 @@ def _getmtimepaths(ui):
     """
     modules = [m for n, m in extensions.extensions(ui)]
     try:
-        from . import __version__
+        from . import __version__  # pytype: disable=import-error
 
         modules.append(__version__)
     except ImportError:
@@ -222,7 +223,7 @@ class hashstate:
 def _newchgui(srcui, csystem, attachio):
     class chgui(srcui.__class__):
         def __init__(self, src=None):
-            super(chgui, self).__init__(src)
+            super().__init__(src)
             if src:
                 self._csystem = getattr(src, '_csystem', csystem)
             else:
@@ -236,7 +237,7 @@ def _newchgui(srcui, csystem, attachio):
             # will behave differently (i.e. write to stdout).
             if (
                 out is not self.fout
-                or not util.safehasattr(self.fout, 'fileno')
+                or not hasattr(self.fout, 'fileno')
                 or self.fout.fileno() != procutil.stdout.fileno()
                 or self._finoutredirected
             ):
@@ -260,13 +261,14 @@ def _loadnewui(srcui, args, cdebug):
     from . import dispatch  # avoid cycle
 
     newui = srcui.__class__.load()
-    for a in [b'fin', b'fout', b'ferr', b'environ']:
+    for a in ['fin', 'fout', 'ferr', 'environ']:
         setattr(newui, a, getattr(srcui, a))
-    if util.safehasattr(srcui, '_csystem'):
+    if hasattr(srcui, '_csystem'):
         newui._csystem = srcui._csystem
 
     # command line args
     options = dispatch._earlyparseopts(newui, args)
+    dispatch._parse_config_files(newui, args, options[b'config_file'])
     dispatch._parseconfig(newui, options[b'config'])
 
     # stolen from tortoisehg.util.copydynamicconfig()
@@ -348,9 +350,9 @@ class channeledsystem:
 
 _iochannels = [
     # server.ch, ui.fp, mode
-    (b'cin', b'fin', 'rb'),
-    (b'cout', b'fout', 'wb'),
-    (b'cerr', b'ferr', 'wb'),
+    ('cin', 'fin', 'rb'),
+    ('cout', 'fout', 'wb'),
+    ('cerr', 'ferr', 'wb'),
 ]
 
 
@@ -358,7 +360,7 @@ class chgcmdserver(commandserver.server):
     def __init__(
         self, ui, repo, fin, fout, sock, prereposetups, hashstate, baseaddress
     ):
-        super(chgcmdserver, self).__init__(
+        super().__init__(
             _newchgui(ui, channeledsystem(fin, fout, b'S'), self.attachio),
             repo,
             fin,
@@ -375,7 +377,7 @@ class chgcmdserver(commandserver.server):
             self.capabilities[b'validate'] = chgcmdserver.validate
 
     def cleanup(self):
-        super(chgcmdserver, self).cleanup()
+        super().cleanup()
         # dispatch._runcatch() does not flush outputs if exception is not
         # handled by dispatch._dispatch()
         self.ui.flush()
@@ -571,7 +573,7 @@ class chgcmdserver(commandserver.server):
         globaloldios = self._oldios
         self._oldios = []
         try:
-            return super(chgcmdserver, self).runcommand()
+            return super().runcommand()
         finally:
             self._restoreio()
             self._oldios = globaloldios
@@ -603,7 +605,7 @@ class chgcmdserver(commandserver.server):
         }
     )
 
-    if util.safehasattr(procutil, 'setprocname'):
+    if hasattr(procutil, 'setprocname'):
 
         def setprocname(self):
             """Change process title"""
@@ -632,14 +634,16 @@ class chgunixservicehandler:
 
     pollinterval = 1  # [sec]
 
+    _hashstate: Optional[hashstate]
+    _baseaddress: Optional[bytes]
+    _realaddress: Optional[bytes]
+
     def __init__(self, ui):
         self.ui = ui
 
-        # TODO: use PEP 526 syntax (`_hashstate: hashstate` at the class level)
-        #  when 3.5 support is dropped.
-        self._hashstate = None  # type: hashstate
-        self._baseaddress = None  # type: bytes
-        self._realaddress = None  # type: bytes
+        self._hashstate = None
+        self._baseaddress = None
+        self._realaddress = None
 
         self._idletimeout = ui.configint(b'chgserver', b'idletimeout')
         self._lastactive = time.time()

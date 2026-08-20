@@ -19,6 +19,8 @@ This module and implementation are experimental. Most functions are not yet
 optimised to operate on large production graphs.
 """
 
+from __future__ import annotations
+
 import itertools
 from ..node import nullrev
 from .. import ancestor

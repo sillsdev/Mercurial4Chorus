@@ -259,7 +259,7 @@ def winextsetup(ui):
 	extensions.wrapfunction(dispatch, "_parse", disp_parse)
 
 	class posixfile_utf8(FileIO):
-		def __init__(self, name, mode='rb'):
+		def __init__(self, name, mode='rb', buffering=-1):
 			super(posixfile_utf8, self).__init__(tounicode(name), tounicode(mode))
 
 	util.posixfile = posixfile_utf8

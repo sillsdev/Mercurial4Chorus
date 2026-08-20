@@ -5,13 +5,14 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
+
 import http.server
 import urllib.error
 import urllib.parse
 import urllib.request
 import urllib.response
 
-from .pycompat import getattr
 from . import pycompat
 
 _sysstr = pycompat.sysstr
@@ -69,6 +70,7 @@ urlreq._registeraliases(
         b"FileHandler",
         b"FTPHandler",
         b"ftpwrapper",
+        b"HTTPCookieProcessor",
         b"HTTPHandler",
         b"HTTPSHandler",
         b"install_opener",
@@ -109,6 +111,7 @@ httpserver._registeraliases(
         b"CGIHTTPRequestHandler",
     ),
 )
+
 
 # urllib.parse.quote() accepts both str and bytes, decodes bytes
 # (if necessary), and returns str. This is wonky. We provide a custom

@@ -17,12 +17,13 @@
 #   the converted revision to have a different identity than the
 #   source.
 
+from __future__ import annotations
+
 import os
 import re
 import time
 
 from mercurial.i18n import _
-from mercurial.pycompat import open
 from mercurial.node import (
     bin,
     hex,
@@ -298,8 +299,9 @@ class mercurial_sink(common.converter_sink):
         parents = pl
         nparents = len(parents)
         if self.filemapmode and nparents == 1:
-            m1node = self.repo.changelog.read(bin(parents[0]))[0]
             parent = parents[0]
+            p1_node = bin(parent)
+            m1node = self.repo.changelog.changelogrevision(p1_node).manifest
 
         if len(parents) < 2:
             parents.append(self.repo.nullid)
@@ -695,7 +697,7 @@ class mercurial_source(common.converter_source):
         else:
             i = i or 0
             ma, r = self._changedfiles(parents[i], ctx)
-        ma, r = [[f for f in l if f not in self.ignored] for l in (ma, r)]
+        ma, r = ([f for f in l if f not in self.ignored] for l in (ma, r))
 
         if i == 0:
             self._changescache = (rev, (ma, r))
@@ -704,7 +706,7 @@ class mercurial_source(common.converter_source):
 
     def converted(self, rev, destrev):
         if self.convertfp is None:
-            self.convertfp = open(self.repo.vfs.join(b'shamap'), b'ab')
+            self.convertfp = open(self.repo.vfs.join(b'shamap'), 'ab')
         self.convertfp.write(util.tonativeeol(b'%s %s\n' % (destrev, rev)))
         self.convertfp.flush()
 

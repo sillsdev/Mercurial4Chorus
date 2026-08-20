@@ -13,6 +13,7 @@ This contains helper routines that are independent of the SCM core and
 hide platform-specific details from the core.
 """
 
+from __future__ import annotations
 
 import abc
 import collections
@@ -25,23 +26,39 @@ import itertools
 import locale
 import mmap
 import os
-import pickle  # provides util.pickle symbol
+
+# provides util.pickle symbol
+import pickle  # noqa: F401 (ignore imported but not used)
 import re as remod
 import shutil
 import stat
 import sys
 import time
 import traceback
+import typing
 import warnings
+
+from typing import (
+    Any,
+    BinaryIO,
+    Callable,
+    Iterable,
+    Iterator,
+    List,
+    Optional,
+    Tuple,
+    Type,
+    TypeVar,
+)
 
 from .node import hex
 from .thirdparty import attr
-from .pycompat import (
-    delattr,
-    getattr,
-    open,
-    setattr,
-)
+
+# Force pytype to use the non-vendored package
+if typing.TYPE_CHECKING:
+    # noinspection PyPackageRequirements
+    import attr
+
 from hgdemandimport import tracing
 from . import (
     encoding,
@@ -49,7 +66,12 @@ from . import (
     i18n,
     policy,
     pycompat,
+    typelib,
     urllibcompat,
+)
+from .interfaces import (
+    misc as int_misc,
+    modules as intmod,
 )
 from .utils import (
     compression,
@@ -58,17 +80,23 @@ from .utils import (
     stringutil,
 )
 
-if pycompat.TYPE_CHECKING:
-    from typing import (
-        Iterable,
-        Iterator,
-        List,
-        Optional,
-        Tuple,
+# keeps pyflakes happy
+assert [
+    Iterable,
+    Iterator,
+    List,
+    Optional,
+    Tuple,
+]
+
+if typing.TYPE_CHECKING:
+    from typing_extensions import (
+        Self,
     )
 
+    _Tcow = TypeVar('_Tcow', bound="cow")
 
-base85 = policy.importmod('base85')
+base85: intmod.Base85 = policy.importmod('base85')
 osutil = policy.importmod('osutil')
 
 b85decode = base85.b85decode
@@ -142,8 +170,11 @@ unlink = platform.unlink
 username = platform.username
 
 
-def setumask(val):
-    # type: (int) -> None
+if typing.TYPE_CHECKING:
+    _Tfilestat = TypeVar('_Tfilestat', bound='filestat')
+
+
+def setumask(val: int) -> None:
     '''updates the umask. used by chg server'''
     if pycompat.iswindows:
         return
@@ -318,8 +349,10 @@ except NameError:
 
     def buffer(sliceable, offset=0, length=None):
         if length is not None:
-            return memoryview(sliceable)[offset : offset + length]
-        return memoryview(sliceable)[offset:]
+            view = memoryview(sliceable)[offset : offset + length]
+        else:
+            view = memoryview(sliceable)[offset:]
+        return view.toreadonly()
 
 
 _chunksize = 4096
@@ -346,7 +379,7 @@ class bufferedinputpipe:
         if isinstance(fh, fileobjectproxy):
             cls = observedbufferedinputpipe
 
-        return super(bufferedinputpipe, cls).__new__(cls)
+        return super().__new__(cls)
 
     def __init__(self, input):
         self._input = input
@@ -435,7 +468,25 @@ class bufferedinputpipe:
         return data
 
 
-def mmapread(fp, size=None):
+def has_mmap_populate():
+    return hasattr(osutil, "background_mmap_populate") or hasattr(
+        mmap, 'MAP_POPULATE'
+    )
+
+
+def mmapread(fp, size=None, pre_populate=True):
+    """Read a file content using mmap
+
+    The responsibility of checking the file system is mmap safe is the
+    responsibility of the caller (see `vfs.is_mmap_safe`).
+
+    In some case, a normal string might be returned.
+
+    If `pre_populate` is True (the default), the mmapped data will be
+    pre-populated in memory if the system support this option, this slow down
+    the initial mmapping but avoid potentially crippling page fault on later
+    access. If this is not the desired behavior, set `pre_populate` to False.
+    """
     if size == 0:
         # size of 0 to mmap.mmap() means "all data"
         # rather than "zero bytes", so special case that.
@@ -443,14 +494,40 @@ def mmapread(fp, size=None):
     elif size is None:
         size = 0
     fd = getattr(fp, 'fileno', lambda: fp)()
+
+    if pycompat.iswindows:
+        _mmap = lambda fd, size: mmap.mmap(fd, size, access=mmap.ACCESS_READ)
+    else:
+        flags = mmap.MAP_PRIVATE
+        bg_populate = hasattr(osutil, "background_mmap_populate")
+
+        if pre_populate and not bg_populate:
+            flags |= getattr(mmap, 'MAP_POPULATE', 0)
+
+        def _mmap(fd, size) -> mmap.mmap:
+            m = mmap.mmap(fd, size, flags=flags, prot=mmap.PROT_READ)
+            if pre_populate and bg_populate:
+                osutil.background_mmap_populate(m)
+            return m
+
     try:
-        return mmap.mmap(fd, size, access=mmap.ACCESS_READ)
+        return _mmap(fd, size)
     except ValueError:
         # Empty files cannot be mmapped, but mmapread should still work.  Check
         # if the file is empty, and if so, return an empty buffer.
         if os.fstat(fd).st_size == 0:
             return b''
         raise
+
+
+class uncacheable_cachestat:
+    stat: Optional[os.stat_result]
+
+    def __init__(self) -> None:
+        self.stat = None
+
+    def cacheable(self) -> bool:
+        return False
 
 
 class fileobjectproxy:
@@ -644,7 +721,7 @@ class observedbufferedinputpipe(bufferedinputpipe):
     """
 
     def _fillbuffer(self, size=_chunksize):
-        res = super(observedbufferedinputpipe, self)._fillbuffer(size=size)
+        res = super()._fillbuffer(size=size)
 
         fn = getattr(self._input._observer, 'osread', None)
         if fn:
@@ -655,7 +732,7 @@ class observedbufferedinputpipe(bufferedinputpipe):
     # We use different observer methods because the operation isn't
     # performed on the actual file object but on us.
     def read(self, size):
-        res = super(observedbufferedinputpipe, self).read(size)
+        res = super().read(size)
 
         fn = getattr(self._input._observer, 'bufferedread', None)
         if fn:
@@ -664,7 +741,7 @@ class observedbufferedinputpipe(bufferedinputpipe):
         return res
 
     def readline(self, *args, **kwargs):
-        res = super(observedbufferedinputpipe, self).readline(*args, **kwargs)
+        res = super().readline(*args, **kwargs)
 
         fn = getattr(self._input._observer, 'bufferedreadline', None)
         if fn:
@@ -855,7 +932,7 @@ class fileobjectobserver(baseproxyobserver):
     def __init__(
         self, fh, name, reads=True, writes=True, logdata=False, logdataapis=True
     ):
-        super(fileobjectobserver, self).__init__(fh, name, logdata, logdataapis)
+        super().__init__(fh, name, logdata, logdataapis)
         self.reads = reads
         self.writes = writes
 
@@ -978,7 +1055,7 @@ class socketobserver(baseproxyobserver):
         logdata=False,
         logdataapis=True,
     ):
-        super(socketobserver, self).__init__(fh, name, logdata, logdataapis)
+        super().__init__(fh, name, logdata, logdataapis)
         self.reads = reads
         self.writes = writes
         self.states = states
@@ -1127,9 +1204,10 @@ def makeloggingsocket(
 def version():
     """Return version information if available."""
     try:
-        from . import __version__
+        from . import __version__  # pytype: disable=import-error
 
-        return __version__.version
+        # setuptools-scm uses py3 str
+        return __version__.version.encode()
     except ImportError:
         return b'unknown'
 
@@ -1258,7 +1336,9 @@ class cow:
     Call preparewrite before doing any writes.
     """
 
-    def preparewrite(self):
+    _copied: int  # doesn't exist until first preparewrite()
+
+    def preparewrite(self: _Tcow) -> _Tcow:
         """call this before writes, return self or a copied new object"""
         if getattr(self, '_copied', 0):
             self._copied -= 1
@@ -1266,7 +1346,7 @@ class cow:
             return self.__class__(self)  # pytype: disable=wrong-arg-count
         return self
 
-    def copy(self):
+    def copy(self) -> Self:
         """always do a cheap copy"""
         self._copied = getattr(self, '_copied', 0) + 1
         return self
@@ -1290,7 +1370,7 @@ class sortdict(collections.OrderedDict):
     def __setitem__(self, key, value):
         if key in self:
             del self[key]
-        super(sortdict, self).__setitem__(key, value)
+        super().__setitem__(key, value)
 
     if pycompat.ispypy:
         # __setitem__() isn't called as of PyPy 5.8.0
@@ -1303,7 +1383,7 @@ class sortdict(collections.OrderedDict):
                 self[k] = f[k]
 
     def insert(self, position, key, value):
-        for (i, (k, v)) in enumerate(list(self.items())):
+        for i, (k, v) in enumerate(list(self.items())):
             if i == position:
                 self[key] = value
             if i >= position:
@@ -1345,26 +1425,24 @@ class cowsortdict(cow, sortdict):
     """
 
 
-class transactional:  # pytype: disable=ignored-metaclass
+class transactional(abc.ABC):
     """Base class for making a transactional type into a context manager."""
 
-    __metaclass__ = abc.ABCMeta
-
     @abc.abstractmethod
-    def close(self):
+    def close(self) -> None:
         """Successfully closes the transaction."""
 
     @abc.abstractmethod
-    def release(self):
+    def release(self) -> None:
         """Marks the end of the transaction.
 
         If the transaction has not been closed, it will be aborted.
         """
 
-    def __enter__(self):
+    def __enter__(self) -> Self:
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
         try:
             if exc_type is None:
                 self.close()
@@ -1523,7 +1601,6 @@ class lrucachedict:
                 raise
             return default
 
-        assert node is not None  # help pytype
         value = node.value
         self.totalcost -= node.cost
         node.markempty()
@@ -1551,7 +1628,6 @@ class lrucachedict:
         """
         try:
             node = self._cache[k]
-            assert node is not None  # help pytype
             return node.value
         except KeyError:
             if default is _notset:
@@ -1610,12 +1686,8 @@ class lrucachedict:
         # a non-empty node.
         n = self._head.prev
 
-        assert n is not None  # help pytype
-
         while n.key is _notset:
             n = n.prev
-
-        assert n is not None  # help pytype
 
         key, value = n.key, n.value
 
@@ -1626,7 +1698,7 @@ class lrucachedict:
 
         return key, value
 
-    def _movetohead(self, node):
+    def _movetohead(self, node: _lrucachenode):
         """Mark a node as the newest, making it the new head.
 
         When a node is accessed, it becomes the freshest entry in the LRU
@@ -1673,7 +1745,7 @@ class lrucachedict:
 
         self._head = node
 
-    def _addcapacity(self):
+    def _addcapacity(self) -> _lrucachenode:
         """Add a node to the circular linked list.
 
         The new node is inserted before the head node.
@@ -1814,7 +1886,7 @@ def never(fn):
     return False
 
 
-def nogc(func):
+def nogc(func=None) -> Any:
     """disable garbage collector
 
     Python's garbage collector triggers a GC each time a certain number of
@@ -1827,15 +1899,27 @@ def nogc(func):
     This garbage collector issue have been fixed in 2.7. But it still affect
     CPython's performance.
     """
+    if func is None:
+        return _nogc_context()
+    else:
+        return _nogc_decorator(func)
 
+
+@contextlib.contextmanager
+def _nogc_context():
+    gcenabled = gc.isenabled()
+    gc.disable()
+    try:
+        yield
+    finally:
+        if gcenabled:
+            gc.enable()
+
+
+def _nogc_decorator(func):
     def wrapper(*args, **kwargs):
-        gcenabled = gc.isenabled()
-        gc.disable()
-        try:
+        with _nogc_context():
             return func(*args, **kwargs)
-        finally:
-            if gcenabled:
-                gc.enable()
 
     return wrapper
 
@@ -1845,8 +1929,7 @@ if pycompat.ispypy:
     nogc = lambda x: x
 
 
-def pathto(root, n1, n2):
-    # type: (bytes, bytes, bytes) -> bytes
+def pathto(root: bytes, n1: bytes, n2: bytes) -> bytes:
     """return the relative path from one place to another.
     root should use os.sep to separate directories
     n1 should use os.sep to separate directories
@@ -1950,7 +2033,7 @@ def copyfile(
                 m = "the `nb_bytes` argument is incompatible with `hardlink`"
                 raise error.ProgrammingError(m)
             return
-        except (IOError, OSError) as exc:
+        except OSError as exc:
             if exc.errno != errno.EEXIST and no_hardlink_cb is not None:
                 no_hardlink_cb()
             # fall back to normal copy
@@ -2016,7 +2099,7 @@ def copyfiles(src, dst, hardlink=None, progress=None):
         if hardlink:
             try:
                 oslink(src, dst)
-            except (IOError, OSError) as exc:
+            except OSError as exc:
                 if exc.errno != errno.EEXIST:
                     hardlink = False
                 # XXX maybe try to relink if the file exist ?
@@ -2057,8 +2140,7 @@ _winreservednames = {
 _winreservedchars = b':*?"<>|'
 
 
-def checkwinfilename(path):
-    # type: (bytes) -> Optional[bytes]
+def checkwinfilename(path: bytes) -> Optional[bytes]:
     r"""Check that the base-relative path is a valid filename on Windows.
     Returns None if the path is ok, or a UI string describing the problem.
 
@@ -2124,7 +2206,7 @@ timer = getattr(time, "perf_counter", None)
 if pycompat.iswindows:
     checkosfilename = checkwinfilename
     if not timer:
-        timer = time.clock
+        timer = time.clock  # pytype: disable=module-attr
 else:
     # mercurial.windows doesn't have platform.checkosfilename
     checkosfilename = platform.checkosfilename  # pytype: disable=module-attr
@@ -2132,7 +2214,7 @@ else:
         timer = time.time
 
 
-def makelock(info, pathname):
+def makelock(info: bytes, pathname: bytes) -> None:
     """Create a lock file atomically if possible
 
     This may leave a stale lock file if symlink isn't supported and signal
@@ -2148,12 +2230,13 @@ def makelock(info, pathname):
 
     flags = os.O_CREAT | os.O_WRONLY | os.O_EXCL | getattr(os, 'O_BINARY', 0)
     ld = os.open(pathname, flags)
-    os.write(ld, info)
-    os.close(ld)
+    try:
+        os.write(ld, info)
+    finally:
+        os.close(ld)
 
 
-def readlock(pathname):
-    # type: (bytes) -> bytes
+def readlock(pathname: bytes) -> bytes:
     try:
         return readlink(pathname)
     except OSError as why:
@@ -2176,8 +2259,7 @@ def fstat(fp):
 # File system features
 
 
-def fscasesensitive(path):
-    # type: (bytes) -> bool
+def fscasesensitive(path: bytes) -> bool:
     """
     Return true if the given path is on a case-sensitive filesystem
 
@@ -2202,6 +2284,8 @@ def fscasesensitive(path):
 
 
 _re2_input = lambda x: x
+# google-re2 will need to be tell to not output error on its own
+_re2_options = None
 try:
     import re2  # pytype: disable=import-error
 
@@ -2222,6 +2306,7 @@ class _re:
     def _checkre2():
         global _re2
         global _re2_input
+        global _re2_options
         if _re2 is not None:
             # we already have the answer
             return
@@ -2240,6 +2325,12 @@ class _re:
             check_input = pycompat.sysstr(check_input)
             _re2 = bool(re2.match(check_pattern, check_input))
             _re2_input = pycompat.sysstr
+        try:
+            quiet = re2.Options()
+            quiet.log_errors = False
+            _re2_options = quiet
+        except AttributeError:
+            pass
 
     def compile(self, pat, flags=0):
         """Compile a regular expression, using re2 if possible
@@ -2255,7 +2346,12 @@ class _re:
             if flags & remod.MULTILINE:
                 pat = b'(?m)' + pat
             try:
-                return re2.compile(_re2_input(pat))
+                input_regex = _re2_input(pat)
+                if _re2_options is not None:
+                    compiled = re2.compile(input_regex, options=_re2_options)
+                else:
+                    compiled = re2.compile(input_regex)
+                return compiled
             except re2.error:
                 pass
         return remod.compile(pat, flags)
@@ -2281,8 +2377,7 @@ re = _re()
 _fspathcache = {}
 
 
-def fspath(name, root):
-    # type: (bytes, bytes) -> bytes
+def fspath(name: bytes, root: bytes) -> bytes:
     """Get name in the case stored in the filesystem
 
     The name should be relative to root, and be normcase-ed for efficiency.
@@ -2326,8 +2421,7 @@ def fspath(name, root):
     return b''.join(result)
 
 
-def checknlink(testfile):
-    # type: (bytes) -> bool
+def checknlink(testfile: bytes) -> bool:
     '''check whether hardlink count reporting works properly'''
 
     # testfile may be open, so we need a separate file for checking to
@@ -2360,8 +2454,7 @@ def checknlink(testfile):
                 pass
 
 
-def endswithsep(path):
-    # type: (bytes) -> bool
+def endswithsep(path: bytes) -> bool:
     '''Check path ends with os.sep or os.altsep.'''
     return bool(  # help pytype
         path.endswith(pycompat.ossep)
@@ -2370,8 +2463,7 @@ def endswithsep(path):
     )
 
 
-def splitpath(path):
-    # type: (bytes) -> List[bytes]
+def splitpath(path: bytes) -> List[bytes]:
     """Split path by os.sep.
     Note that this function does not use os.altsep because this is
     an alternative of simple "xxx.split(os.sep)".
@@ -2380,7 +2472,12 @@ def splitpath(path):
     return path.split(pycompat.ossep)
 
 
-def mktempcopy(name, emptyok=False, createmode=None, enforcewritable=False):
+def mktempcopy(
+    name: bytes,
+    emptyok: bool = False,
+    createmode: Optional[int] = None,
+    enforcewritable: bool = False,
+) -> bytes:
     """Create a temporary file with the same contents from name
 
     The permission bits are copied from the original file.
@@ -2403,7 +2500,7 @@ def mktempcopy(name, emptyok=False, createmode=None, enforcewritable=False):
     try:
         try:
             ifp = posixfile(name, b"rb")
-        except IOError as inst:
+        except OSError as inst:
             if inst.errno == errno.ENOENT:
                 return temp
             if not getattr(inst, 'filename', None):
@@ -2431,11 +2528,11 @@ class filestat:
     'exists()' examination on client side of this class.
     """
 
-    def __init__(self, stat):
+    def __init__(self, stat: Optional[os.stat_result]) -> None:
         self.stat = stat
 
     @classmethod
-    def frompath(cls, path):
+    def frompath(cls: Type[_Tfilestat], path: bytes) -> _Tfilestat:
         try:
             stat = os.stat(path)
         except FileNotFoundError:
@@ -2443,13 +2540,13 @@ class filestat:
         return cls(stat)
 
     @classmethod
-    def fromfp(cls, fp):
+    def fromfp(cls: Type[_Tfilestat], fp: BinaryIO) -> _Tfilestat:
         stat = os.fstat(fp.fileno())
         return cls(stat)
 
     __hash__ = object.__hash__
 
-    def __eq__(self, old):
+    def __eq__(self, old) -> bool:
         try:
             # if ambiguity between stat of new and old file is
             # avoided, comparison of size, ctime and mtime is enough
@@ -2466,7 +2563,7 @@ class filestat:
         except AttributeError:
             return False
 
-    def isambig(self, old):
+    def isambig(self, old: _Tfilestat) -> bool:
         """Examine whether new (= self) stat is ambiguous against old one
 
         "S[N]" below means stat of a file at N-th change:
@@ -2501,7 +2598,7 @@ class filestat:
         except AttributeError:
             return False
 
-    def avoidambig(self, path, old):
+    def avoidambig(self, path: bytes, old: _Tfilestat) -> bool:
         """Change file stat of specified path to avoid ambiguity
 
         'old' should be previous filestat of 'path'.
@@ -2521,7 +2618,7 @@ class filestat:
             return False
         return True
 
-    def __ne__(self, other):
+    def __ne__(self, other) -> bool:
         return not self == other
 
 
@@ -2583,7 +2680,7 @@ class atomictempfile:
             self._fp.close()
 
     def __del__(self):
-        if safehasattr(self, '_fp'):  # constructor actually did something
+        if hasattr(self, '_fp'):  # constructor actually did something
             self.discard()
 
     def __enter__(self):
@@ -2604,8 +2701,9 @@ def tryrmdir(f):
             raise
 
 
-def unlinkpath(f, ignoremissing=False, rmdir=True):
-    # type: (bytes, bool, bool) -> None
+def unlinkpath(
+    f: bytes, ignoremissing: bool = False, rmdir: bool = True
+) -> None:
     """unlink and remove the directory if it is empty"""
     if ignoremissing:
         tryunlink(f)
@@ -2619,17 +2717,21 @@ def unlinkpath(f, ignoremissing=False, rmdir=True):
             pass
 
 
-def tryunlink(f):
-    # type: (bytes) -> None
-    """Attempt to remove a file, ignoring FileNotFoundError."""
+def tryunlink(f: bytes) -> bool:
+    """Attempt to remove a file, ignoring FileNotFoundError.
+
+    Returns False in case the file did not exit, True otherwise
+    """
     try:
         unlink(f)
+        return True
     except FileNotFoundError:
-        pass
+        return False
 
 
-def makedirs(name, mode=None, notindexed=False):
-    # type: (bytes, Optional[int], bool) -> None
+def makedirs(
+    name: bytes, mode: Optional[int] = None, notindexed: bool = False
+) -> None:
     """recursive directory creation with parent mode inheritance
 
     Newly created directories are marked as "not to be indexed by
@@ -2658,21 +2760,18 @@ def makedirs(name, mode=None, notindexed=False):
         os.chmod(name, mode)
 
 
-def readfile(path):
-    # type: (bytes) -> bytes
-    with open(path, b'rb') as fp:
+def readfile(path: bytes) -> bytes:
+    with open(path, 'rb') as fp:
         return fp.read()
 
 
-def writefile(path, text):
-    # type: (bytes, bytes) -> None
-    with open(path, b'wb') as fp:
+def writefile(path: bytes, text: bytes) -> None:
+    with open(path, 'wb') as fp:
         fp.write(text)
 
 
-def appendfile(path, text):
-    # type: (bytes, bytes) -> None
-    with open(path, b'ab') as fp:
+def appendfile(path: bytes, text: bytes) -> None:
+    with open(path, 'ab') as fp:
         fp.write(text)
 
 
@@ -2685,10 +2784,10 @@ class chunkbuffer:
 
         def splitbig(chunks):
             for chunk in chunks:
-                if len(chunk) > 2 ** 20:
+                if len(chunk) > 2**20:
                     pos = 0
                     while pos < len(chunk):
-                        end = pos + 2 ** 18
+                        end = pos + 2**18
                         yield chunk[pos:end]
                         pos = end
                 else:
@@ -2697,6 +2796,25 @@ class chunkbuffer:
         self.iter = splitbig(in_iter)
         self._queue = collections.deque()
         self._chunkoffset = 0
+        self._absolute_offset = 0
+
+    def __iter__(self):
+        while self._queue:
+            chunk = self._queue.popleft()
+            if self._chunkoffset:
+                d = chunk[self._chunkoffset :]
+            else:
+                d = chunk
+            self._absolute_offset += len(d)
+            yield d
+            self._chunkoffset = 0
+        for d in self.iter:
+            self._absolute_offset += len(d)
+            yield d
+
+    def tell(self) -> int:
+        """tell how much data we have read so far"""
+        return self._absolute_offset
 
     def read(self, l=None):
         """Read L bytes of data from the iterator of chunks of data.
@@ -2704,7 +2822,9 @@ class chunkbuffer:
 
         If size parameter is omitted, read everything"""
         if l is None:
-            return b''.join(self.iter)
+            d = b''.join(self.iter)
+            self._absolute_offset += len(d)
+            return d
 
         left = l
         buf = []
@@ -2712,7 +2832,7 @@ class chunkbuffer:
         while left > 0:
             # refill the queue
             if not queue:
-                target = 2 ** 18
+                target = 2**18
                 for chunk in self.iter:
                     queue.append(chunk)
                     target -= len(chunk)
@@ -2756,10 +2876,15 @@ class chunkbuffer:
                 self._chunkoffset += left
                 left -= chunkremaining
 
-        return b''.join(buf)
+        d = b''.join(buf)
+        self._absolute_offset += len(d)
+        return d
 
 
-def filechunkiter(f, size=131072, limit=None):
+DEFAULT_FILE_CHUNK = 128 * (2**10)
+
+
+def filechunkiter(f, size=DEFAULT_FILE_CHUNK, limit=None):
     """Create a generator that produces the data in the file size
     (default 131072) bytes at a time, up to optional limit (default is
     to read all data).  Chunks may be less than size bytes if the
@@ -2832,8 +2957,7 @@ def unitcountfn(*unittable):
     return go
 
 
-def processlinerange(fromline, toline):
-    # type: (int, int) -> Tuple[int, int]
+def processlinerange(fromline: int, toline: int) -> Tuple[int, int]:
     """Check that linerange <fromline>:<toline> makes sense and return a
     0-based range.
 
@@ -2869,20 +2993,20 @@ bytecount = unitcountfn(
 )
 
 
-class transformingwriter:
+class transformingwriter(typelib.BinaryIO_Proxy):
     """Writable file wrapper to transform data by function"""
 
-    def __init__(self, fp, encode):
+    def __init__(self, fp: BinaryIO, encode: Callable[[bytes], bytes]) -> None:
         self._fp = fp
         self._encode = encode
 
-    def close(self):
+    def close(self) -> None:
         self._fp.close()
 
-    def flush(self):
+    def flush(self) -> None:
         self._fp.flush()
 
-    def write(self, data):
+    def write(self, data: bytes) -> int:
         return self._fp.write(self._encode(data))
 
 
@@ -2892,17 +3016,15 @@ class transformingwriter:
 _eolre = remod.compile(br'\r*\n')
 
 
-def tolf(s):
-    # type: (bytes) -> bytes
+def tolf(s: bytes) -> bytes:
     return _eolre.sub(b'\n', s)
 
 
-def tocrlf(s):
-    # type: (bytes) -> bytes
+def tocrlf(s: bytes) -> bytes:
     return _eolre.sub(b'\r\n', s)
 
 
-def _crlfwriter(fp):
+def _crlfwriter(fp: typelib.BinaryIO_Proxy) -> typelib.BinaryIO_Proxy:
     return transformingwriter(fp, tocrlf)
 
 
@@ -2915,21 +3037,33 @@ else:
     fromnativeeol = pycompat.identity
     nativeeolwriter = pycompat.identity
 
+if typing.TYPE_CHECKING:
+    # Replace the various overloads that come along with aliasing other methods
+    # with the narrow definition that we care about in the type checking phase
+    # only.  This ensures that both Windows and POSIX see only the definition
+    # that is actually available.
+
+    def tonativeeol(s: bytes) -> bytes:
+        raise NotImplementedError
+
+    def fromnativeeol(s: bytes) -> bytes:
+        raise NotImplementedError
+
+    def nativeeolwriter(fp: typelib.BinaryIO_Proxy) -> typelib.BinaryIO_Proxy:
+        raise NotImplementedError
+
 
 # TODO delete since workaround variant for Python 2 no longer needed.
 def iterfile(fp):
     return fp
 
 
-def iterlines(iterator):
-    # type: (Iterable[bytes]) -> Iterator[bytes]
+def iterlines(iterator: Iterable[bytes]) -> Iterator[bytes]:
     for chunk in iterator:
-        for line in chunk.splitlines():
-            yield line
+        yield from chunk.splitlines()
 
 
-def expandpath(path):
-    # type: (bytes) -> bytes
+def expandpath(path: bytes) -> bytes:
     return os.path.expanduser(os.path.expandvars(path))
 
 
@@ -3047,18 +3181,17 @@ def timed(func):
 
 
 _sizeunits = (
-    (b'm', 2 ** 20),
-    (b'k', 2 ** 10),
-    (b'g', 2 ** 30),
-    (b'kb', 2 ** 10),
-    (b'mb', 2 ** 20),
-    (b'gb', 2 ** 30),
+    (b'm', 2**20),
+    (b'k', 2**10),
+    (b'g', 2**30),
+    (b'kb', 2**10),
+    (b'mb', 2**20),
+    (b'gb', 2**30),
     (b'b', 1),
 )
 
 
-def sizetoint(s):
-    # type: (bytes) -> int
+def sizetoint(s: bytes) -> int:
     """Convert a space specifier to a byte count.
 
     >>> sizetoint(b'30')
@@ -3078,7 +3211,7 @@ def sizetoint(s):
         raise error.ParseError(_(b"couldn't parse size: %s") % s)
 
 
-class hooks:
+class hooks(int_misc.IHooks):
     """A collection of hook functions that can be used to extend a
     function's behavior. Hooks are called in lexicographic order,
     based on the names of their sources."""
@@ -3086,10 +3219,10 @@ class hooks:
     def __init__(self):
         self._hooks = []
 
-    def add(self, source, hook):
+    def add(self, source: bytes, hook: Callable) -> None:
         self._hooks.append((source, hook))
 
-    def __call__(self, *args):
+    def __call__(self, *args) -> List:
         self._hooks.sort(key=lambda x: x[0])
         results = []
         for source, hook in self._hooks:
@@ -3280,14 +3413,14 @@ def with_lc_ctype():
         yield
 
 
-def _estimatememory():
-    # type: () -> Optional[int]
+def _estimatememory() -> Optional[int]:
     """Provide an estimate for the available system memory in Bytes.
 
     If no estimate can be provided on the platform, returns None.
     """
     if pycompat.sysplatform.startswith(b'win'):
         # On Windows, use the GlobalMemoryStatusEx kernel function directly.
+        # noinspection PyPep8Naming
         from ctypes import c_long as DWORD, c_ulonglong as DWORDLONG
         from ctypes.wintypes import (  # pytype: disable=import-error
             Structure,

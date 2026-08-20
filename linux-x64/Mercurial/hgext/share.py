@@ -65,6 +65,7 @@ The following ``share.`` config options influence this feature:
     and there are no untracked files, delete that share and create a new share.
 '''
 
+from __future__ import annotations
 
 from mercurial.i18n import _
 from mercurial import (
@@ -162,9 +163,9 @@ def clone(orig, ui, source, *args, **opts):
 
 
 def extsetup(ui):
-    extensions.wrapfunction(bookmarks, b'_getbkfile', getbkfile)
-    extensions.wrapfunction(bookmarks.bmstore, b'_recordchange', recordchange)
-    extensions.wrapfunction(bookmarks.bmstore, b'_writerepo', writerepo)
+    extensions.wrapfunction(bookmarks, '_getbkfile', getbkfile)
+    extensions.wrapfunction(bookmarks.bmstore, '_recordchange', recordchange)
+    extensions.wrapfunction(bookmarks.bmstore, '_writerepo', writerepo)
     extensions.wrapcommand(commands.table, b'clone', clone)
 
 

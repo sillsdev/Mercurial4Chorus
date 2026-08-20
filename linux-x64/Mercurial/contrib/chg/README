@@ -1,0 +1,40 @@
+cHg
+===
+
+A fast client for Mercurial command server running on Unix.
+
+Install:
+
+ $ make
+ $ make install
+
+Usage:
+
+ $ chg help                 # show help of Mercurial
+ $ alias hg=chg             # replace hg command
+ $ chg --kill-chg-daemon    # terminate background server
+
+Environment variables:
+
+Although cHg tries to update environment variables, some of them cannot be
+changed after spawning the server. The following variables are specially
+handled:
+
+ * configuration files are reloaded automatically by default.
+ * CHGHG or HG specifies the path to the hg executable spawned as the
+   background command server.
+
+The following variables are available for testing:
+
+ * CHGDEBUG enables debug messages.
+ * CHGSOCKNAME specifies the socket path of the background cmdserver.
+ * CHGTIMEOUT specifies how many seconds chg will wait before giving up
+   connecting to a cmdserver. If it is 0, chg will wait forever. Default: 60
+
+Build environment variables:
+
+ * HGPATH: the path to the hg executable to call when CHGHG and HG are not set,
+   instead of "hg"
+ * HGPATHREL=1: when CHGHG and HG are not set, the hg executable will be ./hg
+   relative to the chg executable. Only works on linux, falls back to "hg"
+   otherwise.

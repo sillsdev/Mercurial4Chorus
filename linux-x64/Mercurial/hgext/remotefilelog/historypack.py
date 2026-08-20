@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import struct
 
 from mercurial.node import (
@@ -88,7 +90,7 @@ class historypack(basepack.basepack):
     SUPPORTED_VERSIONS = [2]
 
     def __init__(self, path):
-        super(historypack, self).__init__(path)
+        super().__init__(path)
         self.INDEXFORMAT = INDEXFORMAT2
         self.INDEXENTRYLENGTH = INDEXENTRYLENGTH2
 
@@ -428,7 +430,7 @@ class mutablehistorypack(basepack.mutablebasepack):
     SUPPORTED_VERSIONS = [2]
 
     def __init__(self, ui, packpath, version=2):
-        super(mutablehistorypack, self).__init__(ui, packpath, version=version)
+        super().__init__(ui, packpath, version=version)
         self.files = {}
         self.entrylocations = {}
         self.fileentries = {}
@@ -508,7 +510,7 @@ class mutablehistorypack(basepack.mutablebasepack):
 
         self._write()
 
-        return super(mutablehistorypack, self).close(ledger=ledger)
+        return super().close(ledger=ledger)
 
     def createindex(self, nodelocations, indexoffset):
         fileindexformat = self.INDEXFORMAT

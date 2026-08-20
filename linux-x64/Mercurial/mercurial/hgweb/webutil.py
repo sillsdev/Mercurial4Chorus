@@ -6,6 +6,7 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
 
 import copy
 import difflib
@@ -14,7 +15,6 @@ import re
 
 from ..i18n import _
 from ..node import hex, short
-from ..pycompat import setattr
 
 from .common import (
     ErrorResponse,
@@ -211,7 +211,7 @@ def _ctxsgen(context, ctxs):
             b'description': s.description(),
             b'branch': s.branch(),
         }
-        if util.safehasattr(s, 'path'):
+        if hasattr(s, 'path'):
             d[b'file'] = s.path()
         yield d
 
@@ -230,16 +230,16 @@ def difffeatureopts(req, ui, section):
         ui, untrusted=True, section=section, whitespace=True
     )
 
-    for k in (
-        b'ignorews',
-        b'ignorewsamount',
-        b'ignorewseol',
-        b'ignoreblanklines',
+    for kb, ks in (
+        (b'ignorews', 'ignorews'),
+        (b'ignorewsamount', 'ignorewsamount'),
+        (b'ignorewseol', 'ignorewseol'),
+        (b'ignoreblanklines', 'ignoreblanklines'),
     ):
-        v = req.qsparams.get(k)
+        v = req.qsparams.get(kb)
         if v is not None:
             v = stringutil.parsebool(v)
-            setattr(diffopts, k, v if v is not None else True)
+            setattr(diffopts, ks, v if v is not None else True)
 
     return diffopts
 
@@ -601,7 +601,7 @@ def changesetentry(web, ctx):
         diffsummary=lambda context, mapping: diffsummary(diffstatsgen),
         diffstat=diffstats,
         archives=web.archivelist(ctx.hex()),
-        **pycompat.strkwargs(commonentry(web.repo, ctx))
+        **pycompat.strkwargs(commonentry(web.repo, ctx)),
     )
 
 

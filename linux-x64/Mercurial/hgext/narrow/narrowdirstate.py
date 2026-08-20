@@ -5,6 +5,7 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
 
 from mercurial.i18n import _
 from mercurial import error
@@ -34,42 +35,42 @@ def wrapdirstate(repo, dirstate):
         # sparse checkout
         @_editfunc
         def normal(self, *args, **kwargs):
-            return super(narrowdirstate, self).normal(*args, **kwargs)
+            return super().normal(*args, **kwargs)
 
         @_editfunc
         def set_tracked(self, *args, **kwargs):
-            return super(narrowdirstate, self).set_tracked(*args, **kwargs)
+            return super().set_tracked(*args, **kwargs)
 
         @_editfunc
         def set_untracked(self, *args):
-            return super(narrowdirstate, self).set_untracked(*args)
+            return super().set_untracked(*args)
 
         @_editfunc
         def add(self, *args):
-            return super(narrowdirstate, self).add(*args)
+            return super().add(*args)
 
         @_editfunc
         def normallookup(self, *args):
-            return super(narrowdirstate, self).normallookup(*args)
+            return super().normallookup(*args)
 
         @_editfunc
         def copy(self, *args):
-            return super(narrowdirstate, self).copy(*args)
+            return super().copy(*args)
 
         @_editfunc
         def remove(self, *args):
-            return super(narrowdirstate, self).remove(*args)
+            return super().remove(*args)
 
         @_editfunc
         def merge(self, *args):
-            return super(narrowdirstate, self).merge(*args)
+            return super().merge(*args)
 
         def rebuild(self, parent, allfiles, changedfiles=None):
             if changedfiles is None:
                 # Rebuilding entire dirstate, let's filter allfiles to match the
                 # narrowspec.
                 allfiles = [f for f in allfiles if repo.narrowmatch()(f)]
-            super(narrowdirstate, self).rebuild(parent, allfiles, changedfiles)
+            super().rebuild(parent, allfiles, changedfiles)
 
     dirstate.__class__ = narrowdirstate
     return dirstate

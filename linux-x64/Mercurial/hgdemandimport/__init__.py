@@ -11,6 +11,7 @@
 # demand loading is per-package. Keeping demandimport in the mercurial package
 # would disable demand loading for any modules in mercurial.
 
+from __future__ import annotations
 
 import os
 import sys
@@ -58,6 +59,11 @@ IGNORES = {
     # setuptools uses this hack to inject it's own distutils at import time
     'setuptools',
     '_distutils_hack.override',
+    # threading is locally imported by importlib.util.LazyLoader.exec_module
+    '_weakrefset',
+    'warnings',
+    'threading',
+    'collections.abc',
 }
 
 _pypy = '__pypy__' in sys.builtin_module_names

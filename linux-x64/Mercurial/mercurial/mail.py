@@ -5,6 +5,7 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
 
 import email
 import email.charset
@@ -18,11 +19,15 @@ import smtplib
 import socket
 import time
 
-from .i18n import _
-from .pycompat import (
-    getattr,
-    open,
+from typing import (
+    Any,
+    List,
+    Optional,
+    Tuple,
+    Union,
 )
+
+from .i18n import _
 from . import (
     encoding,
     error,
@@ -35,12 +40,6 @@ from .utils import (
     stringutil,
     urlutil,
 )
-
-if pycompat.TYPE_CHECKING:
-    from typing import Any, List, Tuple, Union
-
-    # keep pyflakes happy
-    assert all((Any, List, Tuple, Union))
 
 
 class STARTTLS(smtplib.SMTP):
@@ -104,8 +103,7 @@ class SMTPS(smtplib.SMTP):
         return new_socket
 
 
-def _pyhastls():
-    # type: () -> bool
+def _pyhastls() -> bool:
     """Returns true iff Python has TLS support, false otherwise."""
     try:
         import ssl
@@ -220,7 +218,7 @@ def _sendmail(ui, sender, recipients, msg):
 def _mbox(mbox, sender, recipients, msg):
     '''write mails to mbox'''
     # TODO: use python mbox library for proper locking
-    with open(mbox, b'ab+') as fp:
+    with open(mbox, 'ab+') as fp:
         # Should be time.asctime(), but Windows prints 2-characters day
         # of month instead of one. Make them print the same thing.
         date = time.strftime('%a %b %d %H:%M:%S %Y', time.localtime())
@@ -236,7 +234,7 @@ def connect(ui, mbox=None):
     """make a mail connection. return a function to send mail.
     call as sendmail(sender, list-of-recipients, msg)."""
     if mbox:
-        open(mbox, b'wb').close()
+        open(mbox, 'wb').close()
         return lambda s, r, m: _mbox(mbox, s, r, m)
     if ui.config(b'email', b'method') == b'smtp':
         return _smtp(ui)
@@ -268,8 +266,7 @@ def validateconfig(ui):
             )
 
 
-def codec2iana(cs):
-    # type: (str) -> str
+def codec2iana(cs: str) -> str:
     ''' '''
     cs = email.charset.Charset(cs).input_charset.lower()
 
@@ -279,8 +276,11 @@ def codec2iana(cs):
     return cs
 
 
-def mimetextpatch(s, subtype='plain', display=False):
-    # type: (bytes, str, bool) -> email.message.Message
+def mimetextpatch(
+    s: bytes,
+    subtype: str = 'plain',
+    display: bool = False,
+) -> email.message.Message:
     """Return MIME message suitable for a patch.
     Charset will be detected by first trying to decode as us-ascii, then utf-8,
     and finally the global encodings. If all those fail, fall back to
@@ -305,8 +305,9 @@ def mimetextpatch(s, subtype='plain', display=False):
     return mimetextqp(s, subtype, "iso-8859-1")
 
 
-def mimetextqp(body, subtype, charset):
-    # type: (bytes, str, str) -> email.message.Message
+def mimetextqp(
+    body: bytes, subtype: str, charset: str
+) -> email.message.Message:
     """Return MIME message.
     Quoted-printable transfer encoding will be used if necessary.
     """
@@ -331,8 +332,7 @@ def mimetextqp(body, subtype, charset):
     return msg
 
 
-def _charsets(ui):
-    # type: (Any) -> List[str]
+def _charsets(ui: Any) -> List[str]:
     '''Obtains charsets to send mail parts not containing patches.'''
     charsets = [
         pycompat.sysstr(cs.lower())
@@ -349,8 +349,7 @@ def _charsets(ui):
     return [cs for cs in charsets if not cs.endswith('ascii')]
 
 
-def _encode(ui, s, charsets):
-    # type: (Any, bytes, List[str]) -> Tuple[bytes, str]
+def _encode(ui: Any, s: bytes, charsets: List[str]) -> Tuple[bytes, str]:
     """Returns (converted) string, charset tuple.
     Finds out best charset by cycling through sendcharsets in descending
     order. Tries both encoding and fallbackencoding for input. Only as
@@ -400,8 +399,12 @@ def _encode(ui, s, charsets):
     return s, 'us-ascii'
 
 
-def headencode(ui, s, charsets=None, display=False):
-    # type: (Any, Union[bytes, str], List[str], bool) -> str
+def headencode(
+    ui: Any,
+    s: Union[bytes, str],
+    charsets: Optional[List[str]] = None,
+    display: bool = False,
+) -> str:
     '''Returns RFC-2047 compliant header from given string.'''
     if not display:
         # split into words?
@@ -410,8 +413,9 @@ def headencode(ui, s, charsets=None, display=False):
     return encoding.strfromlocal(s)
 
 
-def _addressencode(ui, name, addr, charsets=None):
-    # type: (Any, str, str, List[str]) -> str
+def _addressencode(
+    ui: Any, name: str, addr: str, charsets: Optional[List[str]] = None
+) -> str:
     addr = encoding.strtolocal(addr)
     name = headencode(ui, name, charsets)
     try:
@@ -430,8 +434,12 @@ def _addressencode(ui, name, addr, charsets=None):
     return email.utils.formataddr((name, encoding.strfromlocal(addr)))
 
 
-def addressencode(ui, address, charsets=None, display=False):
-    # type: (Any, bytes, List[str], bool) -> str
+def addressencode(
+    ui: Any,
+    address: bytes,
+    charsets: Optional[List[str]] = None,
+    display: bool = False,
+) -> str:
     '''Turns address into RFC-2047 compliant header.'''
     if display or not address:
         return encoding.strfromlocal(address or b'')
@@ -439,8 +447,12 @@ def addressencode(ui, address, charsets=None, display=False):
     return _addressencode(ui, name, addr, charsets)
 
 
-def addrlistencode(ui, addrs, charsets=None, display=False):
-    # type: (Any, List[bytes], List[str], bool) -> List[str]
+def addrlistencode(
+    ui: Any,
+    addrs: List[bytes],
+    charsets: Optional[List[str]] = None,
+    display: bool = False,
+) -> List[str]:
     """Turns a list of addresses into a list of RFC-2047 compliant headers.
     A single element of input list may contain multiple addresses, but output
     always has one address per item"""
@@ -459,8 +471,12 @@ def addrlistencode(ui, addrs, charsets=None, display=False):
     return result
 
 
-def mimeencode(ui, s, charsets=None, display=False):
-    # type: (Any, bytes, List[str], bool) -> email.message.Message
+def mimeencode(
+    ui: Any,
+    s: bytes,
+    charsets: Optional[List[str]] = None,
+    display: bool = False,
+) -> email.message.Message:
     """creates mime text object, encodes it if needed, and sets
     charset and transfer-encoding accordingly."""
     cs = 'us-ascii'
@@ -472,8 +488,7 @@ def mimeencode(ui, s, charsets=None, display=False):
 Generator = email.generator.BytesGenerator
 
 
-def parse(fp):
-    # type: (Any) -> email.message.Message
+def parse(fp: Any) -> email.message.Message:
     ep = email.parser.Parser()
     # disable the "universal newlines" mode, which isn't binary safe.
     # I have no idea if ascii/surrogateescape is correct, but that's
@@ -487,14 +502,12 @@ def parse(fp):
         fp.detach()
 
 
-def parsebytes(data):
-    # type: (bytes) -> email.message.Message
+def parsebytes(data: bytes) -> email.message.Message:
     ep = email.parser.BytesParser()
     return ep.parsebytes(data)
 
 
-def headdecode(s):
-    # type: (Union[email.header.Header, bytes]) -> bytes
+def headdecode(s: Union[email.header.Header, bytes]) -> bytes:
     '''Decodes RFC-2047 header'''
     uparts = []
     for part, charset in email.header.decode_header(s):
@@ -506,7 +519,7 @@ def headdecode(s):
                 pass
         # On Python 3, decode_header() may return either bytes or unicode
         # depending on whether the header has =?<charset>? or not
-        if isinstance(part, type(u'')):
+        if isinstance(part, str):
             uparts.append(part)
             continue
         try:
@@ -515,4 +528,4 @@ def headdecode(s):
         except UnicodeDecodeError:
             pass
         uparts.append(part.decode('ISO-8859-1'))
-    return encoding.unitolocal(u' '.join(uparts))
+    return encoding.unitolocal(' '.join(uparts))

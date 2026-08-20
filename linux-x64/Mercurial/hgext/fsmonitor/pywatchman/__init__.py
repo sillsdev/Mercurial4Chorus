@@ -26,6 +26,8 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+from __future__ import annotations
+
 import inspect
 import math
 import os
@@ -210,7 +212,6 @@ if _debugging:
             )
         )
 
-
 else:
 
     def log(fmt, *args):
@@ -263,16 +264,12 @@ class UseAfterFork(WatchmanError):
 
 class WatchmanEnvironmentError(WatchmanError):
     def __init__(self, msg, errno, errmsg, cmd=None):
-        super(WatchmanEnvironmentError, self).__init__(
-            "{0}: errno={1} errmsg={2}".format(msg, errno, errmsg), cmd
-        )
+        super().__init__(f"{msg}: errno={errno} errmsg={errmsg}", cmd)
 
 
 class SocketConnectError(WatchmanError):
     def __init__(self, sockpath, exc):
-        super(SocketConnectError, self).__init__(
-            "unable to connect to %s: %s" % (sockpath, exc)
-        )
+        super().__init__("unable to connect to %s: %s" % (sockpath, exc))
         self.sockpath = sockpath
         self.exc = exc
 
@@ -294,9 +291,7 @@ class CommandError(WatchmanError):
     """
 
     def __init__(self, msg, cmd=None):
-        super(CommandError, self).__init__(
-            "watchman command error: %s" % (msg,), cmd
-        )
+        super().__init__("watchman command error: %s" % (msg,), cmd)
 
 
 class Transport:
@@ -376,7 +371,7 @@ class UnixSocketTransport(Transport):
             sock.settimeout(self.timeout)
             sock.connect(self.sockpath)
             self.sock = sock
-        except socket.error as e:
+        except OSError as e:
             sock.close()
             raise SocketConnectError(self.sockpath, e)
 
@@ -561,7 +556,7 @@ class WindowsNamedPipeTransport(Transport):
             # other way this shows up is if the client has gotten in a weird
             # state, so let's bail out
             CancelIoEx(self.pipe, olap)
-            raise IOError("Async read yielded 0 bytes; unpossible!")
+            raise OSError("Async read yielded 0 bytes; unpossible!")
 
         # Holds precisely the bytes that we read from the prior request
         buf = buf[:nread]
@@ -665,7 +660,7 @@ class CLIProcessTransport(Transport):
             return self.proc
         args = [
             self.binpath,
-            "--sockname={0}".format(self.sockpath),
+            f"--sockname={self.sockpath}",
             "--logfile=/BOGUS",
             "--statefile=/BOGUS",
             "--no-spawn",
@@ -700,7 +695,7 @@ class BserCodec(Codec):
     """use the BSER encoding.  This is the default, preferred codec"""
 
     def __init__(self, transport, value_encoding, value_errors):
-        super(BserCodec, self).__init__(transport)
+        super().__init__(transport)
         self._value_encoding = value_encoding
         self._value_errors = value_errors
 
@@ -752,9 +747,7 @@ class Bser2WithFallbackCodec(BserCodec):
     """use BSER v2 encoding"""
 
     def __init__(self, transport, value_encoding, value_errors):
-        super(Bser2WithFallbackCodec, self).__init__(
-            transport, value_encoding, value_errors
-        )
+        super().__init__(transport, value_encoding, value_errors)
         if compat.PYTHON3:
             bserv2_key = "required"
         else:
@@ -806,7 +799,7 @@ class Bser2WithFallbackCodec(BserCodec):
             cmd = bser.dumps(
                 *args,
                 version=self.bser_version,
-                capabilities=self.bser_capabilities
+                capabilities=self.bser_capabilities,
             )
         else:
             cmd = bser.dumps(*args)
@@ -826,7 +819,7 @@ class JsonCodec(Codec):
     json = None
 
     def __init__(self, transport):
-        super(JsonCodec, self).__init__(transport)
+        super().__init__(transport)
         # optional dep on json, only if JsonCodec is used
         import json
 
@@ -1167,7 +1160,7 @@ class client:
                 res = self.receive()
 
             return res
-        except EnvironmentError as ee:
+        except OSError as ee:
             # When we can depend on Python 3, we can use PEP 3134
             # exception chaining here.
             raise WatchmanEnvironmentError(

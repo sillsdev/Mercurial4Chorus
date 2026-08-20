@@ -6,6 +6,7 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import annotations
 
 import collections
 import contextlib
@@ -13,6 +14,7 @@ import copy
 import os
 import re
 import shutil
+import typing
 import zlib
 
 from .i18n import _
@@ -21,7 +23,6 @@ from .node import (
     sha1nodeconstants,
     short,
 )
-from .pycompat import open
 from . import (
     copies,
     diffhelper,
@@ -43,6 +44,14 @@ from .utils import (
     procutil,
     stringutil,
 )
+
+if typing.TYPE_CHECKING:
+    import email
+
+    from typing import (
+        Any,
+        Iterator,
+    )
 
 stringio = util.stringio
 
@@ -94,15 +103,13 @@ def split(stream):
     def mboxsplit(stream, cur):
         for line in stream:
             if line.startswith(b'From '):
-                for c in split(chunk(cur[1:])):
-                    yield c
+                yield from split(chunk(cur[1:]))
                 cur = []
 
             cur.append(line)
 
         if cur:
-            for c in split(chunk(cur[1:])):
-                yield c
+            yield from split(chunk(cur[1:]))
 
     def mimesplit(stream, cur):
         def msgfp(m):
@@ -122,7 +129,7 @@ def split(stream):
         if not m.is_multipart():
             yield msgfp(m)
         else:
-            ok_types = (b'text/plain', b'text/x-diff', b'text/x-patch')
+            ok_types = ('text/plain', 'text/x-diff', 'text/x-patch')
             for part in m.walk():
                 ct = part.get_content_type()
                 if ct not in ok_types:
@@ -168,7 +175,7 @@ def split(stream):
 
     mimeheaders = [b'content-type']
 
-    if not util.safehasattr(stream, 'next'):
+    if not hasattr(stream, 'next'):
         # http responses, for example, have readline but not next
         stream = fiter(stream)
 
@@ -229,7 +236,6 @@ def extract(ui, fileobj):
 
 
 def _extract(ui, fileobj, tmpname, tmpfp):
-
     # attempt to detect the start of a patch
     # (this heuristic is borrowed from quilt)
     diffre = re.compile(
@@ -275,12 +281,18 @@ def _extract(ui, fileobj, tmpname, tmpfp):
     diffs_seen = 0
     ok_types = (b'text/plain', b'text/x-diff', b'text/x-patch')
     message = b''
+
+    part: email.message.Message
     for part in msg.walk():
         content_type = pycompat.bytestr(part.get_content_type())
         ui.debug(b'Content-Type: %s\n' % content_type)
         if content_type not in ok_types:
             continue
-        payload = part.get_payload(decode=True)
+
+        # When decode=True, the only possible return types are bytes or None
+        # for a multipart message.  But it can't be multipart here, because the
+        # Content-Type was just checked.
+        payload = typing.cast(bytes, part.get_payload(decode=True))
         m = diffre.search(payload)
         if m:
             hgpatch = False
@@ -492,7 +504,7 @@ class abstractbackend:
 
 class fsbackend(abstractbackend):
     def __init__(self, ui, basedir):
-        super(fsbackend, self).__init__(ui)
+        super().__init__(ui)
         self.opener = vfsmod.vfs(basedir)
 
     def getfile(self, fname):
@@ -541,7 +553,7 @@ class fsbackend(abstractbackend):
 
 class workingbackend(fsbackend):
     def __init__(self, ui, repo, similarity):
-        super(workingbackend, self).__init__(ui, repo.root)
+        super().__init__(ui, repo.root)
         self.repo = repo
         self.similarity = similarity
         self.removed = set()
@@ -558,14 +570,14 @@ class workingbackend(fsbackend):
 
     def setfile(self, fname, data, mode, copysource):
         self._checkknown(fname)
-        super(workingbackend, self).setfile(fname, data, mode, copysource)
+        super().setfile(fname, data, mode, copysource)
         if copysource is not None:
             self.copied.append((copysource, fname))
         self.changed.add(fname)
 
     def unlink(self, fname):
         self._checkknown(fname)
-        super(workingbackend, self).unlink(fname)
+        super().unlink(fname)
         self.removed.add(fname)
         self.changed.add(fname)
 
@@ -596,7 +608,7 @@ class filestore:
         self.created = 0
         self.maxsize = maxsize
         if self.maxsize is None:
-            self.maxsize = 4 * (2 ** 20)
+            self.maxsize = 4 * (2**20)
         self.size = 0
         self.data = {}
 
@@ -629,7 +641,7 @@ class filestore:
 
 class repobackend(abstractbackend):
     def __init__(self, ui, repo, ctx, store):
-        super(repobackend, self).__init__(ui)
+        super().__init__(ui)
         self.repo = repo
         self.ctx = ctx
         self.store = store
@@ -1703,7 +1715,7 @@ def reversehunks(hunks):
 
     newhunks = []
     for c in hunks:
-        if util.safehasattr(c, 'reversehunk'):
+        if hasattr(c, 'reversehunk'):
             c = c.reversehunk()
         newhunks.append(c)
     return newhunks
@@ -2024,7 +2036,7 @@ def scangitpatch(lr, firstline):
     try:
         pos = lr.fp.tell()
         fp = lr.fp
-    except IOError:
+    except OSError:
         fp = stringio(lr.fp.read())
     gitlr = linereader(fp)
     gitlr.push(firstline)
@@ -2382,7 +2394,7 @@ def patchbackend(
 
     store = filestore()
     try:
-        fp = open(patchobj, b'rb')
+        fp = open(patchobj, 'rb')
     except TypeError:
         fp = patchobj
     try:
@@ -2458,7 +2470,7 @@ def patch(
 def changedfiles(ui, repo, patchpath, strip=1, prefix=b''):
     backend = fsbackend(ui, repo.root)
     prefix = _canonprefix(repo, prefix)
-    with open(patchpath, b'rb') as fp:
+    with open(patchpath, 'rb') as fp:
         changed = set()
         for state, values in iterhunks(fp):
             if state == b'file':
@@ -2738,8 +2750,7 @@ def diffsinglehunkinline(hunklines):
             raise error.ProgrammingError(b'unexpected hunk line: %s' % line)
     # fast path: if either side is empty, use diffsinglehunk
     if not a or not b:
-        for t in diffsinglehunk(hunklines):
-            yield t
+        yield from diffsinglehunk(hunklines)
         return
     # re-split the content into words
     al = wordsplitter.findall(bytes(a))
@@ -2796,7 +2807,9 @@ def diffsinglehunkinline(hunklines):
                 nextisnewline = True
 
 
-def difflabel(func, *args, **kw):
+# TODO: first tuple element is likely bytes, but was being detected as bytes|int
+#  so it needs investigation/more typing here.
+def difflabel(func, *args, **kw) -> Iterator[tuple[Any, bytes]]:
     '''yields 2-tuples of (output, label) based on the output of func()'''
     if kw.get('opts') and kw['opts'].worddiff:
         dodiffhunk = diffsinglehunkinline
@@ -2825,8 +2838,7 @@ def difflabel(func, *args, **kw):
 
     def consumehunkbuffer():
         if hunkbuffer:
-            for token in dodiffhunk(hunkbuffer):
-                yield token
+            yield from dodiffhunk(hunkbuffer)
             hunkbuffer[:] = []
 
     for chunk in func(*args, **kw):
@@ -2856,8 +2868,7 @@ def difflabel(func, *args, **kw):
                 hunkbuffer.append(bufferedline)
             else:
                 # unbuffered
-                for token in consumehunkbuffer():
-                    yield token
+                yield from consumehunkbuffer()
                 stripline = line.rstrip()
                 for prefix, label in prefixes:
                     if stripline.startswith(prefix):
@@ -2872,8 +2883,7 @@ def difflabel(func, *args, **kw):
                     yield (line, b'')
                 if i + 1 < linecount:
                     yield (b'\n', b'')
-        for token in consumehunkbuffer():
-            yield token
+        yield from consumehunkbuffer()
 
 
 def diffui(*args, **kw):
