@@ -41,11 +41,13 @@ import argparse
 import contextlib
 import os
 import pathlib
+import py_compile
 import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import zipfile
 
 # What TortoiseHg 7.2.2 bundles. Upstream defaults both of these to a moving
 # branch, so both have to change for a different TortoiseHg tag; pass --hg-tag
@@ -332,6 +334,8 @@ def build_staging_tree(thg: pathlib.Path, tag: str | None, hg_tag: str,
             extra_includes=set(thgwix.EXTRA_INCLUDES),
         )
 
+    inject_version_module(source_dirs)
+
     if stage.exists():
         shutil.rmtree(stage)
     thgpy2exe.stage_install(source_dirs, stage, lower_case=True)
@@ -350,6 +354,74 @@ def build_staging_tree(thg: pathlib.Path, tag: str | None, hg_tag: str,
         shutil.copy2(source, destination)
 
     return stage
+
+
+VERSION_MEMBER = "mercurial/__version__.pyc"
+
+
+def inject_version_module(source_dirs) -> None:
+    """Put mercurial/__version__.pyc into library.zip; py2exe leaves it out.
+
+    Without it `hg version` prints "version unknown". Mercurial 8c3408decdec,
+    first released in 7.2, changed util.version() from
+
+        from . import __version__
+
+    to
+
+        importlib.import_module('mercurial.__version__')
+
+    so that pytype would stop following the import. py2exe decides what to
+    bundle by scanning bytecode for IMPORT_NAME, and a module named only in a
+    string constant is invisible to that scan. chgserver.py holds the only
+    other reference and uses the same form, nothing in TortoiseHg imports it,
+    and TortoiseHg's Windows py2exe options set no `packages` that would sweep
+    the package in wholesale -- so the module is simply dropped. The 7.0.1
+    payload has it; every later one built this way would not.
+
+    Naming it in py2exe's `includes` would be tidier, but no route to that list
+    exists from here: HG_PY2EXE_EXTRA_INCLUDES is read by *Mercurial's*
+    setup.py, not TortoiseHg's, and TortoiseHg's py2exe options are a literal
+    in its own setup.py. Hence patching the archive afterwards.
+    """
+    source = source_dirs.hg / "mercurial" / "__version__.py"
+    archive = source_dirs.thg / "dist" / "lib" / "library.zip"
+
+    if not archive.is_file():
+        die("%s is missing; did build_py2exe get that far?" % archive)
+    if not source.is_file():
+        die("%s was not generated, so the payload would report its version as\n"
+            "       unknown. setuptools_scm writes it during `make local`, so check\n"
+            "       that the Mercurial clone has its tags and that the build reached\n"
+            "       that step." % source)
+
+    with zipfile.ZipFile(archive) as existing:
+        if VERSION_MEMBER in existing.namelist():
+            print("library.zip already carries %s" % VERSION_MEMBER)
+            return
+
+    with tempfile.TemporaryDirectory() as tmp:
+        compiled = pathlib.Path(tmp) / "__version__.pyc"
+        # optimize=1 and the backslash module name are what thg/setup.py hands
+        # py2exe for everything else in the archive.
+        py_compile.compile(str(source), cfile=str(compiled),
+                           dfile=VERSION_MEMBER.replace("/", "\\"),
+                           optimize=1, doraise=True)
+        data = bytearray(compiled.read_bytes())
+
+    # py2exe zeroes the flags, mtime and size words of every header it writes.
+    # Matching that leaves zipimport nothing to validate, which is what we want
+    # since the .py itself is not in the archive.
+    data[4:16] = b"\0" * 12
+
+    # Every one of the 1479 members py2exe wrote is stored, not deflated.
+    with zipfile.ZipFile(archive, "a", zipfile.ZIP_STORED) as zf:
+        zf.writestr(VERSION_MEMBER, bytes(data))
+
+    # setuptools-scm writes `__version__ = version = '7.2.2'`.
+    found = re.search(r"""\bversion\s*=\s*['\"]([^'\"]+)""", source.read_text())
+    print("added %s to library.zip, so `hg version` reports %s"
+          % (VERSION_MEMBER, found.group(1) if found else "a version"))
 
 
 @contextlib.contextmanager
