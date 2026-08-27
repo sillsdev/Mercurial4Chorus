@@ -39,11 +39,30 @@
     <EnableDefaultItems>false</EnableDefaultItems>
   </PropertyGroup>
 
+  <PropertyGroup>
+    <!-- 3.2.1 is the first release with MakeWixForDirTree.ConsolidatedGuidFile.
+         Overridable so the pre-release built from
+         https://github.com/sillsdev/SIL.BuildTasks/pull/81 can be tested before
+         3.2.1 reaches nuget.org:
+
+           -p:SilBuildTasksVersion=3.2.1-pr0081-0002
+           -p:RestoreAdditionalProjectSources=<directory holding the .nupkg>
+
+         build-windows-payload.py passes both for you; see its
+         "sil-buildtasks-version" and "nuget-source" options.
+
+         KEEP THIS IN STEP WITH CHORUS. Chorus runs the same task over the same
+         payload from MakeWixForDistFiles in src/ChorusHub/ChorusHub.csproj, and
+         allocates the GUIDs that actually ship. It pins 3.0.0 and does not pass
+         ConsolidatedGuidFile, so until it is updated it still reads the
+         per-directory files. That is why they are not deleted here. -->
+    <SilBuildTasksVersion Condition="'$(SilBuildTasksVersion)'==''">3.2.1</SilBuildTasksVersion>
+  </PropertyGroup>
+
   <ItemGroup>
-    <!-- Pinned to the version Chorus uses, so GUIDs are allocated identically.
-         The UsingTask for MakeWixForDirTree comes from this package's own
+    <!-- The UsingTask for MakeWixForDirTree comes from this package's own
          build/SIL.BuildTasks.props, which NuGet imports automatically. -->
-    <PackageReference Include="SIL.BuildTasks" Version="3.0.0" />
+    <PackageReference Include="SIL.BuildTasks" Version="$(SilBuildTasksVersion)" />
   </ItemGroup>
 
   <PropertyGroup>
@@ -53,6 +72,16 @@
          here; Chorus keeps its own copy under src/Installer/ and regenerates it
          there. build/ is gitignored. -->
     <WxsOutputPath Condition="'$(WxsOutputPath)'==''">$(RepoRoot)build\wxs\GeneratedMercurial.wxs</WxsOutputPath>
+    <!-- One file for the whole tree instead of a .guidsForInstaller.xml in every
+         directory. The PyOxidizer payload has 40 to 99 directories depending on
+         the trim flags, against six under the old py2exe layout, and every entry
+         has to be kept for the life of the product because it must outlive the
+         file it describes.
+
+         The task seeds this from any per-directory files still present and
+         leaves them alone, so the switch is reversible and nothing is lost.
+         Delete them only once Chorus reads the consolidated file too. -->
+    <ConsolidatedGuidFile Condition="'$(ConsolidatedGuidFile)'==''">$(PayloadDir)\.guidsForInstaller.all.xml</ConsolidatedGuidFile>
   </PropertyGroup>
 
   <Target Name="RegenerateGuids">
@@ -80,6 +109,7 @@
       OutputFilePath="$(WxsOutputPath)"
       IgnoreRegExPattern="IGNOREME|\.gitignore"
       Exclude="$(PayloadDir)\mercurial.ini;$(PayloadDir)\default.d\cacerts.rc"
+      ConsolidatedGuidFile="$(ConsolidatedGuidFile)"
       MatchRegExPattern=".*" />
   </Target>
 

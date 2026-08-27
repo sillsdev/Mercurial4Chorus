@@ -81,6 +81,9 @@ by hand if you prefer.
    winget install Microsoft.DotNet.SDK.8
    ```
 
+   That step needs **SIL.BuildTasks 3.2.1 or later**, which is not on nuget.org yet — see
+   [Installer GUIDs](#installer-guids) for how to restore the pre-release build of it.
+
 6. **A Mercurial checkout beside this one**, which is where `--hg-source` defaults to:
 
    ```powershell
@@ -167,6 +170,46 @@ actually present, so the flag cannot make a module unimportable.
 only dependency of `lib/_ctypes.pyd`, and since `mercurial/win32.py` imports `ctypes` at module
 scope, that payload could not run a single command. The build now reads the PE import table of
 every surviving binary and refuses to finish if one of them needs a file that was removed.
+
+## Installer GUIDs
+
+Every file in the payload needs an MSI component GUID that stays attached to its path for the
+life of the product, because an entry has to outlive the file it describes for an upgrade to be
+able to remove it. `assets/regen-guids.proj` drives SIL.BuildTasks' `MakeWixForDirTree` to
+allocate them, and `build-windows-payload.py` runs it unless given `--no-regen-guids`.
+
+Historically that meant one hidden `.guidsForInstaller.xml` per directory — fine at six, unwieldy
+at the 40–99 the PyOxidizer layout needs. **SIL.BuildTasks 3.2.1 adds `ConsolidatedGuidFile`**, and
+the build now writes a single `win/Mercurial/.guidsForInstaller.all.xml` holding the whole tree.
+The task seeds it from any per-directory files still present and leaves those alone, so the switch
+loses nothing and is reversible.
+
+> [!IMPORTANT]
+> **Do not delete the per-directory files yet.** Chorus runs the same task over this same payload,
+> from `MakeWixForDistFiles` in `src/ChorusHub/ChorusHub.csproj`, and *that* invocation allocates
+> the GUIDs which actually ship in the installer. It pins SIL.BuildTasks 3.0.0 and passes no
+> `ConsolidatedGuidFile`, so it still reads the per-directory files. Deleting them before Chorus is
+> updated would silently mint a fresh GUID for every file in the payload and break upgrades for
+> everyone who already has Mercurial installed.
+
+Until 3.2.1 reaches nuget.org, restore it from a local pre-release build:
+
+```powershell
+py -3 build-windows-payload.py --sil-buildtasks-version 3.2.1-pr0081-0002 --nuget-source .
+```
+
+`--nuget-source` is any directory holding the `.nupkg`; the repository root is where the
+pre-release currently sits. Once 3.2.1 is published, both options can be dropped.
+
+Read the list of newly allocated File Ids the run prints. An id that resembles an existing file
+under a different name is a rename that has just been given a second installer identity.
+
+One thing to know about those ids: `MakeWixForDirTree` caps them at 50 characters and keeps the
+**last** 50, so a deep path such as `mercurial.lib.mercurial.__pycache__.ancestor.cpython-39.pyc`
+loses its front and becomes `_.lib.mercurial.__pycache__.ancestor.cpython_39.pyc`. On this payload
+754 of 1595 ids are truncated that way and none of them collide — the task appends a numeric
+suffix if two ever do, which would make a GUID depend on directory traversal order. Worth watching
+if the tree gets deeper.
 
 ## After the build
 

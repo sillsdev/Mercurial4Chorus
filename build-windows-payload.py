@@ -89,6 +89,35 @@ PRESERVE = [
 # appends, so keeping the old file is what makes both properties hold.
 GUID_FILE = ".guidsForInstaller.xml"
 
+# One file at the payload root holding the GUIDs for the whole tree, written by
+# MakeWixForDirTree.ConsolidatedGuidFile (SIL.BuildTasks 3.2.1 and later). The
+# per-directory scheme needs one file per directory -- 40 to 99 of them here,
+# depending on the trim flags, against six under the old py2exe layout -- and
+# none of them can ever be retired.
+#
+# During the switch BOTH are carried across a rebuild. The task seeds the
+# consolidated file from any per-directory files it finds and leaves those on
+# disk, so nothing is lost and the change is reversible.
+#
+# The per-directory files cannot be deleted yet. Chorus runs the same task over
+# this same payload, from MakeWixForDistFiles in src/ChorusHub/ChorusHub.csproj,
+# and that invocation is what allocates the GUIDs that ship in the installer. It
+# pins SIL.BuildTasks 3.0.0 and passes no ConsolidatedGuidFile, so it still reads
+# the per-directory files; deleting them before Chorus is updated would silently
+# mint a fresh GUID for every file in the payload and break upgrades.
+CONSOLIDATED_GUID_FILE = ".guidsForInstaller.all.xml"
+
+# 3.2.1 is the first SIL.BuildTasks with ConsolidatedGuidFile. Not on nuget.org
+# while https://github.com/sillsdev/SIL.BuildTasks/pull/81 is in review, so
+# --sil-buildtasks-version and --nuget-source exist to point the restore at the
+# pre-release nupkg.
+DEFAULT_SIL_BUILDTASKS_VERSION = "3.2.1"
+
+
+def _is_guid_file(name: str) -> bool:
+    """Is *name* one of the files recording installer GUIDs?"""
+    return name == GUID_FILE or name == CONSOLIDATED_GUID_FILE
+
 
 def die(msg: str) -> None:
     print("error: %s" % msg, file=sys.stderr)
@@ -516,17 +545,25 @@ def run(command: list, cwd: pathlib.Path | None = None, what: str | None = None)
         die("%s failed with exit code %d" % (what or printable, result.returncode))
 
 
+def _guid_files(payload: pathlib.Path) -> list:
+    """Every GUID-recording file in *payload*, per-directory and consolidated."""
+    return sorted(p for p in payload.rglob("*")
+                  if p.is_file() and _is_guid_file(p.name))
+
+
 def _guid_entries(payload: pathlib.Path) -> dict:
     """Every File Id recorded in the payload, mapped to the file recording it."""
     entries = {}
-    for path in sorted(payload.rglob(GUID_FILE)):
+    for path in sorted(_guid_files(payload)):
         text = path.read_text(encoding="utf-8-sig", errors="replace")
         for identifier in re.findall(r'Id="([^"]+)"', text):
             entries[identifier] = path
     return entries
 
 
-def regenerate_guids(here: pathlib.Path, payload: pathlib.Path) -> int:
+def regenerate_guids(here: pathlib.Path, payload: pathlib.Path,
+                     version: str = DEFAULT_SIL_BUILDTASKS_VERSION,
+                     nuget_source: str | None = None) -> int:
     """Allocate MSI component GUIDs for any payload file lacking one.
 
     The GUIDs live in .guidsForInstaller.xml files inside the payload itself and
@@ -553,19 +590,27 @@ def regenerate_guids(here: pathlib.Path, payload: pathlib.Path) -> int:
     if not project.is_file():
         die("%s is missing" % project)
 
-    print("\nregenerating installer GUIDs")
+    print("\nregenerating installer GUIDs (SIL.BuildTasks %s)" % version)
     before_entries = _guid_entries(payload)
-    before_bytes = {path: path.read_bytes()
-                    for path in sorted(payload.rglob(GUID_FILE))}
+    before_bytes = {path: path.read_bytes() for path in _guid_files(payload)}
 
     # -restore in the same invocation: the task assembly arrives via
     # PackageReference, and its UsingTask via the package's own props.
-    run(["dotnet", "msbuild", project, "-restore", "-nologo",
-         "-t:RegenerateGuids",
-         "-p:PayloadDir=%s" % payload],
-        cwd=here, what="dotnet msbuild -t:RegenerateGuids")
+    command = ["dotnet", "msbuild", project, "-restore", "-nologo",
+               "-t:RegenerateGuids",
+               "-p:PayloadDir=%s" % payload,
+               "-p:SilBuildTasksVersion=%s" % version]
+    if nuget_source:
+        command.append("-p:RestoreAdditionalProjectSources=%s"
+                       % pathlib.Path(nuget_source).resolve())
+    run(command, cwd=here, what="dotnet msbuild -t:RegenerateGuids")
 
-    after = sorted(payload.rglob(GUID_FILE))
+    consolidated = payload / CONSOLIDATED_GUID_FILE
+    if not consolidated.is_file():
+        die("%s was not written; does SIL.BuildTasks %s have"
+            " ConsolidatedGuidFile?" % (consolidated, version))
+
+    after = _guid_files(payload)
     if not after:
         die("no %s files under %s; did the task actually run?"
             % (GUID_FILE, payload))
@@ -589,6 +634,17 @@ def regenerate_guids(here: pathlib.Path, payload: pathlib.Path) -> int:
             changed += 1
     if changed:
         print("  %d of %d GUID file(s) changed" % (changed, len(after)))
+
+    total = len(_guid_entries(payload))
+    in_consolidated = len(re.findall(
+        r'Id="([^"]+)"', consolidated.read_text(encoding="utf-8-sig",
+                                                errors="replace")))
+    print("  %s holds %d of the %d id(s) in the payload"
+          % (CONSOLIDATED_GUID_FILE, in_consolidated, total))
+    if in_consolidated < total:
+        print("  warning: some ids are only in the per-directory files; the"
+              " consolidated\n           file is not yet a complete"
+              " replacement for them")
     return changed
 
 
@@ -691,7 +747,8 @@ def assemble_payload(stage: pathlib.Path, payload: pathlib.Path,
     # of the product, and an entry has to outlive the file it describes so the
     # installer can still remove it.
     guids = {relative: (payload / relative).read_bytes()
-             for relative in sorted(before) if relative.endswith(GUID_FILE)}
+             for relative in sorted(before)
+             if _is_guid_file(relative.rsplit("/", 1)[-1])}
 
     with tempfile.TemporaryDirectory() as tmp:
         kept = pathlib.Path(tmp)
@@ -760,7 +817,10 @@ def assemble_payload(stage: pathlib.Path, payload: pathlib.Path,
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_bytes(content)
     if guids:
-        print("guids: carried %d %s file(s) across" % (len(guids), GUID_FILE))
+        consolidated = sum(1 for r in guids
+                           if r.rsplit("/", 1)[-1] == CONSOLIDATED_GUID_FILE)
+        print("guids: carried %d file(s) across (%d per-directory, %d consolidated)"
+              % (len(guids), len(guids) - consolidated, consolidated))
 
     after = files_in(payload)
     return (sorted(after - before), sorted(before - after), dropped, trimmed,
@@ -811,6 +871,16 @@ def main() -> None:
              " hg.exe actually loads. Independent of --no-trim. The cost is"
              " that a Mercurial traceback no longer shows the source line it"
              " failed on, only the file, line number and function",
+    )
+    parser.add_argument(
+        "--sil-buildtasks-version", default=DEFAULT_SIL_BUILDTASKS_VERSION,
+        help="SIL.BuildTasks version to allocate GUIDs with (default:"
+             " %(default)s, the first release with ConsolidatedGuidFile)",
+    )
+    parser.add_argument(
+        "--nuget-source", metavar="DIR",
+        help="additional NuGet source to restore SIL.BuildTasks from, for"
+             " testing a pre-release build of it before it reaches nuget.org",
     )
     parser.add_argument(
         "--no-regen-guids", action="store_true",
@@ -865,7 +935,8 @@ def main() -> None:
 
     regenerated = not args.no_regen_guids
     if regenerated:
-        regenerate_guids(here, payload)
+        regenerate_guids(here, payload, args.sil_buildtasks_version,
+                         args.nuget_source)
 
     total = sum(1 for p in payload.rglob("*") if p.is_file())
     directories = len({p.parent for p in payload.rglob("*") if p.is_file()})
