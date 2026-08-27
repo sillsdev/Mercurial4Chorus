@@ -21,8 +21,8 @@ MSI, the install layout is 347 directories against the six a py2exe layout
 needed, and the Chorus installer records one .guidsForInstaller.xml per
 directory, every entry of which has to be kept forever. That is the price of
 building from Mercurial itself instead of from a third party's repackaging of
-it. The trimming this script does by default brings that back to 100
-directories, and --trim-hgext to 59.
+it. The trimming this script does by default brings that back to 99
+directories, --trim-hgext to 58, and both extra flags together to 40.
 
 The build is not reproducible. Expect the file list to match a previous build
 at the same tag and the bytes not to; judge a rebuild by the added/removed
@@ -165,11 +165,13 @@ def is_dropped(relative: str) -> bool:
 # msiextract. The nupkg column is deflate calibrated against a real dotnet pack,
 # so it is accurate to a few percent rather than exact.
 #
-#     mode            files  dirs   raw     nupkg
-#     --no-trim        3277   347   99.8 MB  37.3 MB
-#     (default)        1526   100   76.2 MB  28.8 MB
-#     --trim-hgext      680    59   60.5 MB  23.8 MB
-#     TortoiseHg          99     6   46.3 MB  23.4 MB   <- what this replaced
+#     mode                          files  dirs   raw     nupkg
+#     --no-trim                      3277   347   99.8 MB  37.3 MB
+#     (default)                      1520    99   75.8 MB  28.7 MB
+#     --trim-sources                  837    65   63.3 MB  25.3 MB
+#     --trim-hgext                    675    58   60.2 MB  23.6 MB
+#     --trim-hgext --trim-sources     395    40   54.0 MB  21.9 MB
+#     TortoiseHg                       99     6   46.3 MB  23.4 MB  <- replaced
 #
 # The directory count matters as much as the megabytes: it is the number of
 # .guidsForInstaller.xml files that have to be maintained for the life of the
@@ -282,6 +284,40 @@ TRIM_HGEXT_PREFIXES = ("_cffi_backend",)
 # check_native_dependencies() below now catches this at build time. Adding a
 # DLL here needs a reason from its import table, not from its name.
 TRIM_HGEXT_FILES: set = set()
+
+
+# Python source, dropped by --trim-sources and kept by default.
+#
+# hg.exe does not need it. Its resource index carries a separate path for each
+# module's source and its bytecode -- lib\\mercurial\\util.py in one blob
+# section, lib\\mercurial\\__pycache__\\util.cpython-39.pyc in another (both
+# UTF-16, which is why grepping the binary for them as ASCII finds nothing) --
+# and the bytecode is PEP 552 unchecked-hash, so nothing ever validates it
+# against the source it came from.
+#
+# What is lost is source lines in tracebacks: an hg crash still reports the
+# file, line and function, but the offending line itself is blank. Chorus
+# surfaces hg's stderr, so that is a real if modest cost to diagnosis, and it
+# is the reason this is not on by default.
+#
+# The rule enforced below is that a .py is removed only when its bytecode is
+# actually present. Against the official 7.0.1 x64 MSI the pairing is exact --
+# 1266 .py, 1266 .pyc, no orphan on either side -- but a Mercurial that ships a
+# module PyOxidizer does not compile would otherwise be made unimportable, so
+# the check is on the removal rather than on a count.
+
+
+def _sources_with_bytecode(stage: pathlib.Path) -> set:
+    """Every lib/**.py in *stage* that has compiled bytecode beside it."""
+    found = set()
+    for compiled in stage.rglob("*.pyc"):
+        relative = str(compiled.relative_to(stage)).replace(os.sep, "/")
+        parts = relative.split("/")
+        if len(parts) < 2 or parts[-2] != "__pycache__":
+            continue
+        stem = parts[-1].split(".cpython")[0]
+        found.add("/".join(parts[:-2] + [stem + ".py"]))
+    return found
 
 
 def _pe_imported_dlls(path: pathlib.Path) -> list:
@@ -408,6 +444,18 @@ def _hgext_module(relative: str) -> str | None:
 
 def is_trimmed(relative: str, trim_hgext: bool = False) -> str | None:
     """Why this payload path is being trimmed, or None to keep it."""
+    # Decide a __pycache__ entry exactly as its module would be decided.
+    # Without this, trimming a single-file module such as lib/six.py leaves
+    # lib/__pycache__/six.cpython-39.pyc behind: the rules match on the
+    # top-level name under lib/, which for that path is "__pycache__" and
+    # matches nothing. Orphan bytecode is still importable, so the module is
+    # not actually gone -- and lib/__pycache__ survives as a directory, which
+    # costs a .guidsForInstaller.xml for the life of the product.
+    parts = relative.split("/")
+    if len(parts) >= 2 and parts[-2] == "__pycache__" and relative.endswith(".pyc"):
+        stem = parts[-1].split(".cpython")[0]
+        relative = "/".join(parts[:-2] + [stem + ".py"])
+
     if relative.split("/")[0] == "contrib":
         return "contrib/ (completions, editor and vim files, hgweb CGI)"
 
@@ -626,7 +674,8 @@ def documentation_build_skipped(module):
 
 
 def assemble_payload(stage: pathlib.Path, payload: pathlib.Path,
-                     trim: bool = True, trim_hgext: bool = False
+                     trim: bool = True, trim_hgext: bool = False,
+                     trim_sources: bool = False
                      ) -> tuple[list[str], list[str], int, dict, set]:
     """Replace *payload* with the wanted part of *stage*, keeping our own files."""
     def files_in(root: pathlib.Path) -> set[str]:
@@ -662,6 +711,8 @@ def assemble_payload(stage: pathlib.Path, payload: pathlib.Path,
         dropped = 0
         trimmed: dict = {}
         removed_names: set = set()
+        compiled = _sources_with_bytecode(stage) if trim_sources else set()
+        uncompiled = 0
         for source in sorted(stage.rglob("*")):
             if not source.is_file():
                 continue
@@ -678,9 +729,24 @@ def assemble_payload(stage: pathlib.Path, payload: pathlib.Path,
                     entry[1] += source.stat().st_size
                     removed_names.add(source.name)
                     continue
+            if (trim_sources and relative.startswith("lib/")
+                    and relative.endswith(".py")):
+                if relative in compiled:
+                    entry = trimmed.setdefault(
+                        "Python source (hg.exe loads the bytecode)", [0, 0])
+                    entry[0] += 1
+                    entry[1] += source.stat().st_size
+                    removed_names.add(source.name)
+                    continue
+                uncompiled += 1
             destination = payload / relative
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, destination)
+
+        if uncompiled:
+            print("note: kept %d .py file(s) that have no bytecode beside them;"
+                  " removing them\n      would make those modules unimportable"
+                  % uncompiled)
 
         for relative in PRESERVE:
             source = kept / relative
@@ -740,6 +806,13 @@ def main() -> None:
              " paths that a config file outside this package could reach",
     )
     parser.add_argument(
+        "--trim-sources", action="store_true",
+        help="additionally drop the .py files under lib/, keeping the bytecode"
+             " hg.exe actually loads. Independent of --no-trim. The cost is"
+             " that a Mercurial traceback no longer shows the source line it"
+             " failed on, only the file, line number and function",
+    )
+    parser.add_argument(
         "--no-regen-guids", action="store_true",
         help="do not reallocate MSI component GUIDs; skips the only step that"
              " needs the .NET SDK",
@@ -770,7 +843,8 @@ def main() -> None:
         die("no hg.exe in %s; is that really a Mercurial install layout?" % stage)
 
     added, removed, dropped, trimmed, removed_names = assemble_payload(
-        stage, payload, trim=not args.no_trim, trim_hgext=args.trim_hgext)
+        stage, payload, trim=not args.no_trim, trim_hgext=args.trim_hgext,
+        trim_sources=args.trim_sources)
 
     check_native_dependencies(payload, removed_names)
 
@@ -784,6 +858,8 @@ def main() -> None:
             print("  %6.1f MB  %4d file(s)  %s" % (size / 1e6, count, reason))
         if not args.trim_hgext:
             print("  (--trim-hgext would remove the unused hgext extensions too)")
+        if not args.trim_sources:
+            print("  (--trim-sources would remove the .py sources too)")
     elif args.no_trim:
         print("\ntrimming disabled: shipping the install layout as staged")
 

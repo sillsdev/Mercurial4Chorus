@@ -125,6 +125,7 @@ tooling. **The script trims that by default.** Two flags control it:
 | *(none)* | Trim third-party code with no importer anywhere in the payload, the copies of `locale/` and `templates/` under `lib/mercurial/` that Mercurial reads from the top level instead, installed-package metadata, and `contrib/`. |
 | `--no-trim` | Ship the install layout as staged. Use it to reproduce the untrimmed tree when working out whether a problem is the trimming's fault. |
 | `--trim-hgext` | *Additionally* drop the `hgext` extensions Chorus never enables, and the two packages only they import (`pygments`, imported only by `hgext/highlight`; `pygit2`, only by `hgext/git`). |
+| `--trim-sources` | *Additionally* drop the `.py` files under `lib/`, keeping the bytecode. Independent of the other two. |
 
 Measured by running `--from-stage` over the official Mercurial 7.0.1 x64 MSI. The nupkg column is
 deflate calibrated against a real `dotnet pack`, so it is good to a few percent rather than exact:
@@ -132,8 +133,10 @@ deflate calibrated against a real `dotnet pack`, so it is good to a few percent 
 | mode | files | directories | raw | nupkg |
 | --- | ---: | ---: | ---: | ---: |
 | `--no-trim` | 3277 | 347 | 99.8 MB | 37.3 MB |
-| default | 1526 | 100 | 76.2 MB | 28.8 MB |
-| `--trim-hgext` | 680 | 59 | 60.5 MB | 23.8 MB |
+| default | 1520 | 99 | 75.8 MB | 28.7 MB |
+| `--trim-sources` | 837 | 65 | 63.3 MB | 25.3 MB |
+| `--trim-hgext` | 675 | 58 | 60.2 MB | 23.6 MB |
+| `--trim-hgext --trim-sources` | 395 | 40 | 54.0 MB | 21.9 MB |
 | *the old TortoiseHg payload* | 99 | 6 | 46.3 MB | 23.4 MB |
 
 The directory count matters as much as the megabytes, because it is the number of
@@ -147,9 +150,23 @@ but a config file outside it could, and then they would be missing rather than m
 is why it is opt-in.
 
 Chorus's own `mercurial.ini` enables `eol`, `hgext.graphlog` and `convert`, plus the vendored
-`fixutf8`; all four survive both modes, as does `lib/mercurial/helptext`, which `help.py` reads
+`fixutf8`; all four survive every mode, as does `lib/mercurial/helptext`, which `help.py` reads
 through `importlib` and which `hg help <topic>` therefore needs. If you add to `TRIM_HGEXT`, check
 the extension against that list first.
+
+`--trim-sources` is opt-in for a different reason: it is not about reachability but about
+diagnosis. `hg.exe` never needs the source — its resource index carries a separate path for each
+module's source and its bytecode, and the bytecode is PEP 552 unchecked-hash, so nothing validates
+one against the other. What is lost is the source line in a traceback: a Mercurial crash still
+names the file, line number and function, but the line itself comes out blank. Chorus surfaces
+hg's stderr, so that is a real if modest cost. A `.py` is only ever removed when its bytecode is
+actually present, so the flag cannot make a module unimportable.
+
+**Adding a DLL to any trim list needs a reason from its import table, not from its name.**
+`libffi-7.dll` was once trimmed alongside `cffi` on the strength of the name; it is in fact the
+only dependency of `lib/_ctypes.pyd`, and since `mercurial/win32.py` imports `ctypes` at module
+scope, that payload could not run a single command. The build now reads the PE import table of
+every surviving binary and refuses to finish if one of them needs a file that was removed.
 
 ## After the build
 
