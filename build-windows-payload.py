@@ -1,36 +1,36 @@
 #!/usr/bin/env python3
-"""Rebuild win/Mercurial by building TortoiseHg from source.
+"""Rebuild win/Mercurial by building Mercurial from source.
 
-MUST BE RUN ON WINDOWS for the build itself -- it drives py2exe through
-TortoiseHg's own packaging code, which needs MSVC and a Python 3.9 x64
-interpreter. The staging step afterwards is plain file copying and runs
-anywhere, which is what --from-stage exists for.
+MUST BE RUN ON WINDOWS for the build itself -- it drives PyOxidizer through
+Mercurial's own packaging code, which needs Rust, PyOxidizer and MSVC. The
+staging step afterwards is plain file copying and runs anywhere, which is what
+--from-stage exists for.
 
-Why TortoiseHg and not Mercurial: TortoiseHg's Windows build is py2exe, which
-puts the whole pure-Python tree into a single lib/library.zip and leaves a flat
-lib/ beside it. Mercurial's own Windows build is PyOxidizer, whose hg.exe
-resolves modules from an index of concrete paths under lib/, so it cannot be
-zipped and produces a directory per package. The flat layout matters here: the
-Chorus installer records one .guidsForInstaller.xml per directory, so the
-PyOxidizer payload needs about a hundred of them against six for this one.
+The build is Mercurial's own supported Windows build: the same
+hgpackaging.pyoxidizer.create_pyoxidizer_install_layout() that its Inno Setup
+and WiX installers are built from. Driving that rather than reimplementing it
+means the staging tree is by construction the tree upstream ships, so
+--from-stage can be pointed at a Mercurial MSI unpacked with `msiexec /a` to
+check the selection rules without running a build.
 
-The build is not reproducible. Comparing the x86 and x64 MSIs of one TortoiseHg
-release shows 59 of 1479 library.zip members differing, 47 at identical length,
-including pure-stdlib modules such as difflib.pyc whose bytecode cannot depend
-on the target architecture. That is nondeterministic ordering of set/frozenset
-constants in marshalled code objects. Expect the file list to match exactly and
-the bytes not to.
+What that costs, and why it is worth knowing before touching this file: hg.exe
+resolves modules through oxidized_importer from an index of concrete paths
+baked into the executable. lib/ therefore cannot be zipped or rearranged, and
+expands to a directory per package -- roughly a hundred of them. The Chorus
+installer records one .guidsForInstaller.xml per directory and every entry has
+to be kept forever, so the payload carries about a hundred of those files
+rather than the six a py2exe layout needed. That is the price of building from
+Mercurial itself instead of from a third party's repackaging of it.
+
+The build is not reproducible. Expect the file list to match a previous build
+at the same tag and the bytes not to; judge a rebuild by the added/removed
+summary printed at the end, not by which blobs moved.
 
 Usage::
 
-    py -3 build-windows-payload.py                       # build ../thg as checked out
-    py -3 build-windows-payload.py --tag 7.2.2           # update it to a tag first
+    py -3 build-windows-payload.py                       # build ../hg as checked out
+    py -3 build-windows-payload.py --tag 7.0.1           # update it to a tag first
     py -3 build-windows-payload.py --from-stage DIR      # reuse an existing staging tree
-
-The payload is assembled from the staging tree TortoiseHg's own
-stage_install() produces, which is also exactly what its MSI is built from, so
---from-stage can be pointed at an MSI extracted with `msiexec /a` to check the
-selection rules without running a build.
 """
 
 from __future__ import annotations
@@ -45,10 +45,19 @@ import subprocess
 import sys
 import tempfile
 
-# TortoiseHg 7.0.1 bundled these. Pinning keeps a rebuild honest; pass --hg-tag
-# and --evolve-rev to move them.
+# The Mercurial tag this payload is meant to be. Not applied automatically --
+# --tag does that -- but the build warns when the checkout is somewhere else,
+# so a stale ../hg cannot quietly change what gets built. Keep this in step
+# with MercurialVersion in SIL.Chorus.Mercurial.csproj and the
+# mercurial-version matrix in .github/workflows/nuget-ci-cd.yml.
 DEFAULT_HG_TAG = "7.0.1"
-DEFAULT_EVOLVE_REV = "62f31db54459"
+
+# PyOxidizer needs the target named explicitly. Unlike a py2exe build, the
+# architecture does not come from the interpreter this script is launched with:
+# PyOxidizer downloads and embeds its own CPython 3.9, which is also why the
+# committed fixutf8 .pyc files stay valid for cpython-39.
+DEFAULT_TARGET_TRIPLE = "x86_64-pc-windows-msvc"
+TARGET_TRIPLES = ["i686-pc-windows-msvc", "x86_64-pc-windows-msvc"]
 
 PRESERVE = [
     "mercurial.ini",
@@ -67,6 +76,8 @@ PRESERVE = [
 # Per-directory record of the MSI component GUID assigned to each file. These
 # are NOT listed in PRESERVE: they are found by searching the existing payload,
 # so a GUID file in any directory is carried across, however the layout moves.
+# That matters more here than it ever did, because moving to the PyOxidizer
+# layout moves nearly every path in the payload at once.
 #
 # They must survive verbatim. A GUID has to stay attached to its path for the
 # life of the product, and an entry has to outlive the file it describes: the
@@ -80,88 +91,82 @@ def die(msg: str) -> None:
     print("error: %s" % msg, file=sys.stderr)
     raise SystemExit(1)
 
-# What TortoiseHg's staging tree holds that this payload does not want. Written
-# as exclusions rather than an allowlist so that a file a later Mercurial adds
-# is shipped by default; the risk the other way is that a new TortoiseHg GUI
-# file slips in, which the summary printed at the end is there to catch.
-#
-# Derived from the TortoiseHg 7.0.1 x64 MSI: applying these to its 432-file
-# payload leaves exactly the 86 files this repository takes from it.
 
-# TortoiseHg's own programs, the shell extension, and two files that only
-# describe the TortoiseHg product.
+# Files that hgpackaging's staging rules produce but this payload does not
+# want. Written as exclusions rather than an allowlist so that a file a later
+# Mercurial adds is shipped by default; the added/removed summary printed at
+# the end is there to catch anything that slips in that way.
+
+# The two files that only make sense in a standalone Mercurial install:
+# ReadMe.html is an HTML index of the doc/ tree this payload drops, and
+# ReleaseNotes.txt is contrib/win32/postinstall.txt, the "you may want to add
+# hg to PATH" notes the Inno installer shows after installing. Copying.txt is
+# deliberately NOT dropped -- it is the licence text, and it already carries a
+# GUID from an older payload.
 DROP_ROOT_FILES = [
-    "COPYING.txt",
-    "docdiff.exe",
-    "extension-versions.txt",
-    "Pageant.exe",
-    "thg.exe",
-    "thgw.exe",
-    "TortoiseHgOverlayServer.exe",
+    "ReadMe.html",
+    "ReleaseNotes.txt",
 ]
 
-# The shell extension is named per architecture (ThgShellx64.dll on x64,
-# ThgShellx86.dll on x86, and the x64 installer ships both), so match the stem.
-DROP_ROOT_PREFIXES = ["ThgShell"]
-
-# Whole directories: the Qt plugin trees, TortoiseHg's icons and translations,
-# and the Mercurial data files Chorus has never shipped. templates/ and
-# helptext/ only matter for `hg log --style=X` and `hg help`; Chorus passes
-# inline --template strings and never reads hg's prose.
+# Whole directories. Each is a copy, made by hgpackaging's STAGING_RULES_APP,
+# of data that also lives under lib/, plus doc/, which is stubbed out below.
+# This payload has never shipped any of them: templates/ only matters for
+# `hg log --style=X`, and Chorus passes inline --template strings.
+#
+# Note that this drops only the top-level copies. The originals under
+# lib/mercurial/ stay, so `hg help` and configitems.toml still resolve --
+# resourceutil reads those through importlib, and only templater looks in the
+# top-level copy.
 DROP_DIRECTORIES = [
-    "diff-scripts",
     "doc",
     "helptext",
-    "i18n",
-    "icons",
-    "imageformats",
     "locale",
-    "platforms",
-    "styles",
     "templates",
 ]
 
-# Everything under lib/ is kept except the GUI stack: Qt5 itself, the PyQt5
-# bindings, pygit2 and its native git2.dll, TortoisePlink, and the qt.conf that
-# only exists so kdiff3 can find the Qt plugins. kdiff3.exe and spawn.cmd stay,
-# because the payload has always carried them.
-DROP_LIB_PREFIXES = ["Qt5", "PyQt5", "pygit2", "git2.dll", "TortoisePlink", "qt.conf"]
-
-
-# TortoiseHg's own WiX renames these on the way into its MSI, via Name= on the
-# File element -- see win32/wix/tortoisehg-py3.wxs, e.g.
+# Exact paths to leave out. Empty, and worth keeping empty: everything else
+# hgpackaging stages is a file Mercurial's own installers ship.
 #
-#     <File Id='terminaltools.rc' Name='TerminalTools.rc'
-#           Source='contrib\terminaltools.rc' />
-#
-# so the staging tree carries the lowercase repository names while every payload
-# ever shipped carries the mixed-case ones. Renaming here keeps that continuity.
-# It is not cosmetic: MakeWixForDirTree derives each File Id from the name on
-# disk, so shipping terminaltools.rc would mint a new component GUID for a file
-# that already has one, and silently change its installer identity. Windows
-# being case-insensitive, git would not even show the rename.
-STAGE_RENAMES = {
-    "defaultrc/editortools.rc": "defaultrc/EditorTools.rc",
-    "defaultrc/mercurial.rc": "defaultrc/Mercurial.rc",
-    "defaultrc/mergepatterns.rc": "defaultrc/MergePatterns.rc",
-    "defaultrc/mergetools.rc": "defaultrc/MergeTools.rc",
-    "defaultrc/terminaltools.rc": "defaultrc/TerminalTools.rc",
-}
+# The predecessor of this script dropped contrib/mq.el, because TortoiseHg's
+# WiX allowlist did not carry it into the MSI even though its staging tree had
+# it. Mercurial's installers do ship it, so it ships here now.
+DROP_FILES = []
+
+# Nothing under lib/ is dropped. It is the frozen application's own module
+# tree -- an index of concrete paths baked into hg.exe -- and pruning pieces of
+# it is how a frozen application breaks. That includes the third-party packages
+# rust/hgcli/pyoxidizer.bzl pip-installs from requirements-windows-py3.txt on
+# Windows "for convenience"; they are part of what upstream ships.
 
 
 def is_dropped(relative: str) -> bool:
     """Should this staging-tree path be left out of the payload?"""
-    head = relative.split("/")[0]
-    if head in DROP_DIRECTORIES:
+    if relative in DROP_FILES:
+        return True
+    if relative.split("/")[0] in DROP_DIRECTORIES:
         return True
     if "/" not in relative:
-        return (relative in DROP_ROOT_FILES
-                or any(relative.startswith(p) for p in DROP_ROOT_PREFIXES))
-    if head == "lib":
-        leaf = relative.split("/", 1)[1]
-        return any(leaf.startswith(prefix) for prefix in DROP_LIB_PREFIXES)
+        return relative in DROP_ROOT_FILES
     return False
 
+
+# Files Mercurial's installers ship that create_pyoxidizer_install_layout()
+# does not stage by itself, copied in afterwards so the staging tree matches
+# the installers rather than just that one function.
+#
+#   * bash_completion and zsh_completion are in EXTRA_CONTRIB_FILES in
+#     rust/hgcli/pyoxidizer.bzl, which builds the MSI, but are missing from
+#     STAGING_RULES_WINDOWS in hgpackaging/pyoxidizer.py, which builds the
+#     install layout. Both have shipped in this payload for years.
+#   * defaultrc/mercurial.rc is added by hgpackaging/inno.py's
+#     EXTRA_INSTALL_RULES and by the msi target in pyoxidizer.bzl. It is
+#     entirely commented out, so it changes no behaviour; it is included to
+#     keep the tree equal to the installers'.
+EXTRA_STAGE_RULES = [
+    ("contrib/bash_completion", "contrib/"),
+    ("contrib/zsh_completion", "contrib/"),
+    ("contrib/win32/mercurial.ini", "defaultrc/mercurial.rc"),
+]
 
 
 REGEN_PROJECT = pathlib.Path("assets") / "regen-guids.proj"
@@ -197,9 +202,12 @@ def regenerate_guids(here: pathlib.Path, payload: pathlib.Path) -> int:
 
     Any newly allocated id is listed afterwards, and is worth reading rather
     than skimming: an id that looks like an existing file under a different name
-    is a rename, and has just been handed a second installer identity. That is
-    what happens when the staging tree's lowercase .rc names reach the payload,
-    which STAGE_RENAMES exists to prevent.
+    is a rename, and has just been handed a second installer identity. The move
+    from the TortoiseHg build to this one contains one by construction --
+    contrib/hgk became contrib/hgk.tcl, which is the name Mercurial's own
+    installers use -- so expect the first run after that move to allocate a very
+    large number of ids and read the list for the ones that are not simply the
+    new lib/ layout.
 
     assets/regen-guids.proj drives the task directly. Chorus has an equivalent
     MakeWixForDistFiles target, but reaching it means compiling ChorusHub and
@@ -234,8 +242,7 @@ def regenerate_guids(here: pathlib.Path, payload: pathlib.Path) -> int:
             print("    + %s" % identifier)
         print("  Check that each is a genuinely new file. One that looks like an"
               " existing\n  file under another name is a rename, and has just been"
-              " given a second\n  installer identity -- fix the name instead, see"
-              " STAGE_RENAMES.")
+              " given a second\n  installer identity.")
     else:
         print("  no new GUIDs were needed")
 
@@ -259,124 +266,76 @@ def hg_command(repo: pathlib.Path, *args: str) -> str:
     return result.stdout.strip()
 
 
-def build_staging_tree(thg: pathlib.Path, tag: str | None, hg_tag: str,
-                       evolve_rev: str, stage: pathlib.Path) -> pathlib.Path:
-    """Build TortoiseHg and return the staging tree its packaging produces.
+def build_staging_tree(hg: pathlib.Path, tag: str | None, target_triple: str,
+                       stage: pathlib.Path) -> pathlib.Path:
+    """Build Mercurial and return the staging tree its packaging produces.
 
-    This drives TortoiseHg's own contrib/packaging code rather than
-    reimplementing it, so the result is by construction what its MSI is built
-    from. Only the two steps that exist purely to make an installer are left
-    out: the WiX link, and the C++ shell extension, whose ThgShell*.dll this
-    payload drops anyway.
+    This drives Mercurial's own contrib/packaging code rather than
+    reimplementing it, so the result is by construction the install layout its
+    Inno Setup and WiX installers are built from.
     """
-    packaging = thg / "contrib" / "packaging"
-    if not (packaging / "thgpackaging" / "py2exe.py").is_file():
-        die("%s does not look like a TortoiseHg checkout (no thgpackaging)" % thg)
+    packaging = hg / "contrib" / "packaging"
+    if not (packaging / "hgpackaging" / "pyoxidizer.py").is_file():
+        die("%s does not look like a Mercurial checkout (no hgpackaging)" % hg)
 
     if tag:
-        print("updating %s to %s" % (thg, tag))
-        hg_command(thg, "update", tag)
-    print("building TortoiseHg %s" % hg_command(thg, "identify", "--tags"))
+        print("updating %s to %s" % (hg, tag))
+        hg_command(hg, "update", tag)
+
+    tags = hg_command(hg, "identify", "--tags").split()
+    print("building Mercurial %s for %s" % (" ".join(tags) or "(untagged)",
+                                            target_triple))
+    if DEFAULT_HG_TAG not in tags:
+        print("warning: this checkout is not at %s, which is the tag this"
+              " payload is meant\n         to be built from; pass --tag %s to"
+              " update it" % (DEFAULT_HG_TAG, DEFAULT_HG_TAG))
 
     sys.path.insert(0, str(packaging))
-    from thgpackaging import cli as thgcli, py2exe as thgpy2exe, util as thgutil
+    from hgpackaging import pyoxidizer as hgpyoxidizer
+    from hgpackaging.util import process_install_rules
 
-    # TortoiseHg clones Mercurial, evolve and the shell extension next to
-    # itself. Pinned rather than left on 'stable' so a rebuild of an old tag
-    # gets the Mercurial that tag shipped with.
-    print("staging dependency repositories (this clones several repos)")
-    thgcli.stage_dependencies(hg_version=hg_tag, evolve_version=evolve_rev,
-                              shellext_version="default", clean=False)
+    # Mirrors hgpackaging/inno.py: the build_dir passed here is only used to
+    # cache the gettext download, since run_pyoxidizer always writes its own
+    # artifacts under <hg>/build/pyoxidizer/.
+    build_dir = hg / "build" / ("payload-pyoxidizer-%s" % target_triple)
+    build_dir.mkdir(parents=True, exist_ok=True)
 
-    source_dirs = thgutil.SourceDirs(thg)
-
-    # These must match what thgpackaging/wix.py passes, or library.zip comes out
-    # with a different module set: dulwich, keyring, pygments and win32ctypes are
-    # all in the shipped zip only because they are named here, and py2exe on
-    # Python 3 does not find _curses_panel by itself.
-    from thgpackaging import wix as thgwix
-
-    with documentation_builds_skipped(thgpy2exe):
-        thgpy2exe.build_py2exe(
-            source_dirs,
-            thg / "build",
-            pathlib.Path(sys.executable),
-            "wix",
-            packaging / "requirements-windows-pyqt5-installer.txt",
-            extra_packages=set(thgwix.EXTRA_PACKAGES),
-            extra_includes=set(thgwix.EXTRA_INCLUDES),
+    # create_pyoxidizer_install_layout() purges its output directory itself.
+    with documentation_build_skipped(hgpyoxidizer):
+        hgpyoxidizer.create_pyoxidizer_install_layout(
+            hg, build_dir, stage, target_triple
         )
 
-    if stage.exists():
-        shutil.rmtree(stage)
-    thgpy2exe.stage_install(source_dirs, stage, lower_case=True)
-
-    # kdiff3.exe and spawn.cmd come from the thg-winbuild repository via
-    # EXTRA_INSTALL_RULES in thgpackaging/wix.py, which runs as part of the
-    # installer build we are skipping. The payload has always shipped both.
-    winbuild = source_dirs.winbuild
-    for source, destination in (
-        (winbuild / "contrib" / "kdiff3x64.exe", stage / "lib" / "kdiff3.exe"),
-        (winbuild / "contrib" / "spawn.cmd", stage / "lib" / "spawn.cmd"),
-    ):
-        if not source.is_file():
-            die("%s is missing; is the thg-winbuild clone complete?" % source)
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source, destination)
+    process_install_rules(EXTRA_STAGE_RULES, hg, stage)
 
     return stage
 
 
 @contextlib.contextmanager
-def documentation_builds_skipped(module):
-    """Neuter the two documentation steps in build_py2exe for the duration.
+def documentation_build_skipped(module):
+    """Neuter the HTML documentation step in the layout build.
 
-    Both build files this payload throws away, and both are the most fragile
-    links in the pipeline:
+    create_pyoxidizer_install_layout() calls build_docs_html(), which shells
+    out to `setup.py build_doc --html` and so needs docutils importable by
+    whichever interpreter is running this script. Upstream gets that from the
+    bootstrap venv contrib/packaging/packaging.py creates from requirements.txt;
+    we call into hgpackaging directly and so never have it.
 
-      * `build chm` in thg/doc needs HTML Help Workshop, a discontinued
-        Microsoft download, and build_py2exe refuses to start without hhc.exe
-        on PATH even though the .chm it produces only ever lands in doc/.
-
-      * `make -C doc html` in the Mercurial clone needs docutils importable by
-        whichever interpreter is running this script. Upstream gets that from
-        the bootstrap venv packaging.py creates from requirements.txt; we call
-        build_py2exe directly and so never have it.
-
-    Nothing downstream misses either: the only staging rules that consume them
-    are a doc/*.html glob and a TortoiseHg.chm copy, and doc/ is dropped.
-
-    The patches go onto the shared shutil and subprocess modules, since that is
-    what the packaging code holds references to, and are undone on the way out.
+    Nothing downstream misses it: the only staging rule that consumes the
+    result is a doc/*.html glob, which simply matches nothing, and doc/ is
+    dropped. doc/style.css is a rule of its own and is staged either way, into
+    the same dropped directory.
     """
-    original_which = module.shutil.which
-    original_run = module.subprocess.run
+    original = module.build_docs_html
 
-    def which(name, *args, **kwargs):
-        if name == "hhc.exe":
-            return "hhc.exe-not-needed"
-        return original_which(name, *args, **kwargs)
+    def skipped(source_dir):
+        print("  skipping Mercurial's HTML documentation; doc/ is not shipped")
 
-    def run(command, *args, **kwargs):
-        skipped = None
-        if isinstance(command, (list, tuple)):
-            head = [str(part) for part in command[:4]]
-            if head[:2] == ["build", "chm"]:
-                skipped = "the TortoiseHg .chm"
-            elif head == ["make", "-C", "doc", "html"]:
-                skipped = "Mercurial's HTML documentation"
-        if skipped:
-            print("  skipping %s; doc/ is not shipped" % skipped)
-            return subprocess.CompletedProcess(command, 0)
-        return original_run(command, *args, **kwargs)
-
-    module.shutil.which = which
-    module.subprocess.run = run
+    module.build_docs_html = skipped
     try:
         yield
     finally:
-        module.shutil.which = original_which
-        module.subprocess.run = original_run
+        module.build_docs_html = original
 
 
 def assemble_payload(stage: pathlib.Path, payload: pathlib.Path
@@ -413,7 +372,6 @@ def assemble_payload(stage: pathlib.Path, payload: pathlib.Path
         payload.mkdir(parents=True)
 
         dropped = 0
-        renamed = 0
         for source in sorted(stage.rglob("*")):
             if not source.is_file():
                 continue
@@ -421,16 +379,9 @@ def assemble_payload(stage: pathlib.Path, payload: pathlib.Path
             if is_dropped(relative):
                 dropped += 1
                 continue
-            # A staging tree taken from an unpacked MSI already carries the
-            # renamed names, so the lookup simply misses and nothing happens.
-            if relative in STAGE_RENAMES:
-                relative = STAGE_RENAMES[relative]
-                renamed += 1
             destination = payload / relative
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, destination)
-        if renamed:
-            print("renamed %d staged file(s) to the names the MSI ships" % renamed)
 
         for relative in PRESERVE:
             source = kept / relative
@@ -450,29 +401,25 @@ def assemble_payload(stage: pathlib.Path, payload: pathlib.Path
     return sorted(after - before), sorted(before - after), dropped
 
 
-
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--thg-source",
-        help="TortoiseHg checkout to build (default: ../thg beside this repository)",
+        "--hg-source",
+        help="Mercurial checkout to build (default: ../hg beside this repository)",
     )
     parser.add_argument(
         "--tag",
-        help="update the TortoiseHg checkout to this tag before building",
+        help="update the Mercurial checkout to this tag before building"
+             " (this payload is meant to be %s)" % DEFAULT_HG_TAG,
     )
     parser.add_argument(
-        "--hg-tag", default=DEFAULT_HG_TAG,
-        help="Mercurial tag to bundle (default: %(default)s)",
-    )
-    parser.add_argument(
-        "--evolve-rev", default=DEFAULT_EVOLVE_REV,
-        help="evolve revision to bundle (default: %(default)s)",
+        "--target-triple", default=DEFAULT_TARGET_TRIPLE, choices=TARGET_TRIPLES,
+        help="PyOxidizer target to build for (default: %(default)s)",
     )
     parser.add_argument(
         "--from-stage", metavar="DIR",
         help="skip the build and take the payload from an existing staging tree,"
-             " such as a TortoiseHg MSI unpacked with `msiexec /a`",
+             " such as a Mercurial MSI unpacked with `msiexec /a`",
     )
     parser.add_argument(
         "--output",
@@ -496,17 +443,17 @@ def main() -> None:
         print("using the staging tree at %s" % stage)
     else:
         if os.name != "nt":
-            die("building TortoiseHg needs Windows; use --from-stage to assemble"
-                " a payload from a tree built elsewhere")
-        thg = (pathlib.Path(args.thg_source).resolve() if args.thg_source
-               else here.parent / "thg")
-        if not thg.is_dir():
-            die("no TortoiseHg checkout at %s (pass --thg-source)" % thg)
-        stage = build_staging_tree(thg, args.tag, args.hg_tag, args.evolve_rev,
+            die("building Mercurial for Windows needs Windows; use --from-stage"
+                " to assemble a payload from a tree built elsewhere")
+        hg = (pathlib.Path(args.hg_source).resolve() if args.hg_source
+              else here.parent / "hg")
+        if not hg.is_dir():
+            die("no Mercurial checkout at %s (pass --hg-source)" % hg)
+        stage = build_staging_tree(hg, args.tag, args.target_triple,
                                    here / "build" / "stage")
 
     if not (stage / "hg.exe").is_file():
-        die("no hg.exe in %s; is that really a TortoiseHg staging tree?" % stage)
+        die("no hg.exe in %s; is that really a Mercurial install layout?" % stage)
 
     added, removed, dropped = assemble_payload(stage, payload)
 
@@ -527,11 +474,11 @@ def main() -> None:
     print(
         "\nNext steps:\n"
         "  1. Sanity-check the payload:  %s\\hg.exe version\n"
-        "  2. Expect library.zip and the binaries to differ byte-for-byte from\n"
-        "     the last build even at the same tag; the file list should not.\n"
+        "  2. Expect hg.exe and everything under lib/ to differ byte-for-byte\n"
+        "     from the last build even at the same tag; the file list should not.\n"
         "  3. Set MercurialVersion in SIL.Chorus.Mercurial.csproj, update the\n"
-        "     mercurial-version matrix in .github/workflows/nuget-ci-cd.yml, and\n"
-        "     add a PackageReleaseNotes entry.\n"
+        "     mercurial-version matrix in .github/workflows/nuget-ci-cd.yml, add a\n"
+        "     PackageReleaseNotes entry, and set DEFAULT_HG_TAG in this script.\n"
         "  4. %s"
         % (payload,
            "Commit the refreshed .guidsForInstaller.xml files with this payload."

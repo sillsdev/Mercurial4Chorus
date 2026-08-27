@@ -6,47 +6,58 @@
 > Windows machine, and I could not check whether their installation instructions were complete.
 > If you find anything incorrect or unclear in these instructions, please open an issue.
 
-`win/Mercurial` is not built by CI. It is a subset of a [TortoiseHg][thg] build, produced on a
-Windows machine by `build-windows-payload.py` and committed by hand. TortoiseHg is used rather
-than Mercurial's own Windows installer because its py2exe build puts the whole pure-Python tree
-into one `lib/library.zip`, which keeps the installer's per-directory GUID bookkeeping down to six
-files instead of a hundred. See `build-windows-payload.py`'s docstring for the details.
+`win/Mercurial` is not built by CI. It is a subset of a [Mercurial][hg] Windows build, produced on
+a Windows machine by `build-windows-payload.py` and committed by hand.
 
-[thg]: https://foss.heptapod.net/mercurial/tortoisehg/thg
+The script drives Mercurial's own packaging code — the same
+`hgpackaging.pyoxidizer.create_pyoxidizer_install_layout()` that its Inno Setup and WiX installers
+are built from — so the staging tree it selects from is by construction the tree upstream ships.
+See `build-windows-payload.py`'s docstring for the details, including the cost: PyOxidizer's
+`hg.exe` resolves modules from an index of concrete paths, so `lib/` expands to a directory per
+package and the payload carries about a hundred `.guidsForInstaller.xml` files.
+
+[hg]: https://foss.heptapod.net/mercurial/mercurial-devel
 
 ## Prerequisites
 
 One-time setup on a 64-bit Windows machine. `winget` commands are given for convenience; install
 by hand if you prefer.
 
-1. **Python 3.9, 64-bit.** This is the interpreter you launch the script with, and it becomes the
-   build interpreter: it decides the payload's architecture, so a 32-bit one silently produces an
-   x86 payload. 3.9.13 is the last version of 3.9 Python shipped a Windows installer for, and is
-   the one to use.
+1. **Python 3.** Any reasonably recent Python 3 will do: it only runs `hgpackaging`, which is
+   ordinary Python 3 code. It is *not* the interpreter that ends up in the payload — PyOxidizer
+   downloads and embeds its own CPython 3.9, as `rust/hgcli/pyoxidizer.bzl` asks for
+   (`default_python_distribution(python_version = "3.9")`). That is what keeps the committed
+   `cpython-39` bytecode in `MercurialExtensions/fixutf8` valid.
 
    ```powershell
-   winget install Python.Python.3.9
+   winget install Python.Python.3.12
    ```
 
-   **Do not `pip install mercurial` into it.** TortoiseHg's build refuses to run when `mercurial`
-   is importable from that interpreter's `site-packages`, because it would shadow the copy being
-   bundled, and aborts with `Error: ... overrides included package 'mercurial'`.
-
-2. **`make` plus a POSIX userland.** Mercurial's `make local` target calls `env`, and its Makefile
-   also uses `rm`, `cp`, `test` and `find`, so a bare `make.exe` is not enough.
+2. **Rust and PyOxidizer.** `hg.exe` is a Rust program (`rust/hgcli`) with CPython linked into it,
+   and `pyoxidizer` is what builds it.
 
    ```powershell
-   winget install MSYS2.MSYS2
-   C:\msys64\usr\bin\pacman -S --noconfirm make coreutils
+   winget install Rustlang.Rustup
    ```
 
-   Then put `C:\msys64\usr\bin` on `PATH`. (Git for Windows already provides `env` and friends in
-   `C:\Program Files\Git\usr\bin` but has no `make`, so adding just `make` on top of that works
-   too.)
+   **Use the PyOxidizer version Mercurial pins**, not whatever is newest. PyOxidizer was
+   discontinued in 2024 and its Starlark dialect moved between releases, so the `.bzl` file is
+   only known to work with the version upstream tests against. That version is recorded as
+   `$PYOXIDIZER_URL` in `contrib/install-windows-dependencies.ps1`, and at 7.0.1 it is 0.17.0,
+   installed from an MSI:
+
+   ```powershell
+   curl.exe -L -o PyOxidizer.msi https://github.com/indygreg/PyOxidizer/releases/download/pyoxidizer%2F0.17/PyOxidizer-0.17.0-x64.msi
+   msiexec /i PyOxidizer.msi
+   ```
+
+   Re-read `$PYOXIDIZER_URL` whenever the Mercurial tag moves — it is the only record of which
+   version the `.bzl` in that tag expects. Running that whole script instead is also an option,
+   but it installs a great deal more besides and hardcodes `c:\hgdev` as its install prefix.
 
 3. **Visual Studio Build Tools**, with the C++ workload — MSVC and the Windows SDK. Mercurial's C
-   extensions are compiled during the build, and the packaging code shells out to `vswhere.exe`,
-   `vcvars*.bat` and `dumpbin.exe`.
+   extensions are compiled during the build, and the packaging code shells out to `vswhere.exe` to
+   find `vcruntime140.dll`.
 
    ```powershell
    winget install Microsoft.VisualStudio.2022.BuildTools
@@ -54,8 +65,9 @@ by hand if you prefer.
 
    Then add *Desktop development with C++* in the Visual Studio Installer.
 
-4. **Mercurial itself**, as a standalone program on `PATH` — the build clones five repositories
-   and runs `hg purge` and `hg archive`.
+4. **Mercurial itself**, as a standalone program on `PATH`. The script uses it to read and update
+   the checkout, and Mercurial's `setup.py` uses it to derive the version string it bakes into
+   `mercurial/__version__.py`.
 
    ```powershell
    winget install Mercurial.Mercurial
@@ -67,38 +79,37 @@ by hand if you prefer.
    winget install Microsoft.DotNet.SDK.8
    ```
 
-6. **A TortoiseHg checkout beside this one**, which is where `--thg-source` defaults to:
+6. **A Mercurial checkout beside this one**, which is where `--hg-source` defaults to:
 
    ```powershell
-   hg clone https://foss.heptapod.net/mercurial/tortoisehg/thg ..\thg
+   hg clone https://foss.heptapod.net/mercurial/mercurial-devel ..\hg
    ```
 
-7. **Network access.** The build clones Mercurial, evolve, thg-shellext and thg-winbuild into
-   `..\thg\dependencies`, downloads gettext, and pip-installs PyQt5, py2exe and the rest from
-   TortoiseHg's hash-pinned requirements.
+7. **Network access.** The build downloads gettext and pip-installs Mercurial itself plus
+   everything in `contrib/packaging/requirements-windows-py3.txt` into the embedded interpreter.
 
-Not required, despite what TortoiseHg's own packaging documentation says: HTML Help Workshop,
-`docutils`, Rust, PyOxidizer, Inno Setup or WiX. The script skips the two documentation builds
-that would need the first two, because the payload does not ship documentation.
+Not required: `make` or a POSIX userland, HTML Help Workshop, `docutils`, PyQt5, py2exe, Inno
+Setup, WiX, or a TortoiseHg checkout. The script stubs out the one documentation build that would
+need `docutils`, because the payload does not ship documentation.
 
 ## Building
 
 ```powershell
-py -3.9 build-windows-payload.py --tag 7.0.1
+py -3 build-windows-payload.py --tag 7.0.1
 ```
 
-`--tag` is the TortoiseHg tag to build. `--hg-tag` and `--evolve-rev` say which Mercurial and
-evolve to bundle; they default to what TortoiseHg 7.0.1 shipped, so **both need setting for any
-other tag**:
+`--tag` updates the checkout before building. Without it the checkout is built as it stands, and
+the script warns if that is not `DEFAULT_HG_TAG` — the tag this payload is meant to be — so a
+stale `..\hg` cannot quietly change what gets built.
 
-```powershell
-py -3.9 build-windows-payload.py --tag 7.2.2 --hg-tag 7.2.2 --evolve-rev <changeset>
-```
+`--target-triple` defaults to `x86_64-pc-windows-msvc`; `i686-pc-windows-msvc` is the other
+accepted value. Unlike the previous py2exe-based build, the architecture does **not** come from
+the interpreter you launch the script with.
 
-The reliable source for a release's evolve changeset is the `extension-versions.txt` inside that
-release's official MSI. Expect the build to take tens of minutes; `--no-regen-guids` skips the
-only step needing the .NET SDK, and `--from-stage DIR` skips the build entirely and assembles the
-payload from an existing staging tree, which is much faster when iterating on the selection rules.
+Expect the build to take tens of minutes. `--no-regen-guids` skips the only step needing the .NET
+SDK, and `--from-stage DIR` skips the build entirely and assembles the payload from an existing
+install layout — point it at a Mercurial MSI unpacked with `msiexec /a` to check the selection
+rules in seconds instead of minutes.
 
 ## After the build
 
@@ -109,7 +120,7 @@ payload from an existing staging tree, which is much faster when iterating on th
    ```
 
 2. Read the summary the script prints. `0 added, 0 removed` at the same tag is what you want; any
-   added file at a new tag deserves a look, since a new TortoiseHg GUI file would show up there.
+   added file at a new tag deserves a look.
 
 3. Stage it, remembering the hidden GUID files:
 
@@ -118,15 +129,13 @@ payload from an existing staging tree, which is much faster when iterating on th
    git status
    ```
 
-   `lib/library.zip`, `hg.exe` and the `.pyd` files will show as modified **even when nothing has
-   changed**, because the build is not reproducible — marshalled bytecode orders `set` and
-   `frozenset` constants nondeterministically. Judge the diff by the file list, not by which blobs
+   `hg.exe` and the files under `lib/` will show as modified **even when nothing has changed**,
+   because the build is not reproducible. Judge the diff by the file list, not by which blobs
    moved.
 
 4. If the Mercurial version changed, update `MercurialVersion` and `PackageReleaseNotes` in
    `SIL.Chorus.Mercurial.csproj`, the `mercurial-version` matrix in
-   `.github/workflows/nuget-ci-cd.yml`, and the `DEFAULT_HG_TAG` / `DEFAULT_EVOLVE_REV` defaults
-   in the script.
+   `.github/workflows/nuget-ci-cd.yml`, and `DEFAULT_HG_TAG` in the script.
 
 5. Run the Chorus test suite on Windows against the new payload. It is the only real check that
    the vendored `fixutf8` extension still matches the Mercurial being shipped.
