@@ -43,6 +43,7 @@ import os
 import pathlib
 import re
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -264,8 +265,120 @@ TRIM_HGEXT = {
 # hgext/git/gitutil.py the only importer of pygit2. cffi and pycparser are
 # pygit2's dependencies.
 TRIM_HGEXT_PACKAGES = {"pygments", "pygit2", "cffi", "pycparser"}
-TRIM_HGEXT_FILES = {"libffi-7.dll"}
 TRIM_HGEXT_PREFIXES = ("_cffi_backend",)
+
+# Deliberately empty, and libffi-7.dll must never be put back in it.
+#
+# It was here once, on the assumption that a library named libffi belonged to
+# cffi. It does not: lib/_ctypes.pyd is the only thing in the payload that
+# imports it, and _ctypes is what the stdlib ctypes module is built on.
+# mercurial/win32.py imports ctypes at module scope, so trimming libffi-7.dll
+# produced an hg.exe that could not run any command at all:
+#
+#     File "mercurial.win32", line 11, in <module>
+#     ImportError: DLL load failed while importing _ctypes:
+#                  The specified module could not be found.
+#
+# check_native_dependencies() below now catches this at build time. Adding a
+# DLL here needs a reason from its import table, not from its name.
+TRIM_HGEXT_FILES: set = set()
+
+
+def _pe_imported_dlls(path: pathlib.Path) -> list:
+    """The DLL names in *path*'s PE import table, or [] if it is not a PE file.
+
+    A minimal reader: MZ header -> PE header -> optional header -> data
+    directory 1 (imports) -> the name of each import descriptor, mapping RVAs
+    through the section table. Enough to answer "what does this binary need
+    loaded", which is all check_native_dependencies() asks.
+    """
+    try:
+        data = path.read_bytes()
+    except OSError:
+        return []
+    if data[:2] != b"MZ":
+        return []
+    try:
+        pe = struct.unpack_from("<I", data, 0x3C)[0]
+        if data[pe:pe + 4] != b"PE\0\0":
+            return []
+        coff = pe + 4
+        section_count = struct.unpack_from("<H", data, coff + 2)[0]
+        optional_size = struct.unpack_from("<H", data, coff + 16)[0]
+        optional = coff + 20
+        pe32plus = struct.unpack_from("<H", data, optional)[0] == 0x20B
+        directories = optional + (112 if pe32plus else 96)
+        import_rva = struct.unpack_from("<I", data, directories + 8)[0]
+        if not import_rva:
+            return []
+
+        sections = []
+        table = optional + optional_size
+        for index in range(section_count):
+            entry = table + 40 * index
+            virtual, raw_size, raw = struct.unpack_from("<III", data, entry + 12)
+            sections.append((virtual, raw_size, raw))
+
+        def offset_of(rva):
+            for virtual, raw_size, raw in sections:
+                if virtual <= rva < virtual + max(raw_size, 1):
+                    return raw + (rva - virtual)
+            return None
+
+        names = []
+        cursor = offset_of(import_rva)
+        while cursor is not None:
+            descriptor = data[cursor:cursor + 20]
+            if len(descriptor) < 20 or descriptor == b"\0" * 20:
+                break
+            name_rva = struct.unpack_from("<I", descriptor, 12)[0]
+            if not name_rva:
+                break
+            at = offset_of(name_rva)
+            if at is None:
+                break
+            names.append(data[at:data.index(b"\0", at)].decode("ascii", "replace"))
+            cursor += 20
+        return names
+    except (struct.error, ValueError):
+        return []
+
+
+def check_native_dependencies(payload: pathlib.Path, removed: set) -> None:
+    """Refuse to ship a payload whose binaries need a file we took out.
+
+    A trimmed or dropped DLL is invisible until someone runs hg.exe on
+    Windows, and then it is fatal rather than degraded: the import that needs
+    it is usually at module scope. This walks the .pyd/.dll/.exe files that
+    survived, reads their PE import tables, and fails the build if any of them
+    names a file this script removed and did not put back.
+
+    Only names this script actually removed are considered, so the system DLLs
+    every binary imports -- kernel32, the api-ms-win-crt-* set -- are ignored.
+    """
+    present = {p.name.lower() for p in payload.rglob("*") if p.is_file()}
+    removed = {name.lower() for name in removed} - present
+
+    broken = []
+    for path in sorted(payload.rglob("*")):
+        if path.suffix.lower() not in (".pyd", ".dll", ".exe"):
+            continue
+        for dll in _pe_imported_dlls(path):
+            if dll.lower() in removed:
+                broken.append((str(path.relative_to(payload)), dll))
+
+    if broken:
+        print("\nerror: the payload is missing native libraries it needs:",
+              file=sys.stderr)
+        for consumer, dll in broken:
+            print("  %s imports %s, which was removed" % (consumer, dll),
+                  file=sys.stderr)
+        die("a trim rule removed a DLL that a surviving binary loads;"
+            " re-run with --no-trim to confirm, then fix the rule")
+
+    print("native dependencies: %d binaries checked, none left dangling"
+          % sum(1 for p in payload.rglob("*")
+                if p.suffix.lower() in (".pyd", ".dll", ".exe")))
 
 
 def _lib_entry(relative: str) -> str | None:
@@ -514,7 +627,7 @@ def documentation_build_skipped(module):
 
 def assemble_payload(stage: pathlib.Path, payload: pathlib.Path,
                      trim: bool = True, trim_hgext: bool = False
-                     ) -> tuple[list[str], list[str], int, dict]:
+                     ) -> tuple[list[str], list[str], int, dict, set]:
     """Replace *payload* with the wanted part of *stage*, keeping our own files."""
     def files_in(root: pathlib.Path) -> set[str]:
         if not root.exists():
@@ -548,12 +661,14 @@ def assemble_payload(stage: pathlib.Path, payload: pathlib.Path,
 
         dropped = 0
         trimmed: dict = {}
+        removed_names: set = set()
         for source in sorted(stage.rglob("*")):
             if not source.is_file():
                 continue
             relative = str(source.relative_to(stage)).replace(os.sep, "/")
             if is_dropped(relative):
                 dropped += 1
+                removed_names.add(source.name)
                 continue
             if trim:
                 reason = is_trimmed(relative, trim_hgext)
@@ -561,6 +676,7 @@ def assemble_payload(stage: pathlib.Path, payload: pathlib.Path,
                     entry = trimmed.setdefault(reason, [0, 0])
                     entry[0] += 1
                     entry[1] += source.stat().st_size
+                    removed_names.add(source.name)
                     continue
             destination = payload / relative
             destination.parent.mkdir(parents=True, exist_ok=True)
@@ -581,7 +697,8 @@ def assemble_payload(stage: pathlib.Path, payload: pathlib.Path,
         print("guids: carried %d %s file(s) across" % (len(guids), GUID_FILE))
 
     after = files_in(payload)
-    return sorted(after - before), sorted(before - after), dropped, trimmed
+    return (sorted(after - before), sorted(before - after), dropped, trimmed,
+            removed_names)
 
 
 def main() -> None:
@@ -652,8 +769,10 @@ def main() -> None:
     if not (stage / "hg.exe").is_file():
         die("no hg.exe in %s; is that really a Mercurial install layout?" % stage)
 
-    added, removed, dropped, trimmed = assemble_payload(
+    added, removed, dropped, trimmed, removed_names = assemble_payload(
         stage, payload, trim=not args.no_trim, trim_hgext=args.trim_hgext)
+
+    check_native_dependencies(payload, removed_names)
 
     if trimmed:
         total_files = sum(n for n, _ in trimmed.values())
