@@ -16,11 +16,13 @@ check the selection rules without running a build.
 What that costs, and why it is worth knowing before touching this file: hg.exe
 resolves modules through oxidized_importer from an index of concrete paths
 baked into the executable. lib/ therefore cannot be zipped or rearranged, and
-expands to a directory per package -- roughly a hundred of them. The Chorus
-installer records one .guidsForInstaller.xml per directory and every entry has
-to be kept forever, so the payload carries about a hundred of those files
-rather than the six a py2exe layout needed. That is the price of building from
-Mercurial itself instead of from a third party's repackaging of it.
+expands to a directory per package. Measured against the official 7.0.1 x64
+MSI, the install layout is 347 directories against the six a py2exe layout
+needed, and the Chorus installer records one .guidsForInstaller.xml per
+directory, every entry of which has to be kept forever. That is the price of
+building from Mercurial itself instead of from a third party's repackaging of
+it. The trimming this script does by default brings that back to 100
+directories, and --trim-hgext to 59.
 
 The build is not reproducible. Expect the file list to match a previous build
 at the same tag and the bytes not to; judge a rebuild by the added/removed
@@ -132,11 +134,10 @@ DROP_DIRECTORIES = [
 # it. Mercurial's installers do ship it, so it ships here now.
 DROP_FILES = []
 
-# Nothing under lib/ is dropped. It is the frozen application's own module
-# tree -- an index of concrete paths baked into hg.exe -- and pruning pieces of
-# it is how a frozen application breaks. That includes the third-party packages
-# rust/hgcli/pyoxidizer.bzl pip-installs from requirements-windows-py3.txt on
-# Windows "for convenience"; they are part of what upstream ships.
+# Nothing under lib/ is dropped by the rules above. It is the frozen
+# application's own module tree -- an index of concrete paths baked into hg.exe
+# -- and pruning pieces of it is how a frozen application breaks. The trimming
+# below is the deliberate, narrower exception; see there.
 
 
 def is_dropped(relative: str) -> bool:
@@ -148,6 +149,179 @@ def is_dropped(relative: str) -> bool:
     if "/" not in relative:
         return relative in DROP_ROOT_FILES
     return False
+
+
+# ---------------------------------------------------------------------------
+# Trimming
+#
+# Everything below is a file Mercurial's own installers ship and this package
+# has no way to reach. It is separated from DROP_* above because the reasoning
+# is different in kind: those rules are about the shape of the install layout,
+# these are about what Chorus does with it.
+#
+# The motivation is size, and the numbers below are measured by running this
+# script's --from-stage over the official Mercurial 7.0.1 x64 MSI unpacked with
+# msiextract. The nupkg column is deflate calibrated against a real dotnet pack,
+# so it is accurate to a few percent rather than exact.
+#
+#     mode            files  dirs   raw     nupkg
+#     --no-trim        3277   347   99.8 MB  37.3 MB
+#     (default)        1526   100   76.2 MB  28.8 MB
+#     --trim-hgext      680    59   60.5 MB  23.8 MB
+#     TortoiseHg          99     6   46.3 MB  23.4 MB   <- what this replaced
+#
+# The directory count matters as much as the megabytes: it is the number of
+# .guidsForInstaller.xml files that have to be maintained for the life of the
+# product, and directories created once can never be cleanly retired.
+#
+# The rule for what may go in TRIM_UNIMPORTED_*, which is on by default: a
+# grep over the shipped mercurial/ and hgext/ trees finds NO import of it, or
+# finds only imports guarded by try/except. Anything whose only importer is a
+# real (if unused) code path belongs under --trim-hgext instead.
+#
+# Verify with:
+#     grep -rl "import <name>" lib/mercurial lib/hgext --include=*.py
+
+# Third-party top-level entries under lib/ that nothing in the payload imports.
+# rust/hgcli/pyoxidizer.bzl pip-installs contrib/packaging/requirements-windows-py3.txt
+# on Windows "for convenience"; most of what that pulls in is Mercurial's own
+# test and release tooling rather than anything hg uses at run time.
+TRIM_UNIMPORTED_PACKAGES = {
+    # pytest, vcrpy and their dependency closure. requirements-windows.txt.in
+    # asks for pytest-vcr with the comment "Needed by the phabricator tests".
+    "_pytest", "pytest", "py", "pluggy", "iniconfig", "toml", "atomicwrites",
+    "colorama", "vcr", "yarl", "multidict", "yaml", "_yaml", "wrapt", "attr",
+    "urllib3", "idna", "build", "packaging", "importlib_metadata", "zipp",
+    # "Needed by the release note tooling"
+    "fuzzywuzzy",
+    # console scripts pip generated: pytest.exe, pygmentize.exe, dulwich.exe...
+    "bin",
+    # only setup.py build_doc imports docutils, and that is stubbed out here
+    "docutils",
+    # hg-git's library. hgext/git uses pygit2 instead, and nothing in the
+    # payload imports dulwich at all.
+    "dulwich",
+    # for the third-party mercurial_keyring extension, which is not shipped
+    "keyring", "win32ctypes",
+}
+
+# Same, for entries that are a single file rather than a package.
+TRIM_UNIMPORTED_FILES = {
+    "pytest_vcr.py", "pyparsing.py", "zipp.py", "six.py",
+    "typing_extensions.py", "cached_property.py",
+    # tcl/tk. Nothing in the payload imports tkinter; these are here because
+    # the CPython distribution PyOxidizer embeds carries them.
+    "tcl86t.dll", "tk86t.dll", "_tkinter.pyd",
+    # stdlib extension modules with no importer here
+    "_msi.pyd", "winsound.pyd", "_zoneinfo.pyd",
+}
+
+# Matched against the start of the name, because the CPython ABI tag in a
+# .pyd filename moves with the embedded interpreter version.
+#
+# _curses is the exception to "no importer": mercurial/color.py,
+# mercurial/crecord.py and hgext/histedit.py all import it, and all three do so
+# inside a try/except that falls back cleanly. crecord is the `hg commit -i`
+# chunk-selection UI, which Chorus never invokes; color.py loses terminfo
+# lookup, which does nothing on Windows anyway.
+TRIM_UNIMPORTED_PREFIXES = ("_curses",)
+
+# Data under lib/mercurial/ that Mercurial does not read from there. Both are
+# copies STAGING_RULES_APP makes at the top level, and the top-level copy is
+# the live one: i18n.py resolves locale through os.path.join(datapath,
+# 'locale') and templater.templatedir() through datapath + b'templates', where
+# datapath is the directory holding hg.exe. DROP_DIRECTORIES already removes
+# those live copies, so these are dead weight twice over.
+#
+# lib/mercurial/helptext is deliberately NOT here. That one is live: help.py
+# reads it with open_resource(b'mercurial.helptext', ...), which resolves
+# through importlib to lib/, so trimming it would break `hg help <topic>`.
+TRIM_DEAD_DATA = {"locale", "templates"}
+
+# hgext extensions Chorus never enables, and the third-party packages whose
+# only importer is one of them. NOT trimmed by default: unlike everything
+# above, these are live code paths, reachable by anyone who enables the
+# extension in a config file this package does not control.
+#
+# Chorus enables exactly eol, hgext.graphlog and convert, in the payload's own
+# mercurial.ini, plus the vendored fixutf8. All four are kept, as is everything
+# not named here -- a denylist, so an extension a later Mercurial adds ships by
+# default.
+TRIM_HGEXT = {
+    "absorb", "acl", "beautifygraph", "blackbox", "bookflow", "bugzilla",
+    "censor", "children", "churn", "clonebundles", "closehead",
+    "commitextras", "extdiff", "factotum", "fastannotate", "fix", "fsmonitor",
+    "git", "githelp", "gpg", "hgk", "highlight", "histedit", "hooklib",
+    "journal", "keyword", "largefiles", "lfs", "logtoprocess", "mq", "narrow",
+    "notify", "patchbomb", "phabricator", "purge", "rebase", "record",
+    "relink", "releasenotes", "remotefilelog", "schemes", "share", "show",
+    "sparse", "split", "sqlitestore", "strip", "transplant", "uncommit",
+    "win32mbcs", "win32text", "zeroconf",
+}
+
+# Reached only from an extension in TRIM_HGEXT, so they go with it:
+# hgext/highlight/highlight.py is the only importer of pygments, and
+# hgext/git/gitutil.py the only importer of pygit2. cffi and pycparser are
+# pygit2's dependencies.
+TRIM_HGEXT_PACKAGES = {"pygments", "pygit2", "cffi", "pycparser"}
+TRIM_HGEXT_FILES = {"libffi-7.dll"}
+TRIM_HGEXT_PREFIXES = ("_cffi_backend",)
+
+
+def _lib_entry(relative: str) -> str | None:
+    """The top-level name under lib/ that *relative* belongs to."""
+    parts = relative.split("/")
+    if len(parts) < 2 or parts[0] != "lib":
+        return None
+    return parts[1]
+
+
+def _hgext_module(relative: str) -> str | None:
+    """The hgext extension *relative* belongs to, however it is laid out.
+
+    lib/hgext/eol.py, lib/hgext/__pycache__/eol.cpython-39.pyc and
+    lib/hgext/git/gitutil.py all answer with the extension's own name.
+    """
+    parts = relative.split("/")
+    if len(parts) < 3 or parts[:2] != ["lib", "hgext"]:
+        return None
+    name = parts[2]
+    if name == "__pycache__":
+        if len(parts) < 4:
+            return None
+        return parts[3].split(".cpython")[0]
+    return name[:-3] if name.endswith(".py") else name
+
+
+def is_trimmed(relative: str, trim_hgext: bool = False) -> str | None:
+    """Why this payload path is being trimmed, or None to keep it."""
+    if relative.split("/")[0] == "contrib":
+        return "contrib/ (completions, editor and vim files, hgweb CGI)"
+
+    entry = _lib_entry(relative)
+    if entry is None:
+        return None
+
+    if entry.endswith(".dist-info") or entry.endswith(".egg-info"):
+        return "installed-package metadata nothing reads"
+    if entry in TRIM_UNIMPORTED_PACKAGES or entry in TRIM_UNIMPORTED_FILES:
+        return "third-party code with no importer in the payload"
+    if entry.startswith(TRIM_UNIMPORTED_PREFIXES):
+        return "third-party code with no importer in the payload"
+    if entry == "mercurial":
+        parts = relative.split("/")
+        if len(parts) > 2 and parts[2] in TRIM_DEAD_DATA:
+            return "data Mercurial reads from the top level, not from lib/"
+
+    if trim_hgext:
+        if _hgext_module(relative) in TRIM_HGEXT:
+            return "hgext extensions Chorus never enables"
+        if entry in TRIM_HGEXT_PACKAGES or entry in TRIM_HGEXT_FILES:
+            return "hgext extensions Chorus never enables"
+        if entry.startswith(TRIM_HGEXT_PREFIXES):
+            return "hgext extensions Chorus never enables"
+
+    return None
 
 
 # Files Mercurial's installers ship that create_pyoxidizer_install_layout()
@@ -338,8 +512,9 @@ def documentation_build_skipped(module):
         module.build_docs_html = original
 
 
-def assemble_payload(stage: pathlib.Path, payload: pathlib.Path
-                     ) -> tuple[list[str], list[str], int]:
+def assemble_payload(stage: pathlib.Path, payload: pathlib.Path,
+                     trim: bool = True, trim_hgext: bool = False
+                     ) -> tuple[list[str], list[str], int, dict]:
     """Replace *payload* with the wanted part of *stage*, keeping our own files."""
     def files_in(root: pathlib.Path) -> set[str]:
         if not root.exists():
@@ -372,6 +547,7 @@ def assemble_payload(stage: pathlib.Path, payload: pathlib.Path
         payload.mkdir(parents=True)
 
         dropped = 0
+        trimmed: dict = {}
         for source in sorted(stage.rglob("*")):
             if not source.is_file():
                 continue
@@ -379,6 +555,13 @@ def assemble_payload(stage: pathlib.Path, payload: pathlib.Path
             if is_dropped(relative):
                 dropped += 1
                 continue
+            if trim:
+                reason = is_trimmed(relative, trim_hgext)
+                if reason is not None:
+                    entry = trimmed.setdefault(reason, [0, 0])
+                    entry[0] += 1
+                    entry[1] += source.stat().st_size
+                    continue
             destination = payload / relative
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, destination)
@@ -398,7 +581,7 @@ def assemble_payload(stage: pathlib.Path, payload: pathlib.Path
         print("guids: carried %d %s file(s) across" % (len(guids), GUID_FILE))
 
     after = files_in(payload)
-    return sorted(after - before), sorted(before - after), dropped
+    return sorted(after - before), sorted(before - after), dropped, trimmed
 
 
 def main() -> None:
@@ -424,6 +607,20 @@ def main() -> None:
     parser.add_argument(
         "--output",
         help="payload directory to refresh (default: win/Mercurial beside this script)",
+    )
+    parser.add_argument(
+        "--no-trim", action="store_true",
+        help="ship everything the install layout contains. Trimming is on by"
+             " default and removes third-party code that nothing in the payload"
+             " imports; use this to reproduce the untrimmed tree when checking"
+             " whether a problem is the trimming's fault",
+    )
+    parser.add_argument(
+        "--trim-hgext", action="store_true",
+        help="additionally trim the hgext extensions Chorus never enables, and"
+             " the packages only they import (pygments, pygit2). Off by default"
+             " because, unlike the rest of the trimming, these are live code"
+             " paths that a config file outside this package could reach",
     )
     parser.add_argument(
         "--no-regen-guids", action="store_true",
@@ -455,15 +652,30 @@ def main() -> None:
     if not (stage / "hg.exe").is_file():
         die("no hg.exe in %s; is that really a Mercurial install layout?" % stage)
 
-    added, removed, dropped = assemble_payload(stage, payload)
+    added, removed, dropped, trimmed = assemble_payload(
+        stage, payload, trim=not args.no_trim, trim_hgext=args.trim_hgext)
+
+    if trimmed:
+        total_files = sum(n for n, _ in trimmed.values())
+        total_bytes = sum(b for _, b in trimmed.values())
+        print("\ntrimmed %d file(s), %.1f MB, that Chorus cannot reach:"
+              % (total_files, total_bytes / 1e6))
+        for reason, (count, size) in sorted(trimmed.items(),
+                                            key=lambda kv: -kv[1][1]):
+            print("  %6.1f MB  %4d file(s)  %s" % (size / 1e6, count, reason))
+        if not args.trim_hgext:
+            print("  (--trim-hgext would remove the unused hgext extensions too)")
+    elif args.no_trim:
+        print("\ntrimming disabled: shipping the install layout as staged")
 
     regenerated = not args.no_regen_guids
     if regenerated:
         regenerate_guids(here, payload)
 
     total = sum(1 for p in payload.rglob("*") if p.is_file())
-    print("\n%s rebuilt: %d file(s), %d left out of the staging tree"
-          % (payload, total, dropped))
+    directories = len({p.parent for p in payload.rglob("*") if p.is_file()})
+    print("\n%s rebuilt: %d file(s) in %d director(ies), %d left out of the"
+          " staging tree" % (payload, total, directories, dropped))
     print("  %d added, %d removed relative to what was there before"
           % (len(added), len(removed)))
     for name in added:

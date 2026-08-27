@@ -14,7 +14,9 @@ The script drives Mercurial's own packaging code — the same
 are built from — so the staging tree it selects from is by construction the tree upstream ships.
 See `build-windows-payload.py`'s docstring for the details, including the cost: PyOxidizer's
 `hg.exe` resolves modules from an index of concrete paths, so `lib/` expands to a directory per
-package and the payload carries about a hundred `.guidsForInstaller.xml` files.
+package — 347 of them in Mercurial's own 7.0.1 install layout, against the six a `library.zip`
+layout needed, and the Chorus installer records one `.guidsForInstaller.xml` per directory. The
+script trims that back; see [Trimming](#trimming) below.
 
 [hg]: https://foss.heptapod.net/mercurial/mercurial-devel
 
@@ -111,6 +113,44 @@ SDK, and `--from-stage DIR` skips the build entirely and assembles the payload f
 install layout — point it at a Mercurial MSI unpacked with `msiexec /a` to check the selection
 rules in seconds instead of minutes.
 
+## Trimming
+
+Mercurial's Windows install layout carries a great deal that Chorus cannot reach:
+`rust/hgcli/pyoxidizer.bzl` pip-installs all of `contrib/packaging/requirements-windows-py3.txt`
+into the embedded interpreter "for convenience", which is mostly Mercurial's own test and release
+tooling. **The script trims that by default.** Two flags control it:
+
+| flag | effect |
+| --- | --- |
+| *(none)* | Trim third-party code with no importer anywhere in the payload, the copies of `locale/` and `templates/` under `lib/mercurial/` that Mercurial reads from the top level instead, installed-package metadata, and `contrib/`. |
+| `--no-trim` | Ship the install layout as staged. Use it to reproduce the untrimmed tree when working out whether a problem is the trimming's fault. |
+| `--trim-hgext` | *Additionally* drop the `hgext` extensions Chorus never enables, and the two packages only they import (`pygments`, imported only by `hgext/highlight`; `pygit2`, only by `hgext/git`). |
+
+Measured by running `--from-stage` over the official Mercurial 7.0.1 x64 MSI. The nupkg column is
+deflate calibrated against a real `dotnet pack`, so it is good to a few percent rather than exact:
+
+| mode | files | directories | raw | nupkg |
+| --- | ---: | ---: | ---: | ---: |
+| `--no-trim` | 3277 | 347 | 99.8 MB | 37.3 MB |
+| default | 1526 | 100 | 76.2 MB | 28.8 MB |
+| `--trim-hgext` | 680 | 59 | 60.5 MB | 23.8 MB |
+| *the old TortoiseHg payload* | 99 | 6 | 46.3 MB | 23.4 MB |
+
+The directory count matters as much as the megabytes, because it is the number of
+`.guidsForInstaller.xml` files that have to be maintained for the life of the product.
+
+The line between the two sets is deliberate. The default set is code with **no importer at all**
+in the shipped `mercurial/` and `hgext/` trees, or whose only imports are inside a `try/except`
+(that exception is `_curses`, imported that way by `color.py`, `crecord.py` and `histedit.py`).
+`--trim-hgext` removes live code paths instead: nothing in this package enables those extensions,
+but a config file outside it could, and then they would be missing rather than merely unused. That
+is why it is opt-in.
+
+Chorus's own `mercurial.ini` enables `eol`, `hgext.graphlog` and `convert`, plus the vendored
+`fixutf8`; all four survive both modes, as does `lib/mercurial/helptext`, which `help.py` reads
+through `importlib` and which `hg help <topic>` therefore needs. If you add to `TRIM_HGEXT`, check
+the extension against that list first.
+
 ## After the build
 
 1. Smoke-test the result:
@@ -119,8 +159,10 @@ rules in seconds instead of minutes.
    win\Mercurial\hg.exe version
    ```
 
-2. Read the summary the script prints. `0 added, 0 removed` at the same tag is what you want; any
-   added file at a new tag deserves a look.
+2. Read the summary the script prints — both the trimming table and the added/removed list.
+   `0 added, 0 removed` at the same tag is what you want; any added file at a new tag deserves a
+   look. A file that appears because a new Mercurial started shipping it is expected; one that
+   appears because a trim rule stopped matching is not.
 
 3. Stage it, remembering the hidden GUID files:
 
