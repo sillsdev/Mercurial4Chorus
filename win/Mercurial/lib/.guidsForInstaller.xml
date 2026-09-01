@@ -20,8 +20,15 @@
   <File Id="_.zope.interface._zope_interface_coptimizations.pyd" Guid="6e5dacbe-d611-493b-bca5-d0e658059b36" />
   <File Id="mercurial.lib.mercurial.zstd.pyd" Guid="04dec5a9-93c0-413c-8ff4-c1653e2c9880" />
   <File Id="mercurial.lib.pyexpat.pyd" Guid="de7cec60-d92b-433b-ae3d-9d2d0c17dd0c" />
-  <File Id="mercurial.lib.pygit2._libgit2.pyd" Guid="e73e3675-a472-406a-b38f-ac0b55e44ffc" />
-  <File Id="mercurial.lib.pygit2._pygit2.pyd" Guid="af7f51c3-0a27-4239-a6c5-3f70cd250dc2" />
+  <!-- Retired 2026-09-01. e73e3675 belonged to lib/pygit2._libgit2.pyd from Mercurial 6.5.1,
+  but Mercurial 7.0.1 installs a different file at lib/pygit2/_libgit2.pyd, which happens to
+  map to the same file ID. Reusing the GUID would create the possibility of an MSI installer
+  that could restore the wrong version of the component. So we keep the GUID around so that
+  it can never be accidentally reused, with a file ID that will no longer be generatable. -->
+  <File Id="RETIRED.mercurial.lib.pygit2._libgit2.pyd" Guid="e73e3675-a472-406a-b38f-ac0b55e44ffc" />
+  <!-- RETIRED 2026-09-01, same reason as above. No actual file clash observed with 7.0.1, but
+  retiring this GUID as well out of an abundance of caution. -->
+  <File Id="RETIRED.mercurial.lib.pygit2._pygit2.pyd" Guid="af7f51c3-0a27-4239-a6c5-3f70cd250dc2" />
   <File Id="mercurial.lib.python3.dll" Guid="647d056b-7bbd-4beb-a6df-9aafbe4a5694" />
   <File Id="mercurial.lib.pythoncom39.dll" Guid="5bc5e00f-df9d-47fc-917f-d64e4a16f2bc" />
   <File Id="mercurial.lib.pywintypes39.dll" Guid="79aa97b3-d672-4c03-8782-b34de8252ae4" />
