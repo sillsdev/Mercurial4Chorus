@@ -40,12 +40,19 @@
   </PropertyGroup>
 
   <PropertyGroup>
-    <!-- 3.2.1 is the first release with MakeWixForDirTree.ConsolidatedGuidFile.
+    <!-- The release MakeWixForDirTree.ConsolidatedGuidFile is expected to land
+         in. It did NOT make 3.2.1, which shipped without it, and is not
+         expected in 3.2.2 either; it is likely to be in 3.2.3, but treat that
+         as an assumption to confirm rather than a fact, and check before
+         relying on it: restoring a version without the feature fails with
+         MSB4064, "The parameter ConsolidatedGuidFile is not supported by the
+         MakeWixForDirTree task".
+
          Overridable so the pre-release built from
          https://github.com/sillsdev/SIL.BuildTasks/pull/81 can be tested before
-         3.2.1 reaches nuget.org:
+         then:
 
-           -p:SilBuildTasksVersion=3.2.1-pr0081-0002
+           -p:SilBuildTasksVersion=<version of .nupkg, e.g. 3.2.3-pr0081-0010>
            -p:RestoreAdditionalProjectSources=<directory holding the .nupkg>
 
          build-windows-payload.py passes both for you; see its
@@ -56,7 +63,7 @@
          allocates the GUIDs that actually ship. It pins 3.0.0 and does not pass
          ConsolidatedGuidFile, so until it is updated it still reads the
          per-directory files. That is why they are not deleted here. -->
-    <SilBuildTasksVersion Condition="'$(SilBuildTasksVersion)'==''">3.2.1</SilBuildTasksVersion>
+    <SilBuildTasksVersion Condition="'$(SilBuildTasksVersion)'==''">3.2.3</SilBuildTasksVersion>
   </PropertyGroup>
 
   <ItemGroup>
@@ -73,10 +80,11 @@
          there. build/ is gitignored. -->
     <WxsOutputPath Condition="'$(WxsOutputPath)'==''">$(RepoRoot)build\wxs\GeneratedMercurial.wxs</WxsOutputPath>
     <!-- One file for the whole tree instead of a .guidsForInstaller.xml in every
-         directory. The PyOxidizer payload has 40 to 99 directories depending on
-         the trim flags, against six under the old py2exe layout, and every entry
-         has to be kept for the life of the product because it must outlive the
-         file it describes.
+         directory. Every entry has to be kept for the life of the product,
+         because it must outlive the file it describes.
+
+         The PyOxidizer payload needs 40 directories with the default trimming
+         and 347 without it, against six under the old py2exe layout.
 
          The task seeds this from any per-directory files still present and
          leaves them alone, so the switch is reversible and nothing is lost.

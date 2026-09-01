@@ -21,8 +21,9 @@ MSI, the install layout is 347 directories against the six a py2exe layout
 needed, and the Chorus installer records one .guidsForInstaller.xml per
 directory, every entry of which has to be kept forever. That is the price of
 building from Mercurial itself instead of from a third party's repackaging of
-it. The trimming this script does by default brings that back to 99
-directories, --trim-hgext to 58, and both extra flags together to 40.
+it. The trimming this script does by default brings that back to 40
+directories; --no-trim-hgext and --no-trim-sources give 65 and 58, and
+--no-trim the full 347.
 
 The build is not reproducible. Expect the file list to match a previous build
 at the same tag and the bytes not to; judge a rebuild by the added/removed
@@ -90,7 +91,7 @@ PRESERVE = [
 GUID_FILE = ".guidsForInstaller.xml"
 
 # One file at the payload root holding the GUIDs for the whole tree, written by
-# MakeWixForDirTree.ConsolidatedGuidFile (SIL.BuildTasks 3.2.1 and later). The
+# MakeWixForDirTree.ConsolidatedGuidFile (SIL.BuildTasks 3.2.3 and later). The
 # per-directory scheme needs one file per directory -- 40 to 99 of them here,
 # depending on the trim flags, against six under the old py2exe layout -- and
 # none of them can ever be retired.
@@ -107,11 +108,13 @@ GUID_FILE = ".guidsForInstaller.xml"
 # mint a fresh GUID for every file in the payload and break upgrades.
 CONSOLIDATED_GUID_FILE = ".guidsForInstaller.all.xml"
 
-# 3.2.1 is the first SIL.BuildTasks with ConsolidatedGuidFile. Not on nuget.org
-# while https://github.com/sillsdev/SIL.BuildTasks/pull/81 is in review, so
-# --sil-buildtasks-version and --nuget-source exist to point the restore at the
-# pre-release nupkg.
-DEFAULT_SIL_BUILDTASKS_VERSION = "3.2.1"
+# The SIL.BuildTasks release expected to carry ConsolidatedGuidFile. It did not
+# make 3.2.1, which shipped without it, and is not expected in 3.2.2 either;
+# it is expected in 3.2.3, but treat that as an assumption to confirm rather
+# than a fact. While https://github.com/sillsdev/SIL.BuildTasks/pull/81 is
+# unmerged, --sil-buildtasks-version and --nuget-source point the restore at a
+# pre-release nupkg built from it.
+DEFAULT_SIL_BUILDTASKS_VERSION = "3.2.3"
 
 
 def _is_guid_file(name: str) -> bool:
@@ -194,22 +197,23 @@ def is_dropped(relative: str) -> bool:
 # msiextract. The nupkg column is deflate calibrated against a real dotnet pack,
 # so it is accurate to a few percent rather than exact.
 #
-#     mode                          files  dirs   raw     nupkg
-#     --no-trim                      3277   347   99.8 MB  37.3 MB
-#     (default)                      1520    99   75.8 MB  28.7 MB
-#     --trim-sources                  837    65   63.3 MB  25.3 MB
-#     --trim-hgext                    675    58   60.2 MB  23.6 MB
-#     --trim-hgext --trim-sources     395    40   54.0 MB  21.9 MB
-#     TortoiseHg                       99     6   46.3 MB  23.4 MB  <- replaced
+#     mode                                 files  dirs   raw     nupkg
+#     --no-trim                             3277   347   99.8 MB  37.3 MB
+#     --no-trim-hgext --no-trim-sources     1520    99   75.8 MB  28.7 MB
+#     --no-trim-hgext                        837    65   63.3 MB  25.3 MB
+#     --no-trim-sources                      675    58   60.2 MB  23.6 MB
+#     (default)                              395    40   54.0 MB  21.9 MB
+#     TortoiseHg                              99     6   46.3 MB  23.4 MB  <- replaced
 #
 # The directory count matters as much as the megabytes: it is the number of
 # .guidsForInstaller.xml files that have to be maintained for the life of the
 # product, and directories created once can never be cleanly retired.
 #
-# The rule for what may go in TRIM_UNIMPORTED_*, which is on by default: a
-# grep over the shipped mercurial/ and hgext/ trees finds NO import of it, or
-# finds only imports guarded by try/except. Anything whose only importer is a
-# real (if unused) code path belongs under --trim-hgext instead.
+# Everything is trimmed by default now. The rule for what may go in
+# TRIM_UNIMPORTED_*, the set that cannot be turned off individually: a grep over
+# the shipped mercurial/ and hgext/ trees finds NO import of it, or finds only
+# imports guarded by try/except. Anything whose only importer is a real (if
+# unused) code path belongs under TRIM_HGEXT, which --no-trim-hgext can restore.
 #
 # Verify with:
 #     grep -rl "import <name>" lib/mercurial lib/hgext --include=*.py
@@ -271,9 +275,15 @@ TRIM_UNIMPORTED_PREFIXES = ("_curses",)
 TRIM_DEAD_DATA = {"locale", "templates"}
 
 # hgext extensions Chorus never enables, and the third-party packages whose
-# only importer is one of them. NOT trimmed by default: unlike everything
-# above, these are live code paths, reachable by anyone who enables the
-# extension in a config file this package does not control.
+# only importer is one of them. Trimmed by default, restored by
+# --no-trim-hgext.
+#
+# These are live code paths rather than dead weight, so this was opt-in at
+# first. It became the default once the full LibChorus test suite passed on
+# Windows against a payload built this way -- that suite exercises clone, pull,
+# push, commit, merge, update and log, which is the ground truth this package
+# exists to serve. What remains reachable is a config file outside this package
+# enabling one of these extensions, which is what --no-trim-hgext is for.
 #
 # Chorus enables exactly eol, hgext.graphlog and convert, in the payload's own
 # mercurial.ini, plus the vendored fixutf8. All four are kept, as is everything
@@ -315,7 +325,7 @@ TRIM_HGEXT_PREFIXES = ("_cffi_backend",)
 TRIM_HGEXT_FILES: set = set()
 
 
-# Python source, dropped by --trim-sources and kept by default.
+# Python source, dropped by default and restored by --no-trim-sources.
 #
 # hg.exe does not need it. Its resource index carries a separate path for each
 # module's source and its bytecode -- lib\\mercurial\\util.py in one blob
@@ -326,8 +336,8 @@ TRIM_HGEXT_FILES: set = set()
 #
 # What is lost is source lines in tracebacks: an hg crash still reports the
 # file, line and function, but the offending line itself is blank. Chorus
-# surfaces hg's stderr, so that is a real if modest cost to diagnosis, and it
-# is the reason this is not on by default.
+# surfaces hg's stderr, so that is a real if modest cost to diagnosis, which is
+# what --no-trim-sources buys back when a crash needs investigating.
 #
 # The rule enforced below is that a .py is removed only when its bytecode is
 # actually present. Against the official 7.0.1 x64 MSI the pairing is exact --
@@ -471,7 +481,7 @@ def _hgext_module(relative: str) -> str | None:
     return name[:-3] if name.endswith(".py") else name
 
 
-def is_trimmed(relative: str, trim_hgext: bool = False) -> str | None:
+def is_trimmed(relative: str, trim_hgext: bool = True) -> str | None:
     """Why this payload path is being trimmed, or None to keep it."""
     # Decide a __pycache__ entry exactly as its module would be decided.
     # Without this, trimming a single-file module such as lib/six.py leaves
@@ -730,8 +740,8 @@ def documentation_build_skipped(module):
 
 
 def assemble_payload(stage: pathlib.Path, payload: pathlib.Path,
-                     trim: bool = True, trim_hgext: bool = False,
-                     trim_sources: bool = False
+                     trim: bool = True, trim_hgext: bool = True,
+                     trim_sources: bool = True
                      ) -> tuple[list[str], list[str], int, dict, set]:
     """Replace *payload* with the wanted part of *stage*, keeping our own files."""
     def files_in(root: pathlib.Path) -> set[str]:
@@ -853,29 +863,29 @@ def main() -> None:
     )
     parser.add_argument(
         "--no-trim", action="store_true",
-        help="ship everything the install layout contains. Trimming is on by"
-             " default and removes third-party code that nothing in the payload"
-             " imports; use this to reproduce the untrimmed tree when checking"
-             " whether a problem is the trimming's fault",
+        help="ship everything the install layout contains, turning off all"
+             " three trimming passes at once. Use it to reproduce the untrimmed"
+             " tree when working out whether a problem is the trimming's fault",
     )
     parser.add_argument(
-        "--trim-hgext", action="store_true",
-        help="additionally trim the hgext extensions Chorus never enables, and"
-             " the packages only they import (pygments, pygit2). Off by default"
-             " because, unlike the rest of the trimming, these are live code"
-             " paths that a config file outside this package could reach",
+        "--no-trim-hgext", action="store_true",
+        help="keep the hgext extensions Chorus never enables, and the packages"
+             " only they import (pygments, pygit2). They are trimmed by default;"
+             " restore them if something outside this package enables one of"
+             " those extensions",
     )
     parser.add_argument(
-        "--trim-sources", action="store_true",
-        help="additionally drop the .py files under lib/, keeping the bytecode"
-             " hg.exe actually loads. Independent of --no-trim. The cost is"
-             " that a Mercurial traceback no longer shows the source line it"
-             " failed on, only the file, line number and function",
+        "--no-trim-sources", action="store_true",
+        help="keep the .py files under lib/. They are dropped by default,"
+             " because hg.exe loads the bytecode beside them; restore them when"
+             " a Mercurial traceback needs to show the source line it failed"
+             " on rather than just the file, line number and function",
     )
     parser.add_argument(
         "--sil-buildtasks-version", default=DEFAULT_SIL_BUILDTASKS_VERSION,
         help="SIL.BuildTasks version to allocate GUIDs with (default:"
-             " %(default)s, the first release with ConsolidatedGuidFile)",
+             " %(default)s, the release ConsolidatedGuidFile is expected in;"
+             " it did not make 3.2.1)",
     )
     parser.add_argument(
         "--nuget-source", metavar="DIR",
@@ -912,9 +922,15 @@ def main() -> None:
     if not (stage / "hg.exe").is_file():
         die("no hg.exe in %s; is that really a Mercurial install layout?" % stage)
 
+    # --no-trim turns everything off, so that it still means "the install
+    # layout exactly as staged"; the other two switch off one pass each.
+    trim = not args.no_trim
+    trim_hgext = trim and not args.no_trim_hgext
+    trim_sources = trim and not args.no_trim_sources
+
     added, removed, dropped, trimmed, removed_names = assemble_payload(
-        stage, payload, trim=not args.no_trim, trim_hgext=args.trim_hgext,
-        trim_sources=args.trim_sources)
+        stage, payload, trim=trim, trim_hgext=trim_hgext,
+        trim_sources=trim_sources)
 
     check_native_dependencies(payload, removed_names)
 
@@ -926,10 +942,10 @@ def main() -> None:
         for reason, (count, size) in sorted(trimmed.items(),
                                             key=lambda kv: -kv[1][1]):
             print("  %6.1f MB  %4d file(s)  %s" % (size / 1e6, count, reason))
-        if not args.trim_hgext:
-            print("  (--trim-hgext would remove the unused hgext extensions too)")
-        if not args.trim_sources:
-            print("  (--trim-sources would remove the .py sources too)")
+        if not trim_hgext:
+            print("  (--no-trim-hgext: the unused hgext extensions were kept)")
+        if not trim_sources:
+            print("  (--no-trim-sources: the .py sources were kept)")
     elif args.no_trim:
         print("\ntrimming disabled: shipping the install layout as staged")
 

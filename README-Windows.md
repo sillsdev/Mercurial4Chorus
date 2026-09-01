@@ -81,8 +81,8 @@ by hand if you prefer.
    winget install Microsoft.DotNet.SDK.8
    ```
 
-   That step needs **SIL.BuildTasks 3.2.1 or later**, which is not on nuget.org yet — see
-   [Installer GUIDs](#installer-guids) for how to restore the pre-release build of it.
+   That step needs a SIL.BuildTasks with `ConsolidatedGuidFile`, which has not been released
+   yet — see [Installer GUIDs](#installer-guids).
 
 6. **A Mercurial checkout beside this one**, which is where `--hg-source` defaults to:
 
@@ -121,14 +121,16 @@ rules in seconds instead of minutes.
 Mercurial's Windows install layout carries a great deal that Chorus cannot reach:
 `rust/hgcli/pyoxidizer.bzl` pip-installs all of `contrib/packaging/requirements-windows-py3.txt`
 into the embedded interpreter "for convenience", which is mostly Mercurial's own test and release
-tooling. **The script trims that by default.** Two flags control it:
+tooling, plus extensions Chorus never enables.
+
+**The script trims all of that by default, in three passes.** Each switch turns one off:
 
 | flag | effect |
 | --- | --- |
-| *(none)* | Trim third-party code with no importer anywhere in the payload, the copies of `locale/` and `templates/` under `lib/mercurial/` that Mercurial reads from the top level instead, installed-package metadata, and `contrib/`. |
-| `--no-trim` | Ship the install layout as staged. Use it to reproduce the untrimmed tree when working out whether a problem is the trimming's fault. |
-| `--trim-hgext` | *Additionally* drop the `hgext` extensions Chorus never enables, and the two packages only they import (`pygments`, imported only by `hgext/highlight`; `pygit2`, only by `hgext/git`). |
-| `--trim-sources` | *Additionally* drop the `.py` files under `lib/`, keeping the bytecode. Independent of the other two. |
+| *(none)* | Trim third-party code with no importer anywhere in the payload; the `hgext` extensions Chorus never enables; the `.py` sources under `lib/`; the copies of `locale/` and `templates/` under `lib/mercurial/` that Mercurial reads from the top level instead; installed-package metadata; and `contrib/`. |
+| `--no-trim` | Ship the install layout exactly as staged — turns off all three passes at once. Use it to reproduce the untrimmed tree when working out whether a problem is the trimming's fault. |
+| `--no-trim-hgext` | Keep the `hgext` extensions Chorus never enables, and the two packages only they import (`pygments`, imported only by `hgext/highlight`; `pygit2`, only by `hgext/git`). |
+| `--no-trim-sources` | Keep the `.py` files under `lib/`. |
 
 Measured by running `--from-stage` over the official Mercurial 7.0.1 x64 MSI. The nupkg column is
 deflate calibrated against a real `dotnet pack`, so it is good to a few percent rather than exact:
@@ -136,34 +138,41 @@ deflate calibrated against a real `dotnet pack`, so it is good to a few percent 
 | mode | files | directories | raw | nupkg |
 | --- | ---: | ---: | ---: | ---: |
 | `--no-trim` | 3277 | 347 | 99.8 MB | 37.3 MB |
-| default | 1520 | 99 | 75.8 MB | 28.7 MB |
-| `--trim-sources` | 837 | 65 | 63.3 MB | 25.3 MB |
-| `--trim-hgext` | 675 | 58 | 60.2 MB | 23.6 MB |
-| `--trim-hgext --trim-sources` | 395 | 40 | 54.0 MB | 21.9 MB |
+| `--no-trim-hgext --no-trim-sources` | 1520 | 99 | 75.8 MB | 28.7 MB |
+| `--no-trim-hgext` | 837 | 65 | 63.3 MB | 25.3 MB |
+| `--no-trim-sources` | 675 | 58 | 60.2 MB | 23.6 MB |
+| **default** | **395** | **40** | **54.0 MB** | **21.9 MB** |
 | *the old TortoiseHg payload* | 99 | 6 | 46.3 MB | 23.4 MB |
 
 The directory count matters as much as the megabytes, because it is the number of
 `.guidsForInstaller.xml` files that have to be maintained for the life of the product.
 
-The line between the two sets is deliberate. The default set is code with **no importer at all**
-in the shipped `mercurial/` and `hgext/` trees, or whose only imports are inside a `try/except`
-(that exception is `_curses`, imported that way by `color.py`, `crecord.py` and `histedit.py`).
-`--trim-hgext` removes live code paths instead: nothing in this package enables those extensions,
-but a config file outside it could, and then they would be missing rather than merely unused. That
-is why it is opt-in.
+The three passes differ in what they assume, which is why each can be turned off on its own.
+
+The pass that cannot be disabled individually removes code with **no importer at all** in the
+shipped `mercurial/` and `hgext/` trees, or whose only imports are inside a `try/except` (that
+exception is `_curses`, imported that way by `color.py`, `crecord.py` and `histedit.py`). Nothing
+can reach it.
+
+The `hgext` pass removes live code paths instead. Nothing in this package enables those
+extensions, but a config file outside it could, and then they would be missing rather than merely
+unused — so it was opt-in until the full LibChorus test suite passed on Windows against a payload
+built this way. That suite exercises clone, pull, push, commit, merge, update and log, which is
+the ground truth this package exists to serve. `--no-trim-hgext` restores them if something
+outside this package needs one.
 
 Chorus's own `mercurial.ini` enables `eol`, `hgext.graphlog` and `convert`, plus the vendored
 `fixutf8`; all four survive every mode, as does `lib/mercurial/helptext`, which `help.py` reads
 through `importlib` and which `hg help <topic>` therefore needs. If you add to `TRIM_HGEXT`, check
 the extension against that list first.
 
-`--trim-sources` is opt-in for a different reason: it is not about reachability but about
-diagnosis. `hg.exe` never needs the source — its resource index carries a separate path for each
-module's source and its bytecode, and the bytecode is PEP 552 unchecked-hash, so nothing validates
-one against the other. What is lost is the source line in a traceback: a Mercurial crash still
-names the file, line number and function, but the line itself comes out blank. Chorus surfaces
-hg's stderr, so that is a real if modest cost. A `.py` is only ever removed when its bytecode is
-actually present, so the flag cannot make a module unimportable.
+The source pass is not about reachability at all but about diagnosis. `hg.exe` never needs the
+source — its resource index carries a separate path for each module's source and its bytecode, and
+the bytecode is PEP 552 unchecked-hash, so nothing validates one against the other. What is lost
+is the source line in a traceback: a Mercurial crash still names the file, line number and
+function, but the line itself comes out blank. Chorus surfaces hg's stderr, so that is a real if
+modest cost, and `--no-trim-sources` buys it back when a crash needs investigating. A `.py` is only
+ever removed when its bytecode is actually present, so the pass cannot make a module unimportable.
 
 **Adding a DLL to any trim list needs a reason from its import table, not from its name.**
 `libffi-7.dll` was once trimmed alongside `cffi` on the strength of the name; it is in fact the
@@ -179,8 +188,9 @@ able to remove it. `assets/regen-guids.proj` drives SIL.BuildTasks' `MakeWixForD
 allocate them, and `build-windows-payload.py` runs it unless given `--no-regen-guids`.
 
 Historically that meant one hidden `.guidsForInstaller.xml` per directory — fine at six, unwieldy
-at the 40–99 the PyOxidizer layout needs. **SIL.BuildTasks 3.2.1 adds `ConsolidatedGuidFile`**, and
-the build now writes a single `win/Mercurial/.guidsForInstaller.all.xml` holding the whole tree.
+at the 40 the PyOxidizer layout needs by default, or 347 with `--no-trim`. **SIL.BuildTasks'
+`ConsolidatedGuidFile`** replaces them with a single `win/Mercurial/.guidsForInstaller.all.xml`
+holding the whole tree.
 The task seeds it from any per-directory files still present and leaves those alone, so the switch
 loses nothing and is reversible.
 
@@ -192,14 +202,23 @@ loses nothing and is reversible.
 > updated would silently mint a fresh GUID for every file in the payload and break upgrades for
 > everyone who already has Mercurial installed.
 
-Until 3.2.1 reaches nuget.org, restore it from a local pre-release build:
+> [!WARNING]
+> **`ConsolidatedGuidFile` has not shipped yet.** It did not make 3.2.1, which was released
+> without it, and is not expected in 3.2.2; which release carries it depends on the order the
+> outstanding pull requests against SIL.BuildTasks are merged. The default here is **3.2.3** as a
+> best guess — confirm it before relying on it. Restoring a version without the feature fails with
+> `MSB4064: The parameter "ConsolidatedGuidFile" is not supported by the "MakeWixForDirTree" task`.
+
+Until then, restore it from a local pre-release build of
+[PR #81](https://github.com/sillsdev/SIL.BuildTasks/pull/81):
 
 ```powershell
 py -3 build-windows-payload.py --sil-buildtasks-version 3.2.1-pr0081-0002 --nuget-source .
 ```
 
 `--nuget-source` is any directory holding the `.nupkg`; the repository root is where the
-pre-release currently sits. Once 3.2.1 is published, both options can be dropped.
+pre-release currently sits. Once the feature is published, both options can be dropped and the
+default in `assets/regen-guids.proj` updated to the real version.
 
 Read the list of newly allocated File Ids the run prints. An id that resembles an existing file
 under a different name is a rename that has just been given a second installer identity.
