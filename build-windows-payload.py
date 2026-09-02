@@ -345,6 +345,28 @@ TRIM_HGEXT_FILES: set = set()
 # the check is on the removal rather than on a count.
 
 
+def _staged_both_spellings(stage: pathlib.Path) -> list:
+    """STAGE_RENAMES pairs the staging tree really holds under both names.
+
+    Compares directory entries. Testing each path with is_file() looks like the
+    obvious way to do this and is wrong: stat() is case-insensitive on Windows
+    and on macOS, so both spellings answer True whenever either file exists,
+    and a guard built that way fires on every run instead of never. Reading the
+    directory gives the names actually on disk.
+    """
+    both = []
+    for staged, shipped in STAGE_RENAMES.items():
+        directory, staged_name = staged.rsplit("/", 1)
+        shipped_name = shipped.rsplit("/", 1)[1]
+        parent = stage / directory
+        if not parent.is_dir():
+            continue
+        names = {entry.name for entry in parent.iterdir()}
+        if staged_name in names and shipped_name in names:
+            both.append((staged, shipped))
+    return both
+
+
 def _sources_with_bytecode(stage: pathlib.Path) -> set:
     """Every lib/**.py in *stage* that has compiled bytecode beside it."""
     found = set()
@@ -854,12 +876,12 @@ def assemble_payload(stage: pathlib.Path, payload: pathlib.Path,
             shutil.rmtree(payload)
         payload.mkdir(parents=True)
 
-        # Both spellings can only coexist on a case-sensitive staging tree, and
+        # Two real entries can only exist on a case-sensitive staging tree, and
         # one would silently overwrite the other on the way into the payload.
-        for staged, shipped in STAGE_RENAMES.items():
-            if (stage / staged).is_file() and (stage / shipped).is_file():
-                die("the staging tree holds both %s and %s; STAGE_RENAMES cannot"
-                    " tell which one the payload should carry" % (staged, shipped))
+        for staged, shipped in _staged_both_spellings(stage):
+            die("the staging tree holds both %s and %s as separate files;"
+                " STAGE_RENAMES\n       cannot tell which one the payload should"
+                " carry. Delete whichever is stale." % (staged, shipped))
 
         dropped = 0
         trimmed: dict = {}
