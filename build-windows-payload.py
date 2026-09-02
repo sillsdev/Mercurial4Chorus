@@ -91,7 +91,7 @@ PRESERVE = [
 GUID_FILE = ".guidsForInstaller.xml"
 
 # One file at the payload root holding the GUIDs for the whole tree, written by
-# MakeWixForDirTree.ConsolidatedGuidFile (SIL.BuildTasks 3.2.3 and later). The
+# MakeWixForDirTree.ConsolidatedGuidFile (SIL.BuildTasks 3.3.0 and later). The
 # per-directory scheme needs one file per directory -- 40 to 99 of them here,
 # depending on the trim flags, against six under the old py2exe layout -- and
 # none of them can ever be retired.
@@ -108,13 +108,12 @@ GUID_FILE = ".guidsForInstaller.xml"
 # mint a fresh GUID for every file in the payload and break upgrades.
 CONSOLIDATED_GUID_FILE = ".guidsForInstaller.all.xml"
 
-# The SIL.BuildTasks release expected to carry ConsolidatedGuidFile. It did not
-# make 3.2.1, which shipped without it, and is not expected in 3.2.2 either;
-# it is expected in 3.2.3, but treat that as an assumption to confirm rather
-# than a fact. While https://github.com/sillsdev/SIL.BuildTasks/pull/81 is
-# unmerged, --sil-buildtasks-version and --nuget-source point the restore at a
-# pre-release nupkg built from it.
-DEFAULT_SIL_BUILDTASKS_VERSION = "3.2.3"
+# 3.3.0 is the first SIL.BuildTasks with MakeWixForDirTree.ConsolidatedGuidFile.
+# An earlier version restores fine but fails the build the moment the task is
+# invoked, with MSB4064: "The parameter ConsolidatedGuidFile is not supported by
+# the MakeWixForDirTree task". --sil-buildtasks-version overrides this when a
+# newer release has to be tried.
+DEFAULT_SIL_BUILDTASKS_VERSION = "3.3.0"
 
 
 def _is_guid_file(name: str) -> bool:
@@ -884,13 +883,12 @@ def main() -> None:
     parser.add_argument(
         "--sil-buildtasks-version", default=DEFAULT_SIL_BUILDTASKS_VERSION,
         help="SIL.BuildTasks version to allocate GUIDs with (default:"
-             " %(default)s, the release ConsolidatedGuidFile is expected in;"
-             " it did not make 3.2.1)",
+             " %(default)s, the first release with ConsolidatedGuidFile)",
     )
     parser.add_argument(
         "--nuget-source", metavar="DIR",
         help="additional NuGet source to restore SIL.BuildTasks from, for"
-             " testing a pre-release build of it before it reaches nuget.org",
+             " trying a build of it that is not on nuget.org",
     )
     parser.add_argument(
         "--no-regen-guids", action="store_true",

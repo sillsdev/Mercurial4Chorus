@@ -81,8 +81,8 @@ by hand if you prefer.
    winget install Microsoft.DotNet.SDK.8
    ```
 
-   That step needs a SIL.BuildTasks with `ConsolidatedGuidFile`, which has not been released
-   yet — see [Installer GUIDs](#installer-guids).
+   That step needs **SIL.BuildTasks 3.3.0 or later**, which `assets/regen-guids.proj` restores
+   for you — see [Installer GUIDs](#installer-guids).
 
 6. **A Mercurial checkout beside this one**, which is where `--hg-source` defaults to:
 
@@ -188,11 +188,19 @@ able to remove it. `assets/regen-guids.proj` drives SIL.BuildTasks' `MakeWixForD
 allocate them, and `build-windows-payload.py` runs it unless given `--no-regen-guids`.
 
 Historically that meant one hidden `.guidsForInstaller.xml` per directory — fine at six, unwieldy
-at the 40 the PyOxidizer layout needs by default, or 347 with `--no-trim`. **SIL.BuildTasks'
-`ConsolidatedGuidFile`** replaces them with a single `win/Mercurial/.guidsForInstaller.all.xml`
-holding the whole tree.
-The task seeds it from any per-directory files still present and leaves those alone, so the switch
-loses nothing and is reversible.
+at the 40 the PyOxidizer layout needs by default, or 347 with `--no-trim`. **`ConsolidatedGuidFile`,
+added in SIL.BuildTasks 3.3.0**, replaces them with one `win/Mercurial/.guidsForInstaller.all.xml`
+file holding the whole tree. The task seeds it from any per-directory files still present and leaves
+those alone, so the switch loses nothing and is reversible.
+
+An older SIL.BuildTasks restores without complaint and then fails the moment the task runs, with
+`MSB4064: The parameter "ConsolidatedGuidFile" is not supported by the "MakeWixForDirTree" task`.
+`--sil-buildtasks-version` overrides the default when a newer release has to be tried, and
+`--nuget-source` points the restore at a directory holding a `.nupkg` that is not on nuget.org:
+
+```powershell
+py -3 build-windows-payload.py --sil-buildtasks-version 3.3.1 --nuget-source C:\packages
+```
 
 > [!IMPORTANT]
 > **Do not delete the per-directory files yet.** Chorus runs the same task over this same payload,
@@ -201,24 +209,6 @@ loses nothing and is reversible.
 > `ConsolidatedGuidFile`, so it still reads the per-directory files. Deleting them before Chorus is
 > updated would silently mint a fresh GUID for every file in the payload and break upgrades for
 > everyone who already has Mercurial installed.
-
-> [!WARNING]
-> **`ConsolidatedGuidFile` has not shipped yet.** It did not make 3.2.1, which was released
-> without it, and is not expected in 3.2.2; which release carries it depends on the order the
-> outstanding pull requests against SIL.BuildTasks are merged. The default here is **3.2.3** as a
-> best guess — confirm it before relying on it. Restoring a version without the feature fails with
-> `MSB4064: The parameter "ConsolidatedGuidFile" is not supported by the "MakeWixForDirTree" task`.
-
-Until then, restore it from a local pre-release build of
-[PR #81](https://github.com/sillsdev/SIL.BuildTasks/pull/81):
-
-```powershell
-py -3 build-windows-payload.py --sil-buildtasks-version 3.2.1-pr0081-0002 --nuget-source .
-```
-
-`--nuget-source` is any directory holding the `.nupkg`; the repository root is where the
-pre-release currently sits. Once the feature is published, both options can be dropped and the
-default in `assets/regen-guids.proj` updated to the real version.
 
 Read the list of newly allocated File Ids the run prints. An id that resembles an existing file
 under a different name is a rename that has just been given a second installer identity.

@@ -40,19 +40,17 @@
   </PropertyGroup>
 
   <PropertyGroup>
-    <!-- The release MakeWixForDirTree.ConsolidatedGuidFile is expected to land
-         in. It did NOT make 3.2.1, which shipped without it, and is not
-         expected in 3.2.2 either; it is likely to be in 3.2.3, but treat that
-         as an assumption to confirm rather than a fact, and check before
-         relying on it: restoring a version without the feature fails with
-         MSB4064, "The parameter ConsolidatedGuidFile is not supported by the
-         MakeWixForDirTree task".
+    <!-- 3.3.0 is the first release with MakeWixForDirTree.ConsolidatedGuidFile.
+         An earlier version restores fine but fails the build the moment the
+         task is invoked, with MSB4064, "The parameter ConsolidatedGuidFile is
+         not supported by the MakeWixForDirTree task".
 
-         Overridable so the pre-release built from
-         https://github.com/sillsdev/SIL.BuildTasks/pull/81 can be tested before
-         then:
+         Overridable, so a newer release can be tried without editing this file:
 
-           -p:SilBuildTasksVersion=<version of .nupkg, e.g. 3.2.3-pr0081-0010>
+           -p:SilBuildTasksVersion=3.3.1
+
+         and, for a build of it that is not on nuget.org:
+
            -p:RestoreAdditionalProjectSources=<directory holding the .nupkg>
 
          build-windows-payload.py passes both for you; see its
@@ -63,7 +61,7 @@
          allocates the GUIDs that actually ship. It pins 3.0.0 and does not pass
          ConsolidatedGuidFile, so until it is updated it still reads the
          per-directory files. That is why they are not deleted here. -->
-    <SilBuildTasksVersion Condition="'$(SilBuildTasksVersion)'==''">3.2.3</SilBuildTasksVersion>
+    <SilBuildTasksVersion Condition="'$(SilBuildTasksVersion)'==''">3.3.0</SilBuildTasksVersion>
   </PropertyGroup>
 
   <ItemGroup>
