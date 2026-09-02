@@ -32,6 +32,8 @@ v3.0.3: Allow specifying an alternate destination directory using `Mercurial4Cho
 v6.5.1: Upgrade to Mercurial 6.5.1
 
 v7.0.1: Upgrade to Mercurial 7.0.1 and remove requirement to depend directly on this package (just depend on Chorus or LibChorus)
+
+v7.0.2: Ship the Mercurial payload outside the runtimes/ convention path so an RID-specific `dotnet publish` no longer double-ships it (fixes NETSDK1152; consumers no longer need `ExcludeAssets="native"`)
     </PackageReleaseNotes>
     <PackageReadme>docs\README.md</PackageReadme>
   </PropertyGroup>
@@ -47,11 +49,19 @@ v7.0.1: Upgrade to Mercurial 7.0.1 and remove requirement to depend directly on 
     <TargetFile Include="$(RootDir)\assets\*.targets" />
   </ItemGroup>
 
-  <!-- Where to put things -->
+  <!-- Where to put things.
+       The Mercurial tree is staged under a plain payload/ folder rather than the
+       runtimes/<rid>/native/ NuGet convention path on purpose: that convention path
+       makes `dotnet publish -r <rid>` auto-copy the tree to the output, while the
+       CopyFiles target in the .targets already stages it into the consumer's
+       Mercurial/ folder. Shipping under runtimes/ therefore double-ships Mercurial and
+       collides with NETSDK1152 under an RID-specific publish, forcing consumers to add
+       ExcludeAssets="native". payload/ is inert package content, read only by our
+       .targets, so neither happens. -->
   <PropertyGroup>
-    <NuGetRuntimeFolderWin>runtimes/win/native</NuGetRuntimeFolderWin>
-    <NuGetRuntimeFolderLinux>runtimes/linux-x64/native</NuGetRuntimeFolderLinux>
-    <NuGetRuntimeAnyFolder>runtimes/any</NuGetRuntimeAnyFolder>
+    <PayloadFolderWin>payload/win</PayloadFolderWin>
+    <PayloadFolderLinux>payload/linux-x64</PayloadFolderLinux>
+    <PayloadAnyFolder>payload/any</PayloadAnyFolder>
     <NuGetDocsFolder>docs</NuGetDocsFolder>
   </PropertyGroup>
 
@@ -60,13 +70,13 @@ v7.0.1: Upgrade to Mercurial 7.0.1 and remove requirement to depend directly on 
       <PackagePath>$(NuGetDocsFolder)</PackagePath>
     </Content>
     <Content Include="@(LinuxArtifacts)">
-      <PackagePath>$(NuGetRuntimeFolderLinux)\</PackagePath>
+      <PackagePath>$(PayloadFolderLinux)\</PackagePath>
     </Content>
     <Content Include="@(WinArtifacts)">
-      <PackagePath>$(NuGetRuntimeFolderWin)\</PackagePath>
+      <PackagePath>$(PayloadFolderWin)\</PackagePath>
     </Content>
     <Content Include="@(Extensions)">
-      <PackagePath>$(NuGetRuntimeAnyFolder)\MercurialExtensions\</PackagePath>
+      <PackagePath>$(PayloadAnyFolder)\MercurialExtensions\</PackagePath>
     </Content>
     <!-- Note the buildTransitive\ below. Hopefully this will allow packages to only consume Chorus and not have to consume SIL.Chorus.Mercurial directly. -->
     <Content Include="@(TargetFile)">
