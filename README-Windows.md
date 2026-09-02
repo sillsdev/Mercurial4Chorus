@@ -213,6 +213,14 @@ py -3 build-windows-payload.py --sil-buildtasks-version 3.3.1 --nuget-source C:\
 Read the list of newly allocated File Ids the run prints. An id that resembles an existing file
 under a different name is a rename that has just been given a second installer identity.
 
+That is what `STAGE_RENAMES` in `build-windows-payload.py` prevents. Two files this payload has
+carried since the TortoiseHg era are spelled in mixed case — `defaultrc/Mercurial.rc` and
+`defaultrc/MergeTools.rc` — while Mercurial's staging produces them in lower case. Since File Ids
+come from the name on disk, shipping the lower-case spelling would mint a second identity for a
+file that already has one. Watch for this when staging a rebuild: git on Windows records no change
+when a file's name differs only in case, so `git status` looks clean while the payload and the
+repository disagree.
+
 One thing to know about those ids: `MakeWixForDirTree` caps them at 50 characters and keeps the
 **last** 50, so a deep path such as `mercurial.lib.mercurial.__pycache__.ancestor.cpython-39.pyc`
 loses its front and becomes `_.lib.mercurial.__pycache__.ancestor.cpython_39.pyc`. On this payload

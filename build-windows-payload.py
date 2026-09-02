@@ -535,6 +535,39 @@ def is_trimmed(relative: str, trim_hgext: bool = True) -> str | None:
 #     EXTRA_INSTALL_RULES and by the msi target in pyoxidizer.bzl. It is
 #     entirely commented out, so it changes no behaviour; it is included to
 #     keep the tree equal to the installers'.
+# Two files this payload has carried since the TortoiseHg era are spelled in
+# mixed case, and staging produces them in lower case:
+#
+#     defaultrc/mercurial.rc   <- EXTRA_STAGE_RULES, from contrib/win32/mercurial.ini
+#     defaultrc/mergetools.rc  <- STAGING_RULES_APP, from lib/mercurial/defaultrc/*.rc
+#
+# Renaming them back is not cosmetic. MakeWixForDirTree derives each File Id
+# from the name on disk, so shipping the lower-case spelling mints a second
+# installer identity for a file that already has one. Both spellings are
+# already in .guidsForInstaller.all.xml under different GUIDs, because a build
+# before this map existed allocated the lower-case pair:
+#
+#     mercurial.defaultrc.Mercurial.rc    7dcf60f9-...   <- the one that ships
+#     mercurial.defaultrc.mercurial.rc    78ec2c27-...   <- must stay unused
+#     mercurial.defaultrc.MergeTools.rc   fa22312d-...   <- the one that ships
+#     mercurial.defaultrc.mergetools.rc   9cbc7683-...   <- must stay unused
+#
+# Windows being case-insensitive, git records no rename when the build writes
+# the lower-case name over the tracked mixed-case one, so the repository keeps
+# the old spelling and nothing looks wrong -- until someone rebuilds on a
+# case-sensitive filesystem, when both files quietly change installer identity.
+# The predecessor of this script carried the same map for the same reason; it
+# was dropped in the move to Mercurial on the mistaken view that lower-case
+# staging was a TortoiseHg quirk. Mercurial's own staging does it too.
+#
+# Case-only entries. A genuine rename does not belong here: it would hide a
+# real change of identity rather than preserve an existing one.
+STAGE_RENAMES = {
+    "defaultrc/mercurial.rc": "defaultrc/Mercurial.rc",
+    "defaultrc/mergetools.rc": "defaultrc/MergeTools.rc",
+}
+
+
 EXTRA_STAGE_RULES = [
     ("contrib/bash_completion", "contrib/"),
     ("contrib/zsh_completion", "contrib/"),
@@ -774,11 +807,19 @@ def assemble_payload(stage: pathlib.Path, payload: pathlib.Path,
             shutil.rmtree(payload)
         payload.mkdir(parents=True)
 
+        # Both spellings can only coexist on a case-sensitive staging tree, and
+        # one would silently overwrite the other on the way into the payload.
+        for staged, shipped in STAGE_RENAMES.items():
+            if (stage / staged).is_file() and (stage / shipped).is_file():
+                die("the staging tree holds both %s and %s; STAGE_RENAMES cannot"
+                    " tell which one the payload should carry" % (staged, shipped))
+
         dropped = 0
         trimmed: dict = {}
         removed_names: set = set()
         compiled = _sources_with_bytecode(stage) if trim_sources else set()
         uncompiled = 0
+        renamed = 0
         for source in sorted(stage.rglob("*")):
             if not source.is_file():
                 continue
@@ -805,9 +846,18 @@ def assemble_payload(stage: pathlib.Path, payload: pathlib.Path,
                     removed_names.add(source.name)
                     continue
                 uncompiled += 1
+            # A staging tree that already carries the shipped spelling -- an
+            # unpacked MSI, say -- simply misses the lookup.
+            if relative in STAGE_RENAMES:
+                relative = STAGE_RENAMES[relative]
+                renamed += 1
             destination = payload / relative
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, destination)
+
+        if renamed:
+            print("renamed %d staged file(s) to the spelling the payload has"
+                  " always used" % renamed)
 
         if uncompiled:
             print("note: kept %d .py file(s) that have no bytecode beside them;"

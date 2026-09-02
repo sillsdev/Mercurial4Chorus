@@ -116,8 +116,6 @@
   <File Id="mercurial.python3.dll" Guid="4f9cbb0c-9529-47a8-bcdf-607a7699413a" />
   <File Id="mercurial.vcruntime140_threads.dll" Guid="2ce9c6ee-b835-4043-8ef1-be24431f9985" />
   <File Id="mercurial.defaultrc.editor.rc" Guid="71904846-5561-4c94-885f-7468438cc58d" />
-  <File Id="mercurial.defaultrc.mercurial.rc" Guid="78ec2c27-007b-451a-8114-67cf40677b5d" />
-  <File Id="mercurial.defaultrc.mergetools.rc" Guid="9cbc7683-5026-42ba-9237-0202de6e3383" />
   <File Id="mercurial.lib.libcrypto_1_1_x64.dll" Guid="0858bece-aa04-4cee-8a31-ba042fb5e192" />
   <File Id="mercurial.lib.libssl_1_1_x64.dll" Guid="ab246c79-1e82-4bca-80d2-2e37ee52886b" />
   <File Id="dimport.__pycache__.demandimportpy3.cpython_39.pyc" Guid="6ed8d0b0-3ce5-4655-8c4b-2b5fe4279cc2" />
