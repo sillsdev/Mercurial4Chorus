@@ -88,6 +88,10 @@
          leaves them alone, so the switch is reversible and nothing is lost.
          Delete them only once Chorus reads the consolidated file too. -->
     <ConsolidatedGuidFile Condition="'$(ConsolidatedGuidFile)'==''">$(PayloadDir)\.guidsForInstaller.all.xml</ConsolidatedGuidFile>
+    <!-- Set by the CheckGuids target below. When true the task allocates
+         nothing and writes nothing, and instead errors out naming whatever it
+         would have had to allocate. -->
+    <GuidCheckOnly Condition="'$(GuidCheckOnly)'==''">false</GuidCheckOnly>
   </PropertyGroup>
 
   <Target Name="RegenerateGuids">
@@ -116,7 +120,29 @@
       IgnoreRegExPattern="IGNOREME|\.gitignore"
       Exclude="$(PayloadDir)\mercurial.ini;$(PayloadDir)\default.d\cacerts.rc"
       ConsolidatedGuidFile="$(ConsolidatedGuidFile)"
+      CheckOnly="$(GuidCheckOnly)"
       MatchRegExPattern=".*" />
+  </Target>
+
+  <!-- Verification pass. Runs the same task over the same payload with the same
+       parameters, so the two runs cannot drift apart, but writes nothing: no
+       .wxs, no GUID allocation, no change to any .guidsForInstaller file.
+
+       It fails if any file in the payload has no GUID, or if a GUID is only
+       held in a per-directory file and not yet in the consolidated one, or if
+       the two disagree about an id. build-windows-payload.py runs it straight
+       after RegenerateGuids, where all three mean something went wrong rather
+       than something is new.
+
+       By hand, after a RegenerateGuids run has restored the packages:
+
+           dotnet msbuild assets/regen-guids.proj -t:CheckGuids
+
+       Add -restore if the project has not been restored in this checkout. -->
+  <Target Name="CheckGuids">
+    <MSBuild Projects="$(MSBuildThisFileFullPath)"
+             Targets="RegenerateGuids"
+             Properties="GuidCheckOnly=true" />
   </Target>
 
 </Project>

@@ -690,6 +690,53 @@ def regenerate_guids(here: pathlib.Path, payload: pathlib.Path,
     return changed
 
 
+def check_guids(here: pathlib.Path, payload: pathlib.Path,
+                version: str = DEFAULT_SIL_BUILDTASKS_VERSION,
+                nuget_source: str | None = None) -> None:
+    """Verify the GUID files describe the payload, without writing anything.
+
+    Runs MakeWixForDirTree again with CheckOnly, which allocates nothing and
+    instead errors out naming what it would have had to allocate. Run straight
+    after regenerate_guids(), where it is a post-condition rather than a
+    question: everything has just been allocated, so a complaint here means
+    something is wrong rather than something is new.
+
+    Three things it catches that the regeneration itself does not report:
+
+      * a file with no GUID anywhere, which after a successful regeneration
+        means the task did not write what it said it wrote;
+      * a GUID still held only in a per-directory .guidsForInstaller.xml and
+        not in the consolidated file, which is what says whether the
+        per-directory files can finally be deleted;
+      * a per-directory file and the consolidated file disagreeing about one
+        id, which is two GUIDs claiming one installer component.
+
+    The check is skipped along with the regeneration under --no-regen-guids,
+    since it needs the same .NET SDK and the same restored package.
+    """
+    project = here / REGEN_PROJECT
+    print("\nverifying the GUID files describe the payload")
+
+    command = ["dotnet", "msbuild", project, "-nologo", "-t:CheckGuids",
+               "-p:PayloadDir=%s" % payload,
+               "-p:SilBuildTasksVersion=%s" % version]
+    if nuget_source:
+        command.append("-p:RestoreAdditionalProjectSources=%s"
+                       % pathlib.Path(nuget_source).resolve())
+
+    printable = " ".join(str(part) for part in command)
+    print("+ %s" % printable)
+    result = subprocess.run([str(part) for part in command], cwd=str(here))
+    if result.returncode != 0:
+        die("the payload and its GUID files disagree; see the errors above."
+            "\n       %s has been written but must not be committed until this"
+            "\n       passes -- an id allocated now and lost later is an"
+            " installer component\n       that changes identity on the next"
+            " build." % payload)
+    print("  every file in the payload has a GUID, and the consolidated file"
+          " holds them all")
+
+
 def hg_command(repo: pathlib.Path, *args: str) -> str:
     """Run hg in *repo* and return its output."""
     result = subprocess.run(["hg", "--repository", str(repo), *args],
@@ -1001,6 +1048,8 @@ def main() -> None:
     if regenerated:
         regenerate_guids(here, payload, args.sil_buildtasks_version,
                          args.nuget_source)
+        check_guids(here, payload, args.sil_buildtasks_version,
+                    args.nuget_source)
 
     total = sum(1 for p in payload.rglob("*") if p.is_file())
     directories = len({p.parent for p in payload.rglob("*") if p.is_file()})
