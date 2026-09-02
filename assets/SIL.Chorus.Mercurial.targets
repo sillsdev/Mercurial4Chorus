@@ -1,6 +1,6 @@
 <Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
 	<PropertyGroup>
-		<RuntimesDirectory>$(MSBuildThisFileDirectory)\..\runtimes</RuntimesDirectory>
+		<PayloadDirectory>$(MSBuildThisFileDirectory)\..\payload</PayloadDirectory>
 		<!-- Allow extraction to a custom location -->
 		<Mercurial4ChorusDestDir Condition="'$(Mercurial4ChorusDestDir)'==''">$(SolutionDir)</Mercurial4ChorusDestDir>
 		<!-- Make CopyFiles target actually get executed.-->
@@ -13,8 +13,8 @@
 			<Platform Condition="'$(OS)'!='Windows_NT'">linux-x64</Platform>
 		</PropertyGroup>
 		<ItemGroup>
-			<AllFiles Include="$(RuntimesDirectory)\$(Platform)\native\**\*.*" />
-			<AllFiles Include="$(RuntimesDirectory)\any\**\*.*" />
+			<AllFiles Include="$(PayloadDirectory)\$(Platform)\**\*.*" />
+			<AllFiles Include="$(PayloadDirectory)\any\**\*.*" />
 		</ItemGroup>
 		<Copy SourceFiles="@(AllFiles)" DestinationFolder="$(Mercurial4ChorusDestDir)\%(RecursiveDir)" SkipUnchangedFiles="true"/>
 	</Target>
