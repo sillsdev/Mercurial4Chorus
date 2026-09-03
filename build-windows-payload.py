@@ -831,6 +831,15 @@ def assemble_payload(stage: pathlib.Path, payload: pathlib.Path,
                      trim_sources: bool = True
                      ) -> tuple[list[str], list[str], int, dict, set]:
     """Replace *payload* with the wanted part of *stage*, keeping our own files."""
+    # The payload is emptied before the staging tree is copied into it, so if
+    # the two overlap the delete takes the files about to be copied.
+    here, there = stage.resolve(), payload.resolve()
+    if here == there or there in here.parents or here in there.parents:
+        die("the staging tree and the payload overlap:\n"
+            "         stage   %s\n         payload %s\n"
+            "       Emptying the payload would delete the files being copied"
+            " from it." % (here, there))
+
     def files_in(root: pathlib.Path) -> set[str]:
         if not root.exists():
             return set()
