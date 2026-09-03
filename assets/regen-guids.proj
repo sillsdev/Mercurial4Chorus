@@ -110,16 +110,6 @@
       ConsolidatedGuidFile="$(ConsolidatedGuidFile)"
       CheckOnly="$(GuidCheckOnly)"
       MatchRegExPattern=".*" />
-    <MakeWixForDirTree
-      DirectoryReferenceId="MercurialExtensions"
-      ComponentGroupId="MercurialExtensions"
-      RootDirectory="$(PayloadDir)"
-      OutputFilePath="$(WxsOutputPath)"
-      IgnoreRegExPattern="IGNOREME|\.gitignore"
-      Exclude="$(PayloadDir)\mercurial.ini;$(PayloadDir)\default.d\cacerts.rc"
-      ConsolidatedGuidFile="$(ConsolidatedGuidFile)"
-      CheckOnly="$(GuidCheckOnly)"
-      MatchRegExPattern=".*" />
   </Target>
 
   <!-- Run this to verify that the .guidsForInstaller.all.xml file contains

@@ -840,6 +840,16 @@ def assemble_payload(stage: pathlib.Path, payload: pathlib.Path,
             "       Emptying the payload would delete the files being copied"
             " from it." % (here, there))
 
+    # Two real entries can only exist on a case-sensitive staging tree, and one
+    # would silently overwrite the other on the way into the payload. Checked
+    # here with the other precondition: further down the payload has already
+    # been emptied, and its GUID files are held only in memory, so dying there
+    # took them with it.
+    for staged, shipped in _staged_both_spellings(stage):
+        die("the staging tree holds both %s and %s as separate files;"
+            " STAGE_RENAMES\n       cannot tell which one the payload should"
+            " carry. Delete whichever is stale." % (staged, shipped))
+
     def files_in(root: pathlib.Path) -> set[str]:
         if not root.exists():
             return set()
@@ -870,13 +880,6 @@ def assemble_payload(stage: pathlib.Path, payload: pathlib.Path,
         if payload.exists():
             shutil.rmtree(payload)
         payload.mkdir(parents=True)
-
-        # Two real entries can only exist on a case-sensitive staging tree, and
-        # one would silently overwrite the other on the way into the payload.
-        for staged, shipped in _staged_both_spellings(stage):
-            die("the staging tree holds both %s and %s as separate files;"
-                " STAGE_RENAMES\n       cannot tell which one the payload should"
-                " carry. Delete whichever is stale." % (staged, shipped))
 
         dropped = 0
         trimmed: dict = {}
