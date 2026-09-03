@@ -1,39 +1,49 @@
 #!/usr/bin/env python3
 """Rebuild win/Mercurial by building Mercurial from source.
 
-MUST BE RUN ON WINDOWS for the build itself -- it drives PyOxidizer through
-Mercurial's own packaging code, which needs Rust, PyOxidizer and MSVC. The
-staging step afterwards is plain file copying and runs anywhere, which is what
---from-stage exists for.
+MUST BE RUN ON WINDOWS. Needs the following prerequisites:
 
-The build is Mercurial's own supported Windows build: the same
-hgpackaging.pyoxidizer.create_pyoxidizer_install_layout() that its Inno Setup
-and WiX installers are built from. Driving that rather than reimplementing it
-means the staging tree is by construction the tree upstream ships, so
---from-stage can be pointed at a Mercurial MSI unpacked with `msiexec /a` to
-check the selection rules without running a build.
+- Python 3 (run `py` to see if you have it)
+- Rust, specifically Rustup (`winget install Rustlang.Rustup)
+- PyOxidizer version 0.17.0 (see README-Windows.md to install)
+- VS 2022 build tools (winget install Microsoft.VisualStudio.2022.BuildTools)
+- Mercurial (winget install Mercurial.Mercurial)
+    - Then check if it's on your PATH by running `hg version`
+	- If `hg version` fails, restart your command prompt
+- .NET SDK 8 or later (e.g. winget install Microsoft.DotNet.SDK.8)
+- A clone of the Mercurial source repo *beside* this repo, in `..\\hg`
+    - hg clone https://foss.heptapod.net/mercurial/mercurial-devel ..\\hg
 
-What that costs, and why it is worth knowing before touching this file: hg.exe
-resolves modules through oxidized_importer from an index of concrete paths
-baked into the executable. lib/ therefore cannot be zipped or rearranged, and
-expands to a directory per package. Measured against the official 7.0.1 x64
-MSI, the install layout is 347 directories against the six a py2exe layout
-needed, and the Chorus installer records one .guidsForInstaller.xml per
-directory, every entry of which has to be kept forever. That is the price of
-building from Mercurial itself instead of from a third party's repackaging of
-it. The trimming this script does by default brings that back to 40
-directories; --no-trim-hgext and --no-trim-sources give 65 and 58, and
---no-trim the full 347.
+Previous builds of SIL.Chorus.Mercurial copied files from TortoiseHg, which
+put all the Python files that Mercurial needs into a 19 MB lib\\library.zip
+file. This reduced file count but was slow to start up, as the 19 MB file
+had to be read each time hg.exe starts up. This build splits those files
+off into multiple directories, speeding up startup time for hg.exe.
 
-The build is not reproducible. Expect the file list to match a previous build
-at the same tag and the bytes not to; judge a rebuild by the added/removed
-summary printed at the end, not by which blobs moved.
+However, the drawback of this is that the ChorusHub installer needs to track
+the component GUIDs assigned by ChorusHub's MSI installer. That was formerly
+done with a .guidsForInstaller.xml file in each directory. With 40 different
+directories (or a lot more if --no-trim is used!), that's no longer feasible,
+so a recent version of SIL.BuildTasks (3.3.0 or later) is needed in order to
+consolidate all the .guidsForInstaller.xml files into a single one.
+
+If you re-run this build multiple times, you will notice that many .pyc and
+.pyd files appear to change. This is normal: Python uses frozendict and
+frozenset objects as part of the process of writing .pyc or .pyd files, which
+do not guarantee the order in which objects will be serialized. So although
+the files' behavior has not changed, some of their bytes will be in a different
+order. This is fine. To help you judge whether a build is truly different, this
+script prints a summary of added/removed files at the end.
+
+What SHOULD be checked for is if .guidsForInstaller.all.xml has lost or changed
+any lines. New GUIDs are fine, losing or changing pre-existing GUIDs is not.
 
 Usage::
 
-    py -3 build-windows-payload.py                       # build ../hg as checked out
-    py -3 build-windows-payload.py --tag 7.0.1           # update it to a tag first
-    py -3 build-windows-payload.py --from-stage DIR      # reuse an existing staging tree
+    py -3 build-windows-payload.py                   # build ../hg as checked out
+    py -3 build-windows-payload.py --tag 7.0.1       # update it to a tag first
+    py -3 build-windows-payload.py --from-stage DIR  # reuse an existing staging tree
+    py -3 build-windows-payload.py --no-trim         # useful for debugging a build
 """
 
 from __future__ import annotations
@@ -49,20 +59,19 @@ import subprocess
 import sys
 import tempfile
 
-# The Mercurial tag this payload is meant to be. Not applied automatically --
-# --tag does that -- but the build warns when the checkout is somewhere else,
-# so a stale ../hg cannot quietly change what gets built. Keep this in step
-# with MercurialVersion in SIL.Chorus.Mercurial.csproj and the
-# mercurial-version matrix in .github/workflows/nuget-ci-cd.yml.
+# The Mercurial tag this script expects to see in `../hg`. Wil be overridden
+# by `--tag`, but if the Mercurial source tree is NOT at this version, script
+# will warn you that you might be building a different version thnn you think.
+#
+# Keep this in sync with MercurialVersion in SIL.Chorus.Mercurial.csproj and
+# the mercurial-version matrix in .github/workflows/nuget-ci-cd.yml.
 DEFAULT_HG_TAG = "7.0.1"
 
-# PyOxidizer needs the target named explicitly. Unlike a py2exe build, the
-# architecture does not come from the interpreter this script is launched with:
-# PyOxidizer downloads and embeds its own CPython 3.9, which is also why the
-# committed fixutf8 .pyc files stay valid for cpython-39.
+# Target tripes for PyOxidizer; you usually won't need to change this.
 DEFAULT_TARGET_TRIPLE = "x86_64-pc-windows-msvc"
 TARGET_TRIPLES = ["i686-pc-windows-msvc", "x86_64-pc-windows-msvc"]
 
+# Files not to delete when cleaning out the old win/Mercurial build
 PRESERVE = [
     "mercurial.ini",
     "Mercurial.url",
@@ -77,35 +86,12 @@ PRESERVE = [
     "default.d/mergetools.rc",
 ]
 
-# Per-directory record of the MSI component GUID assigned to each file. These
-# are NOT listed in PRESERVE: they are found by searching the existing payload,
-# so a GUID file in any directory is carried across, however the layout moves.
-# That matters more here than it ever did, because moving to the PyOxidizer
-# layout moves nearly every path in the payload at once.
-#
-# They must survive verbatim. A GUID has to stay attached to its path for the
-# life of the product, and an entry has to outlive the file it describes: the
-# Chorus installer needs the old GUID to recognise and remove a file a later
-# Mercurial no longer ships. SIL.BuildTasks' MakeWixForDirTree only ever
-# appends, so keeping the old file is what makes both properties hold.
+# Two more files to preserve wherever they are found (as opposed to the PRESERVE
+# list which specifies full paths relative to the root of the win/Mercurial tree)
+# These are used by SIL.BuildTasks to build WiX installers, and must never be
+# automatically deleted (though the individual .guidsForInstaller.xml files will
+# be able to be deleted once Chorus has switched over to SIL.BuildTasks 3.3.0)
 GUID_FILE = ".guidsForInstaller.xml"
-
-# One file at the payload root holding the GUIDs for the whole tree, written by
-# MakeWixForDirTree.ConsolidatedGuidFile (SIL.BuildTasks 3.3.0 and later). The
-# per-directory scheme needs one file per directory -- 40 to 99 of them here,
-# depending on the trim flags, against six under the old py2exe layout -- and
-# none of them can ever be retired.
-#
-# During the switch BOTH are carried across a rebuild. The task seeds the
-# consolidated file from any per-directory files it finds and leaves those on
-# disk, so nothing is lost and the change is reversible.
-#
-# The per-directory files cannot be deleted yet. Chorus runs the same task over
-# this same payload, from MakeWixForDistFiles in src/ChorusHub/ChorusHub.csproj,
-# and that invocation is what allocates the GUIDs that ship in the installer. It
-# pins SIL.BuildTasks 3.0.0 and passes no ConsolidatedGuidFile, so it still reads
-# the per-directory files; deleting them before Chorus is updated would silently
-# mint a fresh GUID for every file in the payload and break upgrades.
 CONSOLIDATED_GUID_FILE = ".guidsForInstaller.all.xml"
 
 # 3.3.0 is the first SIL.BuildTasks with MakeWixForDirTree.ConsolidatedGuidFile.
