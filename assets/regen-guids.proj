@@ -99,7 +99,7 @@
          files are the ones that the SIL.Chorus.Mercurial targets rewrite
          on the user's machine, so they should not be assigned installer GUIDs.
 
-         MercurialExtensions is deliberately not reassigned GUIDs here.
+         MercurialExtensions is deliberately not reassigned GUIDs here. -->
     <MakeWixForDirTree
       DirectoryReferenceId="mercurial"
       ComponentGroupId="Mercurial"
