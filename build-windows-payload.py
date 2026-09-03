@@ -773,7 +773,11 @@ def build_staging_tree(hg: pathlib.Path, tag: str | None, target_triple: str,
     tags = hg_command(hg, "identify", "--tags").split()
     print("building Mercurial %s for %s" % (" ".join(tags) or "(untagged)",
                                             target_triple))
-    if DEFAULT_HG_TAG not in tags:
+    if tag and DEFAULT_HG_TAG not in tags:
+        print("note: building %s, not the %s this payload is meant to be. Move"
+              " DEFAULT_HG_TAG,\n      MercurialVersion and the CI"
+              " mercurial-version matrix together." % (tag, DEFAULT_HG_TAG))
+    elif not tag and DEFAULT_HG_TAG not in tags:
         print("warning: this checkout is not at %s, which is the tag this"
               " payload is meant\n         to be built from; pass --tag %s to"
               " update it" % (DEFAULT_HG_TAG, DEFAULT_HG_TAG))

@@ -33,7 +33,7 @@ v6.5.1: Upgrade to Mercurial 6.5.1
 
 v7.0.1: Upgrade to Mercurial 7.0.1 and remove requirement to depend directly on this package (just depend on Chorus or LibChorus)
     </PackageReleaseNotes>
-    <PackageReadme>docs\README.md</PackageReadme>
+    <PackageReadmeFile>docs\README.md</PackageReadmeFile>
   </PropertyGroup>
 
   <!-- What to pack -->
