@@ -750,14 +750,20 @@ def assemble_payload(stage: pathlib.Path, payload: pathlib.Path,
 
     with tempfile.TemporaryDirectory() as tmp:
         kept = pathlib.Path(tmp)
+        missing = []
         for relative in PRESERVE:
             source = payload / relative
             if not source.is_file():
-                print("note: %s not present, nothing to preserve" % relative)
+                missing.append(relative)
                 continue
             destination = kept / relative
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, destination)
+        if missing:
+            print("warning: not in the old payload, so not in the new one: %s"
+                  "\n         Nothing stages these -- they only ever come from"
+                  " the payload they are\n         copied out of, and Chorus's"
+                  " wxs names some of them by hand." % ", ".join(missing))
 
         if payload.exists():
             shutil.rmtree(payload)
