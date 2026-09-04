@@ -231,6 +231,56 @@ Of the 468 ids this payload records, 310 are truncated that way, 45 of them with
 none of them collide — the task appends a numeric suffix if two ever do, which would make a GUID
 depend on directory traversal order. Worth watching if the tree gets deeper.
 
+## The fixutf8 bytecode
+
+`MercurialExtensions/fixutf8/` is not part of the payload this script builds, but it is loaded by
+the `hg.exe` inside it, and the bytecode committed beside its sources has to be right or every hg
+invocation pays to recompile it. Chorus runs hg many times per operation, so that adds up.
+
+**The rule: `__pycache__` holds one `cpython-39` `.pyc` per source, PEP 552 checked-hash, matching
+that source.** Nothing else. `cpython-39` because that is the CPython
+`rust/hgcli/pyoxidizer.bzl` asks PyOxidizer to embed, and so the only bytecode `hg.exe` can load.
+
+Checked-hash because the obvious alternative does not survive git. A timestamp-based `.pyc`
+records the source's mtime, git does not preserve mtimes, so the recorded value never matches on
+any machine the repository is cloned to and the cache is rejected every time. That is not
+theoretical: it is what this repository shipped for years. Where the install directory is writable
+Python recompiles once and rewrites the cache; under `Program Files` it cannot, so it recompiles
+on every invocation. A run of Chorus's Utf8Tests suite on Windows showed 290 ms of extension setup
+on the first invocation against 10–20 ms on every one after it.
+
+Checked rather than *unchecked* hash, although unchecked is what PyOxidizer bakes into the
+payload itself. That is a frozen application; here the source ships beside the bytecode and gets
+patched at most Mercurial upgrades, and an unchecked `.pyc` goes on being used after its source
+changes — silently running the old code. Checked-hash validates by hashing the source, which
+costs a fraction of a millisecond.
+
+Regenerate whenever a source changes. `uv` will fetch the interpreter if you do not have it:
+
+```powershell
+uv run --python 3.9 python -m compileall -f --invalidation-mode checked-hash `
+    MercurialExtensions\fixutf8
+git add -f MercurialExtensions\fixutf8\__pycache__
+```
+
+The `-f` is not optional: that directory's own `.gitignore` excludes `*.pyc`, so a plain `git add`
+stages nothing and says nothing.
+
+`check-fixutf8-bytecode.py` enforces all of it — a `.pyc` per source, the right magic number,
+checked-hash, hashes that match, no bytecode left behind by a deleted source, and no `.pyo` or
+`.opt-N.pyc`, neither of which any interpreter here will ever load. It must run under CPython 3.9,
+since importlib keys the source hash with the interpreter's magic number and any other version
+calls every file stale; it says so rather than guessing. The `check-fixutf8-bytecode` job in CI
+runs it, and packing waits on that job.
+
+Do not add bytecode for other Python versions to serve Linux. Only `fixutf8.py` is ever compiled
+there — its Windows half is behind a `sys.platform` test, so `win32helper` and the vendored
+`osutil` are never imported — which is under 2 ms, against the 245 ms of Mercurial's own modules
+that the Linux payload compiles with no committed bytecode at all. Linux callers set
+`CHORUS_HG_EXE=chg` and go through the command server, so even that is paid once per server rather
+than once per invocation. Six versions of a file would be six more permanent installer GUIDs, six
+interpreters to keep on hand at every edit, and a set that grows with every Python release.
+
 ## After the build
 
 1. Smoke-test the result:
