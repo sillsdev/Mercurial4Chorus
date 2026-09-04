@@ -169,8 +169,8 @@ def is_dropped(relative: str) -> bool:
 #     --no-trim                             3272   347   99.9 MB  37.9 MB
 #     --no-trim-hgext --no-trim-sources     1515    99   75.9 MB  29.0 MB
 #     --no-trim-hgext                        832    65   63.3 MB  25.5 MB
-#     --no-trim-sources                      670    58   60.2 MB  23.8 MB
-#     (default)                              390    40   54.1 MB  22.1 MB
+#     --no-trim-sources                      658    58   60.1 MB  23.8 MB
+#     (default)                              384    40   54.0 MB  22.1 MB
 #     TortoiseHg                              99     6   46.3 MB  23.4 MB  <- replaced
 #
 # Watch the directory count as much as the megabytes. Every directory needs a
@@ -245,15 +245,16 @@ TRIM_DEAD_DATA = {"locale", "templates"}
 # plus the vendored fixutf8. Those are kept, as is anything not named here --
 # this is a denylist, so an extension a later Mercurial adds ships by default.
 TRIM_HGEXT = {
-    "absorb", "acl", "beautifygraph", "blackbox", "bookflow", "bugzilla",
-    "censor", "children", "churn", "clonebundles", "closehead",
-    "commitextras", "extdiff", "factotum", "fastannotate", "fix", "fsmonitor",
-    "git", "githelp", "gpg", "hgk", "highlight", "histedit", "hooklib",
-    "journal", "keyword", "largefiles", "lfs", "logtoprocess", "mq", "narrow",
-    "notify", "patchbomb", "phabricator", "purge", "rebase", "record",
-    "relink", "releasenotes", "remotefilelog", "schemes", "share", "show",
-    "sparse", "split", "sqlitestore", "strip", "transplant", "uncommit",
-    "win32mbcs", "win32text", "zeroconf",
+    "absorb", "acl", "amend", "automv", "beautifygraph", "blackbox",
+    "bookflow", "bugzilla", "censor", "children", "churn", "clonebundles",
+    "closehead", "commitextras", "extdiff", "factotum", "fastannotate",
+    "fastexport", "fetch", "fix", "fsmonitor", "git", "githelp", "gpg", "hgk",
+    "highlight", "histedit", "hooklib", "journal", "keyword", "largefiles",
+    "lfs", "logtoprocess", "mq", "narrow", "notify", "pager", "patchbomb",
+    "phabricator", "purge", "rebase", "record", "relink", "releasenotes",
+    "remotefilelog", "remotenames", "schemes", "share", "show", "sparse",
+    "split", "sqlitestore", "strip", "transplant", "uncommit", "win32mbcs",
+    "win32text", "zeroconf",
 }
 
 # Reached only from an extension in TRIM_HGEXT, so they go with it: highlight
