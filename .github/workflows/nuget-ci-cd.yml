@@ -64,6 +64,9 @@ jobs:
     - name: Move chg binary next to hg prior to upload
       run: mv contrib/chg/chg .
       working-directory: hg
+    - name: Remove the object files that building chg left behind
+      run: rm -f contrib/chg/*.o
+      working-directory: hg
     - name: Set executable bit on hg and chg binaries before upload
       run: chmod +x hg chg
       working-directory: hg
@@ -82,6 +85,7 @@ jobs:
           hg/hg
           hg/hgdemandimport
           hg/hgext
+          hg/hgext3rd
           hg/mercurial
         if-no-files-found: error
 
