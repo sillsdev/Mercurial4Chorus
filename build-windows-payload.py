@@ -258,17 +258,13 @@ TRIM_HGEXT = {
 # Reached only from an extension in TRIM_HGEXT, so they go with it: highlight
 # is the only importer of pygments, git the only importer of pygit2, and cffi
 # and pycparser are pygit2's dependencies.
+#
+# Never add a DLL here on the strength of its name. libffi-7.dll was trimmed
+# with cffi once, and it belongs to lib/_ctypes.pyd; mercurial/win32.py imports
+# ctypes at module scope, so the payload could not run a single command.
+# check_native_dependencies() catches that now.
 TRIM_HGEXT_PACKAGES = {"pygments", "pygit2", "cffi", "pycparser"}
 TRIM_HGEXT_PREFIXES = ("_cffi_backend",)
-
-# Deliberately empty. libffi-7.dll was here once, on the assumption that a
-# library named libffi belonged to cffi. It does not: lib/_ctypes.pyd is its
-# only importer, and mercurial/win32.py imports ctypes at module scope, so
-# trimming it produced an hg.exe that could not run any command.
-#
-# Put a DLL here only for a reason found in its import table, never its name.
-# check_native_dependencies() below now catches this at build time.
-TRIM_HGEXT_FILES: set = set()
 
 
 # Python source, dropped by default and restored by --no-trim-sources.
@@ -461,7 +457,7 @@ def is_trimmed(relative: str, trim_hgext: bool = True) -> str | None:
     if trim_hgext:
         if _hgext_module(relative) in TRIM_HGEXT:
             return "hgext extensions Chorus never enables"
-        if entry in TRIM_HGEXT_PACKAGES or entry in TRIM_HGEXT_FILES:
+        if entry in TRIM_HGEXT_PACKAGES:
             return "hgext extensions Chorus never enables"
         if entry.startswith(TRIM_HGEXT_PREFIXES):
             return "hgext extensions Chorus never enables"
