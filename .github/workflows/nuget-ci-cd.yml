@@ -116,7 +116,7 @@ jobs:
       run: chmod +x linux-x64/Mercurial/hg linux-x64/Mercurial/chg
 
     - name: Nuget pack
-      run: dotnet pack -p:PackageVersion=$PackageVersion
+      run: dotnet pack -c Release -p:PackageVersion=$PackageVersion
 
     - name: Upload Artifacts
       uses: actions/upload-artifact@v4

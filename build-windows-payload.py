@@ -437,16 +437,24 @@ def check_native_dependencies(payload: pathlib.Path, removed: set) -> None:
 
     Only names this script actually removed are considered, so the system DLLs
     every binary imports -- kernel32, the api-ms-win-crt-* set -- are ignored.
+
+    A name is looked for beside the binary that needs it and in the payload
+    root, which is where Windows resolves it from. Asking whether the name
+    exists anywhere in the tree would let an unrelated file in some other
+    directory answer for it: delete lib/libffi-7.dll, leave a copy in
+    lib/decoy/, and _ctypes.pyd can no longer load while the check passes.
     """
-    present = {p.name.lower() for p in payload.rglob("*") if p.is_file()}
-    removed = {name.lower() for name in removed} - present
+    removed = {name.lower() for name in removed}
+    beside_exe = {p.name.lower() for p in payload.iterdir() if p.is_file()}
 
     broken = []
     for path in sorted(payload.rglob("*")):
         if path.suffix.lower() not in (".pyd", ".dll", ".exe"):
             continue
+        alongside = {p.name.lower() for p in path.parent.iterdir() if p.is_file()}
         for dll in _pe_imported_dlls(path):
-            if dll.lower() in removed:
+            name = dll.lower()
+            if name in removed and name not in alongside | beside_exe:
                 broken.append((str(path.relative_to(payload)), dll))
 
     if broken:
@@ -456,7 +464,9 @@ def check_native_dependencies(payload: pathlib.Path, removed: set) -> None:
             print("  %s imports %s, which was removed" % (consumer, dll),
                   file=sys.stderr)
         die("a trim rule removed a DLL that a surviving binary loads;"
-            " re-run with --no-trim to confirm, then fix the rule")
+            " re-run with --no-trim to confirm, then fix the rule."
+            "\n       The payload has already been replaced: restore it with"
+            " git checkout <commit> -- win/Mercurial")
 
     print("native dependencies: %d binaries checked, none left dangling"
           % sum(1 for p in payload.rglob("*")
@@ -531,18 +541,16 @@ def is_trimmed(relative: str, trim_hgext: bool = True) -> str | None:
     return None
 
 
-# Files Mercurial's installers ship that create_pyoxidizer_install_layout()
-# does not stage by itself, copied in afterwards so the staging tree matches
-# the installers rather than just that one function.
+# defaultrc/mercurial.rc is added by hgpackaging/inno.py's EXTRA_INSTALL_RULES
+# and by the msi target in pyoxidizer.bzl, but not by
+# create_pyoxidizer_install_layout(), so it is copied in afterwards. It is
+# commented out from top to bottom and changes no behaviour; it is here to keep
+# the tree equal to the installers'.
 #
-#   * bash_completion and zsh_completion are in EXTRA_CONTRIB_FILES in
-#     rust/hgcli/pyoxidizer.bzl, which builds the MSI, but are missing from
-#     STAGING_RULES_WINDOWS in hgpackaging/pyoxidizer.py, which builds the
-#     install layout. Both have shipped in this payload for years.
-#   * defaultrc/mercurial.rc is added by hgpackaging/inno.py's
-#     EXTRA_INSTALL_RULES and by the msi target in pyoxidizer.bzl. It is
-#     entirely commented out, so it changes no behaviour; it is included to
-#     keep the tree equal to the installers'.
+# contrib/bash_completion and contrib/zsh_completion used to be staged here for
+# the same reason. is_trimmed() discards all of contrib/ before any flag is
+# read, so they were copied and then thrown away; Chorus has no use for shell
+# completions.
 # Two files this payload has carried since the TortoiseHg era are spelled in
 # mixed case, and staging produces them in lower case:
 #
@@ -577,8 +585,6 @@ STAGE_RENAMES = {
 
 
 EXTRA_STAGE_RULES = [
-    ("contrib/bash_completion", "contrib/"),
-    ("contrib/zsh_completion", "contrib/"),
     ("contrib/win32/mercurial.ini", "defaultrc/mercurial.rc"),
 ]
 
@@ -740,7 +746,8 @@ def check_guids(here: pathlib.Path, payload: pathlib.Path,
             "\n       %s has been written but must not be committed until this"
             "\n       passes -- an id allocated now and lost later is an"
             " installer component\n       that changes identity on the next"
-            " build." % payload)
+            " build. Restore with git checkout <commit> -- win/Mercurial"
+            % payload)
     print("  every file in the payload has a GUID, and the consolidated file"
           " holds them all")
 

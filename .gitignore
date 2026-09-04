@@ -1,2 +1,5 @@
 nuget.exe
 output/
+build/
+artifacts/
+obj/
