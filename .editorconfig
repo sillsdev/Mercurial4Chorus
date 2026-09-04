@@ -18,9 +18,20 @@ indent_style = tab
 tab_width = 4
 
 # Settings Visual Studio uses for the generated files
-[*.{csproj,resx,settings,vcxproj*,vdproj,xml,yml}]
+[*.{csproj,proj,resx,settings,vcxproj*,vdproj,xml,yml}]
 indent_style = space
 indent_size = 2
+
+# Python, both the build scripts here and the Mercurial sources in the payloads
+[*.py]
+indent_style = space
+indent_size = 4
+
+# ...except the vendored fixutf8 extension, which is tab-indented as Mercurial's
+# own sources were when it was written
+[MercurialExtensions/**.py]
+indent_style = tab
+tab_width = 4
 
 # Generated file
 [*.sln]

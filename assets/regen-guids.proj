@@ -93,9 +93,9 @@
 
     <MakeDir Directories="$([System.IO.Path]::GetDirectoryName('$(WxsOutputPath)'))" />
 
-	<!-- Keep this in sync with ChorusHub.csproj, especially DirectoryReferenceId
+    <!-- Keep this in sync with ChorusHub.csproj, especially DirectoryReferenceId
          and ComponentGroupId (case matters, and the inconsistent case is exactly
-         what ChorusHub already has so it should not changed). The two excluded
+         what ChorusHub already has so it should not be changed). The two excluded
          files are the ones that the SIL.Chorus.Mercurial targets rewrite
          on the user's machine, so they should not be assigned installer GUIDs.
 

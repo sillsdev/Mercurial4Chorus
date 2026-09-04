@@ -4,7 +4,7 @@
 MUST BE RUN ON WINDOWS. Needs the following prerequisites:
 
 - Python 3 (run `py` to see if you have it)
-- Rust, specifically Rustup (`winget install Rustlang.Rustup)
+- Rust, specifically Rustup (`winget install Rustlang.Rustup`)
 - PyOxidizer version 0.17.0 (see README-Windows.md to install)
 - VS 2022 build tools (winget install Microsoft.VisualStudio.2022.BuildTools)
 - Mercurial (winget install Mercurial.Mercurial)
@@ -59,15 +59,15 @@ import subprocess
 import sys
 import tempfile
 
-# The Mercurial tag this script expects to see in `../hg`. Wil be overridden
+# The Mercurial tag this script expects to see in `../hg`. Will be overridden
 # by `--tag`, but if the Mercurial source tree is NOT at this version, script
-# will warn you that you might be building a different version thnn you think.
+# will warn you that you might be building a different version than you think.
 #
 # Keep this in sync with MercurialVersion in SIL.Chorus.Mercurial.csproj and
 # the mercurial-version matrix in .github/workflows/nuget-ci-cd.yml.
 DEFAULT_HG_TAG = "7.0.1"
 
-# Target tripes for PyOxidizer; you usually won't need to change this.
+# Target triples for PyOxidizer; you usually won't need to change this.
 DEFAULT_TARGET_TRIPLE = "x86_64-pc-windows-msvc"
 TARGET_TRIPLES = ["i686-pc-windows-msvc", "x86_64-pc-windows-msvc"]
 
