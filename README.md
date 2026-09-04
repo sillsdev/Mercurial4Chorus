@@ -19,8 +19,8 @@ dotnet pack /p:BuildCounter=1
 Output will be found in `artifacts/package/release` directory
 
 To release a nuget package, push a commit to `master` and the GitHub Actions workflow will
-release the package. The `linux-x64` directory no longer contains the files needed for a
-release; those are created at packaging time by the GHA workflow. So you cannot create a
-release by hand.
+release the package. The `linux-x64` directory is out-of-date and no longer updated by hand;
+instead, it is updated at packaging time by the GHA workflow. So you cannot create a release
+by hand from the current state of the repo.
 
 See [README-Windows.md](/README-Windows.md) for tips on updating the `win/Mercurial` folder.
