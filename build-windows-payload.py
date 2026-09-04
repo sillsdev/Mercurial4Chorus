@@ -405,12 +405,11 @@ def check_native_dependencies(payload: pathlib.Path, removed: set) -> None:
         for consumer, dll in broken:
             print("  %s imports %s, which was removed" % (consumer, dll),
                   file=sys.stderr)
-        die("a trim rule removed a DLL that a surviving binary loads;"
-            " re-run with --no-trim to confirm, then fix the rule."
-            "\n       The payload has already been replaced: restore it with"
-            " git checkout <commit> -- win/Mercurial")
+        die("a trim rule removed a DLL a surviving binary loads. The payload"
+            " is already\n       replaced: git checkout <commit> --"
+            " win/Mercurial")
 
-    print("native dependencies: %d binaries checked, none left dangling"
+    print("native deps: %d binaries, none dangling"
           % sum(1 for p in payload.rglob("*")
                 if p.suffix.lower() in (".pyd", ".dll", ".exe")))
 
@@ -502,15 +501,13 @@ def check_python_imports(stage: pathlib.Path, trim: bool, trim_hgext: bool) -> N
         for module, name in broken:
             print("  %s imports %s, which was removed" % (module, name),
                   file=sys.stderr)
-        die("a trim rule removed a package a surviving module needs;"
-            " re-run with --no-trim to confirm, then fix the rule."
-            "\n       If the module is only reachable from tooling this payload"
-            " does not ship,\n       add it to IMPORT_ALLOWED and say why."
-            "\n       The payload has already been replaced: restore it with"
-            " git checkout <commit> -- win/Mercurial")
+        die("a trim rule removed a package a surviving module needs. If the"
+            " module is\n       reachable only from tooling this payload does"
+            " not ship, add it to\n       IMPORT_ALLOWED and say why. The"
+            " payload is already replaced:\n       git checkout <commit> --"
+            " win/Mercurial")
 
-    print("python imports: %d module(s) checked, none reaching a removed package"
-          % len(kept))
+    print("python imports: %d modules, none reaching a removed package" % len(kept))
 
 
 def _lib_entry(relative: str) -> str | None:
@@ -629,7 +626,7 @@ def regenerate_guids(here: pathlib.Path, payload: pathlib.Path,
     if not project.is_file():
         die("%s is missing" % project)
 
-    print("\nregenerating installer GUIDs (SIL.BuildTasks %s)" % version)
+    print("\nGUIDs (SIL.BuildTasks %s)" % version)
     before_entries = _guid_entries(payload)
     before_bytes = {path: path.read_bytes() for path in _guid_files(payload)}
 
@@ -656,14 +653,12 @@ def regenerate_guids(here: pathlib.Path, payload: pathlib.Path,
 
     added = sorted(set(_guid_entries(payload)) - set(before_entries))
     if added:
-        print("  %d new GUID(s) allocated:" % len(added))
+        print("  %d new id(s) -- check for renames, which get a second"
+              " installer identity:" % len(added))
         for identifier in added:
             print("    + %s" % identifier)
-        print("  Check that each is a genuinely new file. One that looks like an"
-              " existing\n  file under another name is a rename, and has just been"
-              " given a second\n  installer identity.")
     else:
-        print("  no new GUIDs were needed")
+        print("  no new ids")
 
     changed = 0
     for path in after:
@@ -672,18 +667,16 @@ def regenerate_guids(here: pathlib.Path, payload: pathlib.Path,
             print("  %s %s" % ("added  " if was is None else "updated", path))
             changed += 1
     if changed:
-        print("  %d of %d GUID file(s) changed" % (changed, len(after)))
+        print("  %d of %d file(s) changed" % (changed, len(after)))
 
     total = len(_guid_entries(payload))
     in_consolidated = len(re.findall(
         r'Id="([^"]+)"', consolidated.read_text(encoding="utf-8-sig",
                                                 errors="replace")))
-    print("  %s holds %d of the %d id(s) in the payload"
+    print("  %s: %d of %d id(s)"
           % (CONSOLIDATED_GUID_FILE, in_consolidated, total))
     if in_consolidated < total:
-        print("  warning: some ids are only in the per-directory files; the"
-              " consolidated\n           file is not yet a complete"
-              " replacement for them")
+        print("  warning: the rest are only in the per-directory files")
     return changed
 
 
@@ -711,7 +704,7 @@ def check_guids(here: pathlib.Path, payload: pathlib.Path,
     the same SDK and package.
     """
     project = here / REGEN_PROJECT
-    print("\nverifying the GUID files describe the payload")
+    print("\nchecking the GUID files")
 
     command = ["dotnet", "msbuild", project, "-nologo", "-t:CheckGuids",
                "-p:PayloadDir=%s" % payload,
@@ -724,14 +717,11 @@ def check_guids(here: pathlib.Path, payload: pathlib.Path,
     print("+ %s" % printable)
     result = subprocess.run([str(part) for part in command], cwd=str(here))
     if result.returncode != 0:
-        die("the payload and its GUID files disagree; see the errors above."
-            "\n       %s has been written but must not be committed until this"
-            "\n       passes -- an id allocated now and lost later is an"
-            " installer component\n       that changes identity on the next"
-            " build. Restore with git checkout <commit> -- win/Mercurial"
-            % payload)
-    print("  every file in the payload has a GUID, and the consolidated file"
-          " holds them all")
+        die("the payload and its GUID files disagree; see above. %s must not"
+            " be\n       committed until this passes -- an id allocated now and"
+            " lost later is a\n       component that changes identity next"
+            " build. git checkout <commit> -- win/Mercurial" % payload)
+    print("  every file has a GUID, all of them in the consolidated file")
 
 
 def hg_command(repo: pathlib.Path, *args: str) -> str:
@@ -763,13 +753,11 @@ def build_staging_tree(hg: pathlib.Path, tag: str | None, target_triple: str,
     print("building Mercurial %s for %s" % (" ".join(tags) or "(untagged)",
                                             target_triple))
     if tag and DEFAULT_HG_TAG not in tags:
-        print("note: building %s, not the %s this payload is meant to be. Move"
-              " DEFAULT_HG_TAG,\n      MercurialVersion and the CI"
-              " mercurial-version matrix together." % (tag, DEFAULT_HG_TAG))
+        print("note: building %s, not the %s this payload is meant to be"
+              % (tag, DEFAULT_HG_TAG))
     elif not tag and DEFAULT_HG_TAG not in tags:
-        print("warning: this checkout is not at %s, which is the tag this"
-              " payload is meant\n         to be built from; pass --tag %s to"
-              " update it" % (DEFAULT_HG_TAG, DEFAULT_HG_TAG))
+        print("warning: checkout is not at %s; pass --tag %s to update it"
+              % (DEFAULT_HG_TAG, DEFAULT_HG_TAG))
 
     sys.path.insert(0, str(packaging))
     from hgpackaging import pyoxidizer as hgpyoxidizer
@@ -804,7 +792,7 @@ def documentation_build_skipped(module):
     original = module.build_docs_html
 
     def skipped(source_dir):
-        print("  skipping Mercurial's HTML documentation; doc/ is not shipped")
+        print("  skipping the HTML docs; doc/ is not shipped")
 
     module.build_docs_html = skipped
     try:
@@ -874,9 +862,8 @@ def assemble_payload(stage: pathlib.Path, payload: pathlib.Path,
             shutil.copy2(source, destination)
         if missing:
             print("warning: not in the old payload, so not in the new one: %s"
-                  "\n         Nothing stages these -- they only ever come from"
-                  " the payload they are\n         copied out of, and Chorus's"
-                  " wxs names some of them by hand." % ", ".join(missing))
+                  "\n         Nothing stages these; they come only from the"
+                  " payload they are copied out of." % ", ".join(missing))
 
         if payload.exists():
             shutil.rmtree(payload)
@@ -918,9 +905,7 @@ def assemble_payload(stage: pathlib.Path, payload: pathlib.Path,
             shutil.copy2(source, destination)
 
         if uncompiled:
-            print("note: kept %d .py file(s) that have no bytecode beside them;"
-                  " removing them\n      would make those modules unimportable"
-                  % uncompiled)
+            print("note: kept %d .py with no bytecode beside them" % uncompiled)
 
         for relative in PRESERVE:
             source = kept / relative
@@ -1038,17 +1023,17 @@ def main() -> None:
     if trimmed:
         total_files = sum(n for n, _ in trimmed.values())
         total_bytes = sum(b for _, b in trimmed.values())
-        print("\ntrimmed %d file(s), %.1f MB, that Chorus cannot reach:"
+        print("\ntrimmed %d file(s), %.1f MB Chorus cannot reach:"
               % (total_files, total_bytes / 1e6))
         for reason, (count, size) in sorted(trimmed.items(),
                                             key=lambda kv: -kv[1][1]):
             print("  %6.1f MB  %4d file(s)  %s" % (size / 1e6, count, reason))
         if not trim_hgext:
-            print("  (--no-trim-hgext: the unused hgext extensions were kept)")
+            print("  (--no-trim-hgext: unused extensions kept)")
         if not trim_sources:
-            print("  (--no-trim-sources: the .py sources were kept)")
+            print("  (--no-trim-sources: .py sources kept)")
     elif args.no_trim:
-        print("\ntrimming disabled: shipping the install layout as staged")
+        print("\ntrimming disabled")
 
     regenerated = not args.no_regen_guids
     if regenerated:
@@ -1059,29 +1044,26 @@ def main() -> None:
 
     total = sum(1 for p in payload.rglob("*") if p.is_file())
     directories = len({p.parent for p in payload.rglob("*") if p.is_file()})
-    print("\n%s rebuilt: %d file(s) in %d director(ies), %d left out of the"
-          " staging tree" % (payload, total, directories, dropped))
-    print("  %d added, %d removed relative to what was there before"
-          % (len(added), len(removed)))
+    left_out = dropped + sum(n for n, _ in trimmed.values())
+    print("\n%s rebuilt: %d file(s) in %d director(ies), %d left out"
+          % (payload, total, directories, left_out))
+    print("  %d added, %d removed since the last build" % (len(added), len(removed)))
     for name in added:
         print("    + %s" % name)
     for name in removed:
         print("    - %s" % name)
 
     print(
-        "\nNext steps:\n"
-        "  1. Sanity-check the payload:  %s\\hg.exe version\n"
-        "  2. Expect hg.exe and everything under lib/ to differ byte-for-byte\n"
-        "     from the last build even at the same tag; the file list should not.\n"
-        "  3. Set MercurialVersion in SIL.Chorus.Mercurial.csproj, update the\n"
-        "     mercurial-version matrix in .github/workflows/nuget-ci-cd.yml, add a\n"
-        "     PackageReleaseNotes entry, and set DEFAULT_HG_TAG in this script.\n"
-        "  4. %s"
+        "\nNext steps (README-Windows.md has the rest):\n"
+        "  1. Smoke-test:  %s\\hg.exe version\n"
+        "  2. hg.exe and lib/ differ byte-for-byte at the same tag; judge the\n"
+        "     build by the file list, not the diff.\n"
+        "  3. %s"
         % (payload,
-           "Commit the refreshed .guidsForInstaller.xml files with this payload."
+           "Commit the payload with .guidsForInstaller.all.xml and the"
+           " per-directory files."
            if regenerated else
-           "GUID regeneration was skipped; re-run without --no-regen-guids"
-           " before committing this payload.")
+           "Re-run without --no-regen-guids before committing this payload.")
     )
 
 
