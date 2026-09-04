@@ -76,14 +76,12 @@ PRESERVE = [
     "mercurial.ini",
     "Mercurial.url",
     "cacert.pem",
-    "defaultrc/Paths.rc",
-    # Mercurial has not read default.d/ since the 2.x era -- there is not one
-    # reference to it anywhere in mercurial/ or hgext/. Preserved only so this
-    # script does not quietly delete committed files; dropping the directory
-    # outright is a separate decision.
+    # Mercurial has read defaultrc as a package resource since 5.3, so the
+    # top-level copy is dead, and it has never read default.d at any path this
+    # payload uses. cacerts.rc survives alone because Chorus's
+    # ChorusMergeModule.wxs names it in a hand-written component and an IniFile
+    # action; removing it would break that build, not hg.
     "default.d/cacerts.rc",
-    "default.d/editor.rc",
-    "default.d/mergetools.rc",
 ]
 
 # Two more files to preserve wherever they are found (as opposed to the PRESERVE
@@ -138,6 +136,7 @@ DROP_ROOT_FILES = [
 # resourceutil reads those through importlib, and only templater looks in the
 # top-level copy.
 DROP_DIRECTORIES = [
+    "defaultrc",
     "doc",
     "helptext",
     "locale",
@@ -331,28 +330,6 @@ TRIM_HGEXT_FILES: set = set()
 # the check is on the removal rather than on a count.
 
 
-def _staged_both_spellings(stage: pathlib.Path) -> list:
-    """STAGE_RENAMES pairs the staging tree really holds under both names.
-
-    Compares directory entries. Testing each path with is_file() looks like the
-    obvious way to do this and is wrong: stat() is case-insensitive on Windows
-    and on macOS, so both spellings answer True whenever either file exists,
-    and a guard built that way fires on every run instead of never. Reading the
-    directory gives the names actually on disk.
-    """
-    both = []
-    for staged, shipped in STAGE_RENAMES.items():
-        directory, staged_name = staged.rsplit("/", 1)
-        shipped_name = shipped.rsplit("/", 1)[1]
-        parent = stage / directory
-        if not parent.is_dir():
-            continue
-        names = {entry.name for entry in parent.iterdir()}
-        if staged_name in names and shipped_name in names:
-            both.append((staged, shipped))
-    return both
-
-
 def _sources_with_bytecode(stage: pathlib.Path) -> set:
     """Every lib/**.py in *stage* that has compiled bytecode beside it."""
     found = set()
@@ -539,54 +516,6 @@ def is_trimmed(relative: str, trim_hgext: bool = True) -> str | None:
             return "hgext extensions Chorus never enables"
 
     return None
-
-
-# defaultrc/mercurial.rc is added by hgpackaging/inno.py's EXTRA_INSTALL_RULES
-# and by the msi target in pyoxidizer.bzl, but not by
-# create_pyoxidizer_install_layout(), so it is copied in afterwards. It is
-# commented out from top to bottom and changes no behaviour; it is here to keep
-# the tree equal to the installers'.
-#
-# contrib/bash_completion and contrib/zsh_completion used to be staged here for
-# the same reason. is_trimmed() discards all of contrib/ before any flag is
-# read, so they were copied and then thrown away; Chorus has no use for shell
-# completions.
-# Two files this payload has carried since the TortoiseHg era are spelled in
-# mixed case, and staging produces them in lower case:
-#
-#     defaultrc/mercurial.rc   <- EXTRA_STAGE_RULES, from contrib/win32/mercurial.ini
-#     defaultrc/mergetools.rc  <- STAGING_RULES_APP, from lib/mercurial/defaultrc/*.rc
-#
-# Renaming them back is not cosmetic. MakeWixForDirTree derives each File Id
-# from the name on disk, so shipping the lower-case spelling mints a second
-# installer identity for a file that already has one. Both spellings are
-# already in .guidsForInstaller.all.xml under different GUIDs, because a build
-# before this map existed allocated the lower-case pair:
-#
-#     mercurial.defaultrc.Mercurial.rc    7dcf60f9-...   <- the one that ships
-#     mercurial.defaultrc.mercurial.rc    78ec2c27-...   <- must stay unused
-#     mercurial.defaultrc.MergeTools.rc   fa22312d-...   <- the one that ships
-#     mercurial.defaultrc.mergetools.rc   9cbc7683-...   <- must stay unused
-#
-# Windows being case-insensitive, git records no rename when the build writes
-# the lower-case name over the tracked mixed-case one, so the repository keeps
-# the old spelling and nothing looks wrong -- until someone rebuilds on a
-# case-sensitive filesystem, when both files quietly change installer identity.
-# The predecessor of this script carried the same map for the same reason; it
-# was dropped in the move to Mercurial on the mistaken view that lower-case
-# staging was a TortoiseHg quirk. Mercurial's own staging does it too.
-#
-# Case-only entries. A genuine rename does not belong here: it would hide a
-# real change of identity rather than preserve an existing one.
-STAGE_RENAMES = {
-    "defaultrc/mercurial.rc": "defaultrc/Mercurial.rc",
-    "defaultrc/mergetools.rc": "defaultrc/MergeTools.rc",
-}
-
-
-EXTRA_STAGE_RULES = [
-    ("contrib/win32/mercurial.ini", "defaultrc/mercurial.rc"),
-]
 
 
 REGEN_PROJECT = pathlib.Path("assets") / "regen-guids.proj"
@@ -791,7 +720,6 @@ def build_staging_tree(hg: pathlib.Path, tag: str | None, target_triple: str,
 
     sys.path.insert(0, str(packaging))
     from hgpackaging import pyoxidizer as hgpyoxidizer
-    from hgpackaging.util import process_install_rules
 
     # Mirrors hgpackaging/inno.py: the build_dir passed here is only used to
     # cache the gettext download, since run_pyoxidizer always writes its own
@@ -804,8 +732,6 @@ def build_staging_tree(hg: pathlib.Path, tag: str | None, target_triple: str,
         hgpyoxidizer.create_pyoxidizer_install_layout(
             hg, build_dir, stage, target_triple
         )
-
-    process_install_rules(EXTRA_STAGE_RULES, hg, stage)
 
     return stage
 
@@ -851,16 +777,6 @@ def assemble_payload(stage: pathlib.Path, payload: pathlib.Path,
             "       Emptying the payload would delete the files being copied"
             " from it." % (here, there))
 
-    # Two real entries can only exist on a case-sensitive staging tree, and one
-    # would silently overwrite the other on the way into the payload. Checked
-    # here with the other precondition: further down the payload has already
-    # been emptied, and its GUID files are held only in memory, so dying there
-    # took them with it.
-    for staged, shipped in _staged_both_spellings(stage):
-        die("the staging tree holds both %s and %s as separate files;"
-            " STAGE_RENAMES\n       cannot tell which one the payload should"
-            " carry. Delete whichever is stale." % (staged, shipped))
-
     def files_in(root: pathlib.Path) -> set[str]:
         if not root.exists():
             return set()
@@ -897,7 +813,6 @@ def assemble_payload(stage: pathlib.Path, payload: pathlib.Path,
         removed_names: set = set()
         compiled = _sources_with_bytecode(stage) if trim_sources else set()
         uncompiled = 0
-        renamed = 0
         for source in sorted(stage.rglob("*")):
             if not source.is_file():
                 continue
@@ -924,18 +839,9 @@ def assemble_payload(stage: pathlib.Path, payload: pathlib.Path,
                     removed_names.add(source.name)
                     continue
                 uncompiled += 1
-            # A staging tree that already carries the shipped spelling -- an
-            # unpacked MSI, say -- simply misses the lookup.
-            if relative in STAGE_RENAMES:
-                relative = STAGE_RENAMES[relative]
-                renamed += 1
             destination = payload / relative
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, destination)
-
-        if renamed:
-            print("renamed %d staged file(s) to the spelling the payload has"
-                  " always used" % renamed)
 
         if uncompiled:
             print("note: kept %d .py file(s) that have no bytecode beside them;"
