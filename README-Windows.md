@@ -116,6 +116,10 @@ SDK, and `--from-stage DIR` skips the build entirely and assembles the payload f
 install layout — point it at a Mercurial MSI unpacked with `msiexec /a` to check the selection
 rules in seconds instead of minutes.
 
+`--output DIR` writes somewhere other than `win\Mercurial`, and **empties that directory first**.
+A directory holding neither `hg.exe` nor `mercurial.ini` nor a `.guidsForInstaller` file is not a
+payload, so the script refuses to empty it; `--force` says you meant it anyway.
+
 ## Trimming
 
 Mercurial's Windows install layout carries a great deal that Chorus cannot reach:
@@ -129,19 +133,20 @@ tooling, plus extensions Chorus never enables.
 | --- | --- |
 | *(none)* | Trim third-party code with no importer anywhere in the payload; the `hgext` extensions Chorus never enables; the `.py` sources under `lib/`; the copies of `locale/` and `templates/` under `lib/mercurial/` that Mercurial reads from the top level instead; installed-package metadata; and `contrib/`. |
 | `--no-trim` | Ship the install layout exactly as staged — turns off all three passes at once. Use it to reproduce the untrimmed tree when working out whether a problem is the trimming's fault. |
-| `--no-trim-hgext` | Keep the `hgext` extensions Chorus never enables, and the two packages only they import (`pygments`, imported only by `hgext/highlight`; `pygit2`, only by `hgext/git`). |
+| `--no-trim-hgext` | Keep the `hgext` extensions Chorus never enables, and the packages only they reach: `pygments`, imported only by `hgext/highlight`; `pygit2`, only by `hgext/git`; and `cffi`, `pycparser` and `_cffi_backend`, which are pygit2's own dependencies. |
 | `--no-trim-sources` | Keep the `.py` files under `lib/`. |
 
 Measured by running `--from-stage` over the official Mercurial 7.0.1 x64 MSI. The nupkg column is
-deflate calibrated against a real `dotnet pack`, so it is good to a few percent rather than exact:
+a real `dotnet pack`, which carries the committed `linux-x64` tree, so the published package is
+larger; the column is there to compare the modes with each other:
 
 | mode | files | directories | raw | nupkg |
 | --- | ---: | ---: | ---: | ---: |
-| `--no-trim` | 3277 | 347 | 99.8 MB | 37.3 MB |
-| `--no-trim-hgext --no-trim-sources` | 1520 | 99 | 75.8 MB | 28.7 MB |
-| `--no-trim-hgext` | 837 | 65 | 63.3 MB | 25.3 MB |
-| `--no-trim-sources` | 675 | 58 | 60.2 MB | 23.6 MB |
-| **default** | **395** | **40** | **54.0 MB** | **21.9 MB** |
+| `--no-trim` | 3272 | 347 | 99.9 MB | 37.9 MB |
+| `--no-trim-hgext --no-trim-sources` | 1515 | 99 | 75.9 MB | 29.0 MB |
+| `--no-trim-hgext` | 832 | 65 | 63.3 MB | 25.5 MB |
+| `--no-trim-sources` | 670 | 58 | 60.2 MB | 23.8 MB |
+| **default** | **390** | **40** | **54.1 MB** | **22.1 MB** |
 | *the old TortoiseHg payload* | 99 | 6 | 46.3 MB | 23.4 MB |
 
 The directory count matters as much as the megabytes, because it is the number of
@@ -220,10 +225,11 @@ was dropped once it turned out nothing reads it — but a future one could.
 
 One thing to know about those ids: `MakeWixForDirTree` caps them at 50 characters and keeps the
 **last** 50, so a deep path such as `mercurial.lib.mercurial.__pycache__.ancestor.cpython-39.pyc`
-loses its front and becomes `_.lib.mercurial.__pycache__.ancestor.cpython_39.pyc`. On this payload
-754 of 1595 ids are truncated that way and none of them collide — the task appends a numeric
-suffix if two ever do, which would make a GUID depend on directory traversal order. Worth watching
-if the tree gets deeper.
+loses its front and becomes `_.lib.mercurial.__pycache__.ancestor.cpython_39.pyc` — 51 characters,
+because a cut that lands on the leading `.` gets a `_` in front of it to stay a legal WiX Id.
+Of the 468 ids this payload records, 310 are truncated that way, 45 of them with that prefix, and
+none of them collide — the task appends a numeric suffix if two ever do, which would make a GUID
+depend on directory traversal order. Worth watching if the tree gets deeper.
 
 ## After the build
 

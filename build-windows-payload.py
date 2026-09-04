@@ -162,14 +162,15 @@ def is_dropped(relative: str) -> bool:
 # uses.
 #
 # Sizes below were measured with --from-stage over the official 7.0.1 x64 MSI.
-# The nupkg column is estimated, and good to a few percent.
+# The nupkg column is a real dotnet pack of this repository, so it carries the
+# committed linux-x64 tree; the published package is larger.
 #
 #     mode                                 files  dirs   raw     nupkg
-#     --no-trim                             3277   347   99.8 MB  37.3 MB
-#     --no-trim-hgext --no-trim-sources     1520    99   75.8 MB  28.7 MB
-#     --no-trim-hgext                        837    65   63.3 MB  25.3 MB
-#     --no-trim-sources                      675    58   60.2 MB  23.6 MB
-#     (default)                              395    40   54.0 MB  21.9 MB
+#     --no-trim                             3272   347   99.9 MB  37.9 MB
+#     --no-trim-hgext --no-trim-sources     1515    99   75.9 MB  29.0 MB
+#     --no-trim-hgext                        832    65   63.3 MB  25.5 MB
+#     --no-trim-sources                      670    58   60.2 MB  23.8 MB
+#     (default)                              390    40   54.1 MB  22.1 MB
 #     TortoiseHg                              99     6   46.3 MB  23.4 MB  <- replaced
 #
 # Watch the directory count as much as the megabytes. Every directory needs a
@@ -701,7 +702,7 @@ def documentation_build_skipped(module):
 
 def assemble_payload(stage: pathlib.Path, payload: pathlib.Path,
                      trim: bool = True, trim_hgext: bool = True,
-                     trim_sources: bool = True
+                     trim_sources: bool = True, force: bool = False
                      ) -> tuple[list[str], list[str], int, dict, set]:
     """Replace *payload* with the wanted part of *stage*, keeping our own files."""
     # The payload is emptied before the staging tree is copied into it, so if
@@ -712,6 +713,24 @@ def assemble_payload(stage: pathlib.Path, payload: pathlib.Path,
             "         stage   %s\n         payload %s\n"
             "       Emptying the payload would delete the files being copied"
             " from it." % (here, there))
+
+    # Emptying the payload deletes whatever --output names, so anything that
+    # is not recognisably a payload has to say so first. An empty directory,
+    # or none at all, is the ordinary case for a new --output.
+    if payload.exists():
+        if not payload.is_dir():
+            die("%s is not a directory; --output names the payload directory"
+                " to rebuild." % there)
+        contents = sorted(p.name for p in payload.iterdir())
+        if contents and not force and not any(
+                name in ("hg.exe", "mercurial.ini") or _is_guid_file(name)
+                for name in contents):
+            die("%s holds no hg.exe, mercurial.ini or GUID file, so it does"
+                " not look\n       like a payload to replace:\n         %s\n"
+                "       Refusing to empty it. Pass --force if it really is the"
+                " one to rebuild."
+                % (there, ", ".join(contents[:8])
+                   + (", ..." if len(contents) > 8 else "")))
 
     def files_in(root: pathlib.Path) -> set[str]:
         if not root.exists():
@@ -828,7 +847,13 @@ def main() -> None:
     )
     parser.add_argument(
         "--output",
-        help="payload directory to refresh (default: win/Mercurial beside this script)",
+        help="payload directory to refresh, which is emptied first (default:"
+             " win/Mercurial beside this script)",
+    )
+    parser.add_argument(
+        "--force", action="store_true",
+        help="empty the --output directory even though nothing in it looks"
+             " like a payload",
     )
     parser.add_argument(
         "--no-trim", action="store_true",
@@ -898,7 +923,7 @@ def main() -> None:
 
     added, removed, dropped, trimmed, removed_names = assemble_payload(
         stage, payload, trim=trim, trim_hgext=trim_hgext,
-        trim_sources=trim_sources)
+        trim_sources=trim_sources, force=args.force)
 
     check_native_dependencies(payload, removed_names)
 
