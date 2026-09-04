@@ -185,6 +185,13 @@ only dependency of `lib/_ctypes.pyd`, and since `mercurial/win32.py` imports `ct
 scope, that payload could not run a single command. The build now reads the PE import table of
 every surviving binary and refuses to finish if one of them needs a file that was removed.
 
+The same question is asked of Python. A trim rule can just as easily remove a package that a
+surviving module imports, which no import table would show, so the build also parses every module
+it keeps under `lib/` and fails if one reaches a top-level entry the rules removed entirely. Only
+imports that run on import count — not those inside a `try`, a function, or an `if
+TYPE_CHECKING:`. `IMPORT_ALLOWED` lists the handful of modules that legitimately import something
+removed because nothing hg runs can reach them; adding to it means establishing that first.
+
 ## Installer GUIDs
 
 Every file in the payload needs an MSI component GUID that stays attached to its path for the

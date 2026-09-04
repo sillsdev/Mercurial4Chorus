@@ -49,6 +49,7 @@ Usage::
 from __future__ import annotations
 
 import argparse
+import ast
 import contextlib
 import os
 import pathlib
@@ -284,6 +285,19 @@ TRIM_HGEXT_PREFIXES = ("_cffi_backend",)
 # does not compile.
 
 
+# Kept modules that do import a removed package at module scope, and may.
+# Neither is reachable in the payload: mercurial/cffi's *build.py are the cffi
+# code generators setup.py runs at build time, and pygments' sphinxext is a
+# Sphinx plugin. Add to this only after establishing that nothing hg runs can
+# import the module -- the point of the check is that the answer is usually no.
+IMPORT_ALLOWED = {
+    "lib/mercurial/cffi/bdiffbuild.py",
+    "lib/mercurial/cffi/mpatchbuild.py",
+    "lib/mercurial/cffi/osutilbuild.py",
+    "lib/pygments/sphinxext.py",
+}
+
+
 def _sources_with_bytecode(stage: pathlib.Path) -> set:
     """Every lib/**.py in *stage* that has compiled bytecode beside it."""
     found = set()
@@ -399,6 +413,104 @@ def check_native_dependencies(payload: pathlib.Path, removed: set) -> None:
     print("native dependencies: %d binaries checked, none left dangling"
           % sum(1 for p in payload.rglob("*")
                 if p.suffix.lower() in (".pyd", ".dll", ".exe")))
+
+
+def _runs_on_import(body: list) -> list:
+    """The statements in *body* that run when the module is imported.
+
+    Descends into `if` and `with`, which run, but not into `try`, functions or
+    classes, which is where an optional import belongs. `if TYPE_CHECKING:`
+    does not run either: Mercurial uses it to point pytype at the non-vendored
+    attrs, and taking those blocks at face value flags two dozen modules.
+    """
+    def typechecking(test) -> bool:
+        return any((isinstance(n, ast.Name) and n.id == "TYPE_CHECKING")
+                   or (isinstance(n, ast.Attribute) and n.attr == "TYPE_CHECKING")
+                   for n in ast.walk(test))
+
+    runs = []
+    for node in body:
+        if isinstance(node, ast.If):
+            if not typechecking(node.test):
+                runs += _runs_on_import(node.body)
+            runs += _runs_on_import(node.orelse)
+        elif isinstance(node, ast.With):
+            runs += _runs_on_import(node.body)
+        elif not isinstance(node, (ast.Try, ast.FunctionDef, ast.AsyncFunctionDef,
+                                   ast.ClassDef)):
+            runs.append(node)
+    return runs
+
+
+def _imported_on_import(source: pathlib.Path) -> set:
+    """The top-level package names *source* imports as it is imported."""
+    try:
+        tree = ast.parse(source.read_text(encoding="utf-8", errors="replace"))
+    except (OSError, SyntaxError, ValueError):
+        return set()
+    names = set()
+    for node in _runs_on_import(tree.body):
+        if isinstance(node, ast.Import):
+            names |= {alias.name.split(".")[0] for alias in node.names}
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            names.add(node.module.split(".")[0])
+    return names
+
+
+def check_python_imports(stage: pathlib.Path, trim: bool, trim_hgext: bool) -> None:
+    """Refuse to ship a payload whose own modules import something we removed.
+
+    check_native_dependencies() reads PE import tables and so sees none of
+    this. A trim rule can take out a package that a surviving module imports at
+    module scope, and nothing says so until hg raises ImportError on a user's
+    machine -- the same failure as libffi-7.dll, on the other side of the
+    language boundary.
+
+    Only a top-level name under lib/ that the rules remove *entirely* counts,
+    and only an import that runs when the module is imported. Both halves are
+    re-derived from the same rules here rather than passed in, so this asks its
+    question of the rules as they stand rather than of one run's bookkeeping.
+    """
+    seen: dict = {}
+    gone: dict = {}
+    kept = []
+    for source in sorted(stage.rglob("*")):
+        if not source.is_file():
+            continue
+        relative = str(source.relative_to(stage)).replace(os.sep, "/")
+        removed = is_dropped(relative) or (
+            trim and is_trimmed(relative, trim_hgext) is not None)
+        entry = _lib_entry(relative)
+        if entry:
+            seen[entry] = seen.get(entry, 0) + 1
+            if removed:
+                gone[entry] = gone.get(entry, 0) + 1
+        if not removed and relative.endswith(".py") and relative.startswith("lib/"):
+            kept.append((relative, source))
+
+    dropped_whole = {entry for entry in seen if gone.get(entry, 0) == seen[entry]}
+    broken = []
+    for relative, source in kept:
+        if relative in IMPORT_ALLOWED:
+            continue
+        for name in sorted(_imported_on_import(source) & dropped_whole):
+            broken.append((relative, name))
+
+    if broken:
+        print("\nerror: the payload keeps modules that import what it removed:",
+              file=sys.stderr)
+        for module, name in broken:
+            print("  %s imports %s, which was removed" % (module, name),
+                  file=sys.stderr)
+        die("a trim rule removed a package a surviving module needs;"
+            " re-run with --no-trim to confirm, then fix the rule."
+            "\n       If the module is only reachable from tooling this payload"
+            " does not ship,\n       add it to IMPORT_ALLOWED and say why."
+            "\n       The payload has already been replaced: restore it with"
+            " git checkout <commit> -- win/Mercurial")
+
+    print("python imports: %d module(s) checked, none reaching a removed package"
+          % len(kept))
 
 
 def _lib_entry(relative: str) -> str | None:
@@ -933,6 +1045,7 @@ def main() -> None:
         trim_sources=trim_sources, force=args.force)
 
     check_native_dependencies(payload, removed_names)
+    check_python_imports(stage, trim, trim_hgext)
 
     if trimmed:
         total_files = sum(n for n, _ in trimmed.values())
