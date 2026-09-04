@@ -111,10 +111,8 @@ stale `..\hg` cannot quietly change what gets built.
 accepted value. Unlike the previous py2exe-based build, the architecture does **not** come from
 the interpreter you launch the script with.
 
-Expect the build to take tens of minutes. `--no-regen-guids` skips the only step needing the .NET
-SDK, and `--from-stage DIR` skips the build entirely and assembles the payload from an existing
-install layout — point it at a Mercurial MSI unpacked with `msiexec /a` to check the selection
-rules in seconds instead of minutes.
+Expect the build to take tens of minutes. `--no-regen-guids` skips the only step that needs the
+.NET SDK.
 
 `--output DIR` writes somewhere other than `win\Mercurial`, and **empties that directory first**.
 A directory holding neither `hg.exe` nor `mercurial.ini` nor a `.guidsForInstaller` file is not a
@@ -136,7 +134,8 @@ tooling, plus extensions Chorus never enables.
 | `--no-trim-hgext` | Keep the `hgext` extensions Chorus never enables, and the packages only they reach: `pygments`, imported only by `hgext/highlight`; `pygit2`, only by `hgext/git`; and `cffi`, `pycparser` and `_cffi_backend`, which are pygit2's own dependencies. |
 | `--no-trim-sources` | Keep the `.py` files under `lib/`. |
 
-Measured by running `--from-stage` over the official Mercurial 7.0.1 x64 MSI. The nupkg column is
+Measured over the official Mercurial 7.0.1 x64 MSI, unpacked with `msiexec /a`, which is the same
+install layout this script stages. The nupkg column is
 a real `dotnet pack`, which carries the committed `linux-x64` tree, so the published package is
 larger; the column is there to compare the modes with each other:
 

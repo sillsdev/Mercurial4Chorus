@@ -42,7 +42,6 @@ Usage::
 
     py -3 build-windows-payload.py                   # build ../hg as checked out
     py -3 build-windows-payload.py --tag 7.0.1       # update it to a tag first
-    py -3 build-windows-payload.py --from-stage DIR  # reuse an existing staging tree
     py -3 build-windows-payload.py --no-trim         # useful for debugging a build
 """
 
@@ -162,7 +161,8 @@ def is_dropped(relative: str) -> bool:
 # rules are about the shape of the install layout, these are about what Chorus
 # uses.
 #
-# Sizes below were measured with --from-stage over the official 7.0.1 x64 MSI.
+# Sizes below were measured over the official 7.0.1 x64 MSI, unpacked with
+# `msiexec /a`, which is the same install layout this script stages.
 # The nupkg column is a real dotnet pack of this repository, so it carries the
 # committed linux-x64 tree; the published package is larger.
 #
@@ -960,11 +960,6 @@ def main() -> None:
         help="PyOxidizer target to build for (default: %(default)s)",
     )
     parser.add_argument(
-        "--from-stage", metavar="DIR",
-        help="skip the build and take the payload from an existing staging tree,"
-             " such as a Mercurial MSI unpacked with `msiexec /a`",
-    )
-    parser.add_argument(
         "--output",
         help="payload directory to refresh, which is emptied first (default:"
              " win/Mercurial beside this script)",
@@ -1015,24 +1010,17 @@ def main() -> None:
     payload = (pathlib.Path(args.output).resolve() if args.output
                else here / "win" / "Mercurial")
 
-    if args.from_stage:
-        stage = pathlib.Path(args.from_stage).resolve()
-        if not stage.is_dir():
-            die("no such staging tree: %s" % stage)
-        print("using the staging tree at %s" % stage)
-    else:
-        if os.name != "nt":
-            die("building Mercurial for Windows needs Windows; use --from-stage"
-                " to assemble a payload from a tree built elsewhere")
-        hg = (pathlib.Path(args.hg_source).resolve() if args.hg_source
-              else here.parent / "hg")
-        if not hg.is_dir():
-            die("no Mercurial checkout at %s (pass --hg-source)" % hg)
-        stage = build_staging_tree(hg, args.tag, args.target_triple,
-                                   here / "build" / "stage")
+    if os.name != "nt":
+        die("building Mercurial for Windows needs Windows")
+    hg = (pathlib.Path(args.hg_source).resolve() if args.hg_source
+          else here.parent / "hg")
+    if not hg.is_dir():
+        die("no Mercurial checkout at %s (pass --hg-source)" % hg)
+    stage = build_staging_tree(hg, args.tag, args.target_triple,
+                               here / "build" / "stage")
 
     if not (stage / "hg.exe").is_file():
-        die("no hg.exe in %s; is that really a Mercurial install layout?" % stage)
+        die("the build produced no hg.exe in %s" % stage)
 
     # --no-trim turns everything off, so that it still means "the install
     # layout exactly as staged"; the other two switch off one pass each.
