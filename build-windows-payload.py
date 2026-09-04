@@ -76,11 +76,10 @@ PRESERVE = [
     "mercurial.ini",
     "Mercurial.url",
     "cacert.pem",
-    # Mercurial has read defaultrc as a package resource since 5.3, so the
-    # top-level copy is dead, and it has never read default.d at any path this
-    # payload uses. cacerts.rc survives alone because Chorus's
-    # ChorusMergeModule.wxs names it in a hand-written component and an IniFile
-    # action; removing it would break that build, not hg.
+    # hg never reads this file: it has read defaultrc as a package resource
+    # since 5.3, and default.d not since 5.2.2. It is kept only because
+    # Chorus's ChorusMergeModule.wxs names it by hand, so dropping it would
+    # break that build. Drop it once Chorus stops naming it.
     "default.d/cacerts.rc",
 ]
 
@@ -92,11 +91,9 @@ PRESERVE = [
 GUID_FILE = ".guidsForInstaller.xml"
 CONSOLIDATED_GUID_FILE = ".guidsForInstaller.all.xml"
 
-# 3.3.0 is the first SIL.BuildTasks with MakeWixForDirTree.ConsolidatedGuidFile.
-# An earlier version restores fine but fails the build the moment the task is
-# invoked, with MSB4064: "The parameter ConsolidatedGuidFile is not supported by
-# the MakeWixForDirTree task". --sil-buildtasks-version overrides this when a
-# newer release has to be tried.
+# First SIL.BuildTasks with MakeWixForDirTree.ConsolidatedGuidFile. An older
+# one restores fine and then fails with MSB4064 once the task runs. Override
+# with --sil-buildtasks-version.
 DEFAULT_SIL_BUILDTASKS_VERSION = "3.3.0"
 
 
@@ -110,31 +107,24 @@ def die(msg: str) -> None:
     raise SystemExit(1)
 
 
-# Files that hgpackaging's staging rules produce but this payload does not
-# want. Written as exclusions rather than an allowlist so that a file a later
-# Mercurial adds is shipped by default; the added/removed summary printed at
-# the end is there to catch anything that slips in that way.
+# What hgpackaging stages that this payload does not want. These are written
+# as exclusions, not an allowlist, so that a file a later Mercurial adds gets
+# shipped by default. Watch the added/removed summary to catch anything that
+# slips in that way.
 
-# The two files that only make sense in a standalone Mercurial install:
-# ReadMe.html is an HTML index of the doc/ tree this payload drops, and
-# ReleaseNotes.txt is contrib/win32/postinstall.txt, the "you may want to add
-# hg to PATH" notes the Inno installer shows after installing. Copying.txt is
-# deliberately NOT dropped -- it is the licence text, and it already carries a
-# GUID from an older payload.
+# Only useful in a standalone Mercurial install: ReadMe.html indexes the doc/
+# tree we drop, and ReleaseNotes.txt is the installer's post-install notes.
+# Copying.txt stays -- it is the licence, and it already has a GUID.
 DROP_ROOT_FILES = [
     "ReadMe.html",
     "ReleaseNotes.txt",
 ]
 
-# Whole directories. Each is a copy, made by hgpackaging's STAGING_RULES_APP,
-# of data that also lives under lib/, plus doc/, which is stubbed out below.
-# This payload has never shipped any of them: templates/ only matters for
-# `hg log --style=X`, and Chorus passes inline --template strings.
-#
-# Note that this drops only the top-level copies. The originals under
-# lib/mercurial/ stay, so `hg help` and configitems.toml still resolve --
-# resourceutil reads those through importlib, and only templater looks in the
-# top-level copy.
+# Whole directories, none of which this payload has ever shipped. Each is a
+# top-level copy of data that also lives under lib/, plus doc/, which is not
+# built at all. Only the top-level copies go: hg reads help text and
+# configitems.toml from lib/ through importlib, so those still work. Dropping
+# templates/ means `hg log --style=X` does not, which Chorus never uses.
 DROP_DIRECTORIES = [
     "defaultrc",
     "doc",
@@ -145,16 +135,11 @@ DROP_DIRECTORIES = [
 
 # Exact paths to leave out. Empty, and worth keeping empty: everything else
 # hgpackaging stages is a file Mercurial's own installers ship.
-#
-# The predecessor of this script dropped contrib/mq.el, because TortoiseHg's
-# WiX allowlist did not carry it into the MSI even though its staging tree had
-# it. Mercurial's installers do ship it, so it ships here now.
 DROP_FILES = []
 
-# Nothing under lib/ is dropped by the rules above. It is the frozen
-# application's own module tree -- an index of concrete paths baked into hg.exe
-# -- and pruning pieces of it is how a frozen application breaks. The trimming
-# below is the deliberate, narrower exception; see there.
+# The rules above drop nothing under lib/. That is hg.exe's own module tree,
+# indexed by concrete path inside the executable, and pruning it is how a
+# frozen application breaks. The trimming below is the narrower exception.
 
 
 def is_dropped(relative: str) -> bool:
@@ -171,15 +156,13 @@ def is_dropped(relative: str) -> bool:
 # ---------------------------------------------------------------------------
 # Trimming
 #
-# Everything below is a file Mercurial's own installers ship and this package
-# has no way to reach. It is separated from DROP_* above because the reasoning
-# is different in kind: those rules are about the shape of the install layout,
-# these are about what Chorus does with it.
+# Everything below is a file Mercurial's installers ship that Chorus cannot
+# reach. It is kept apart from DROP_* because the question is different: those
+# rules are about the shape of the install layout, these are about what Chorus
+# uses.
 #
-# The motivation is size, and the numbers below are measured by running this
-# script's --from-stage over the official Mercurial 7.0.1 x64 MSI unpacked with
-# msiextract. The nupkg column is deflate calibrated against a real dotnet pack,
-# so it is accurate to a few percent rather than exact.
+# Sizes below were measured with --from-stage over the official 7.0.1 x64 MSI.
+# The nupkg column is estimated, and good to a few percent.
 #
 #     mode                                 files  dirs   raw     nupkg
 #     --no-trim                             3277   347   99.8 MB  37.3 MB
@@ -189,23 +172,20 @@ def is_dropped(relative: str) -> bool:
 #     (default)                              395    40   54.0 MB  21.9 MB
 #     TortoiseHg                              99     6   46.3 MB  23.4 MB  <- replaced
 #
-# The directory count matters as much as the megabytes: it is the number of
-# .guidsForInstaller.xml files that have to be maintained for the life of the
-# product, and directories created once can never be cleanly retired.
+# Watch the directory count as much as the megabytes. Every directory needs a
+# GUID entry kept for the life of the product, and one created can never be
+# cleanly retired.
 #
-# Everything is trimmed by default now. The rule for what may go in
-# TRIM_UNIMPORTED_*, the set that cannot be turned off individually: a grep over
-# the shipped mercurial/ and hgext/ trees finds NO import of it, or finds only
-# imports guarded by try/except. Anything whose only importer is a real (if
-# unused) code path belongs under TRIM_HGEXT, which --no-trim-hgext can restore.
-#
-# Verify with:
+# All three passes are on by default. To qualify for TRIM_UNIMPORTED_*, which
+# has no flag of its own, nothing in the shipped mercurial/ and hgext/ trees
+# may import it, or the only imports are inside a try/except. Anything with a
+# real importer goes in TRIM_HGEXT instead, which --no-trim-hgext restores.
+# Check with:
 #     grep -rl "import <name>" lib/mercurial lib/hgext --include=*.py
 
-# Third-party top-level entries under lib/ that nothing in the payload imports.
-# rust/hgcli/pyoxidizer.bzl pip-installs contrib/packaging/requirements-windows-py3.txt
-# on Windows "for convenience"; most of what that pulls in is Mercurial's own
-# test and release tooling rather than anything hg uses at run time.
+# Top-level entries under lib/ that nothing in the payload imports. On Windows
+# pyoxidizer.bzl pip-installs all of requirements-windows-py3.txt "for
+# convenience", which is mostly Mercurial's own test and release tooling.
 TRIM_UNIMPORTED_PACKAGES = {
     # pytest, vcrpy and their dependency closure. requirements-windows.txt.in
     # asks for pytest-vcr with the comment "Needed by the phabricator tests".
@@ -236,43 +216,33 @@ TRIM_UNIMPORTED_FILES = {
     "_msi.pyd", "winsound.pyd", "_zoneinfo.pyd",
 }
 
-# Matched against the start of the name, because the CPython ABI tag in a
-# .pyd filename moves with the embedded interpreter version.
+# Matched on the start of the name, because the ABI tag in a .pyd filename
+# moves with the interpreter version.
 #
-# _curses is the exception to "no importer": mercurial/color.py,
-# mercurial/crecord.py and hgext/histedit.py all import it, and all three do so
-# inside a try/except that falls back cleanly. crecord is the `hg commit -i`
-# chunk-selection UI, which Chorus never invokes; color.py loses terminfo
-# lookup, which does nothing on Windows anyway.
+# _curses is the exception to "no importer": color.py, crecord.py and
+# histedit.py all import it inside a try/except that falls back cleanly.
+# crecord is the `hg commit -i` UI, which Chorus never invokes.
 TRIM_UNIMPORTED_PREFIXES = ("_curses",)
 
-# Data under lib/mercurial/ that Mercurial does not read from there. Both are
-# copies STAGING_RULES_APP makes at the top level, and the top-level copy is
-# the live one: i18n.py resolves locale through os.path.join(datapath,
-# 'locale') and templater.templatedir() through datapath + b'templates', where
-# datapath is the directory holding hg.exe. DROP_DIRECTORIES already removes
-# those live copies, so these are dead weight twice over.
+# Data under lib/mercurial/ that hg does not read from there. It reads locale
+# and templates from beside hg.exe, and DROP_DIRECTORIES already removes those
+# copies, so these are dead weight twice over.
 #
-# lib/mercurial/helptext is deliberately NOT here. That one is live: help.py
-# reads it with open_resource(b'mercurial.helptext', ...), which resolves
-# through importlib to lib/, so trimming it would break `hg help <topic>`.
+# helptext is deliberately not here: hg does read that one from lib/, so
+# trimming it would break `hg help <topic>`.
 TRIM_DEAD_DATA = {"locale", "templates"}
 
-# hgext extensions Chorus never enables, and the third-party packages whose
-# only importer is one of them. Trimmed by default, restored by
-# --no-trim-hgext.
+# hgext extensions Chorus never enables, plus the packages only they import.
+# Trimmed by default; --no-trim-hgext restores them.
 #
-# These are live code paths rather than dead weight, so this was opt-in at
-# first. It became the default once the full LibChorus test suite passed on
-# Windows against a payload built this way -- that suite exercises clone, pull,
-# push, commit, merge, update and log, which is the ground truth this package
-# exists to serve. What remains reachable is a config file outside this package
-# enabling one of these extensions, which is what --no-trim-hgext is for.
+# Unlike the lists above these are live code paths, so this was opt-in until
+# the full LibChorus suite passed on Windows against a payload built this way.
+# What is still reachable is a config file outside this package enabling one of
+# them, which is what the flag is for.
 #
-# Chorus enables exactly eol, hgext.graphlog and convert, in the payload's own
-# mercurial.ini, plus the vendored fixutf8. All four are kept, as is everything
-# not named here -- a denylist, so an extension a later Mercurial adds ships by
-# default.
+# Chorus enables eol, hgext.graphlog and convert in the payload's mercurial.ini,
+# plus the vendored fixutf8. Those are kept, as is anything not named here --
+# this is a denylist, so an extension a later Mercurial adds ships by default.
 TRIM_HGEXT = {
     "absorb", "acl", "beautifygraph", "blackbox", "bookflow", "bugzilla",
     "censor", "children", "churn", "clonebundles", "closehead",
@@ -285,49 +255,35 @@ TRIM_HGEXT = {
     "win32mbcs", "win32text", "zeroconf",
 }
 
-# Reached only from an extension in TRIM_HGEXT, so they go with it:
-# hgext/highlight/highlight.py is the only importer of pygments, and
-# hgext/git/gitutil.py the only importer of pygit2. cffi and pycparser are
-# pygit2's dependencies.
+# Reached only from an extension in TRIM_HGEXT, so they go with it: highlight
+# is the only importer of pygments, git the only importer of pygit2, and cffi
+# and pycparser are pygit2's dependencies.
 TRIM_HGEXT_PACKAGES = {"pygments", "pygit2", "cffi", "pycparser"}
 TRIM_HGEXT_PREFIXES = ("_cffi_backend",)
 
-# Deliberately empty, and libffi-7.dll must never be put back in it.
+# Deliberately empty. libffi-7.dll was here once, on the assumption that a
+# library named libffi belonged to cffi. It does not: lib/_ctypes.pyd is its
+# only importer, and mercurial/win32.py imports ctypes at module scope, so
+# trimming it produced an hg.exe that could not run any command.
 #
-# It was here once, on the assumption that a library named libffi belonged to
-# cffi. It does not: lib/_ctypes.pyd is the only thing in the payload that
-# imports it, and _ctypes is what the stdlib ctypes module is built on.
-# mercurial/win32.py imports ctypes at module scope, so trimming libffi-7.dll
-# produced an hg.exe that could not run any command at all:
-#
-#     File "mercurial.win32", line 11, in <module>
-#     ImportError: DLL load failed while importing _ctypes:
-#                  The specified module could not be found.
-#
-# check_native_dependencies() below now catches this at build time. Adding a
-# DLL here needs a reason from its import table, not from its name.
+# Put a DLL here only for a reason found in its import table, never its name.
+# check_native_dependencies() below now catches this at build time.
 TRIM_HGEXT_FILES: set = set()
 
 
 # Python source, dropped by default and restored by --no-trim-sources.
 #
-# hg.exe does not need it. Its resource index carries a separate path for each
-# module's source and its bytecode -- lib\\mercurial\\util.py in one blob
-# section, lib\\mercurial\\__pycache__\\util.cpython-39.pyc in another (both
-# UTF-16, which is why grepping the binary for them as ASCII finds nothing) --
-# and the bytecode is PEP 552 unchecked-hash, so nothing ever validates it
-# against the source it came from.
+# hg.exe does not need it: its resource index records the source and the
+# bytecode as separate paths, and the bytecode is PEP 552 unchecked-hash, so
+# nothing ever validates one against the other.
 #
-# What is lost is source lines in tracebacks: an hg crash still reports the
-# file, line and function, but the offending line itself is blank. Chorus
-# surfaces hg's stderr, so that is a real if modest cost to diagnosis, which is
-# what --no-trim-sources buys back when a crash needs investigating.
+# What you lose is the source line in a traceback. A crash still names the
+# file, line and function, but the line itself comes out blank. Use
+# --no-trim-sources when a crash needs investigating.
 #
-# The rule enforced below is that a .py is removed only when its bytecode is
-# actually present. Against the official 7.0.1 x64 MSI the pairing is exact --
-# 1266 .py, 1266 .pyc, no orphan on either side -- but a Mercurial that ships a
-# module PyOxidizer does not compile would otherwise be made unimportable, so
-# the check is on the removal rather than on a count.
+# A .py is only removed when its bytecode is actually present, so this cannot
+# make a module unimportable if a later Mercurial ships something PyOxidizer
+# does not compile.
 
 
 def _sources_with_bytecode(stage: pathlib.Path) -> set:
@@ -406,20 +362,17 @@ def _pe_imported_dlls(path: pathlib.Path) -> list:
 def check_native_dependencies(payload: pathlib.Path, removed: set) -> None:
     """Refuse to ship a payload whose binaries need a file we took out.
 
-    A trimmed or dropped DLL is invisible until someone runs hg.exe on
-    Windows, and then it is fatal rather than degraded: the import that needs
-    it is usually at module scope. This walks the .pyd/.dll/.exe files that
-    survived, reads their PE import tables, and fails the build if any of them
-    names a file this script removed and did not put back.
+    A missing DLL stays invisible until someone runs hg.exe on Windows, and
+    then it is fatal rather than degraded, because the import that needs it is
+    usually at module scope. This reads the PE import table of every surviving
+    .pyd/.dll/.exe and fails the build if one needs a file we removed.
 
-    Only names this script actually removed are considered, so the system DLLs
-    every binary imports -- kernel32, the api-ms-win-crt-* set -- are ignored.
+    Only names this script removed count, so the system DLLs every binary
+    imports are ignored.
 
     A name is looked for beside the binary that needs it and in the payload
-    root, which is where Windows resolves it from. Asking whether the name
-    exists anywhere in the tree would let an unrelated file in some other
-    directory answer for it: delete lib/libffi-7.dll, leave a copy in
-    lib/decoy/, and _ctypes.pyd can no longer load while the check passes.
+    root, which is where Windows resolves it from. Asking whether it exists
+    anywhere in the tree would let an unrelated file answer for it.
     """
     removed = {name.lower() for name in removed}
     beside_exe = {p.name.lower() for p in payload.iterdir() if p.is_file()}
@@ -477,13 +430,11 @@ def _hgext_module(relative: str) -> str | None:
 
 def is_trimmed(relative: str, trim_hgext: bool = True) -> str | None:
     """Why this payload path is being trimmed, or None to keep it."""
-    # Decide a __pycache__ entry exactly as its module would be decided.
-    # Without this, trimming a single-file module such as lib/six.py leaves
-    # lib/__pycache__/six.cpython-39.pyc behind: the rules match on the
-    # top-level name under lib/, which for that path is "__pycache__" and
-    # matches nothing. Orphan bytecode is still importable, so the module is
-    # not actually gone -- and lib/__pycache__ survives as a directory, which
-    # costs a .guidsForInstaller.xml for the life of the product.
+    # Decide a __pycache__ entry the same way as its module. Without this,
+    # trimming lib/six.py leaves lib/__pycache__/six.cpython-39.pyc behind,
+    # because the rules match on the top-level name under lib/, which for that
+    # path is "__pycache__". Orphan bytecode is still importable, so the module
+    # would not really be gone, and the directory would survive with it.
     parts = relative.split("/")
     if len(parts) >= 2 and parts[-2] == "__pycache__" and relative.endswith(".pyc"):
         stem = parts[-1].split(".cpython")[0]
@@ -551,25 +502,18 @@ def regenerate_guids(here: pathlib.Path, payload: pathlib.Path,
                      nuget_source: str | None = None) -> int:
     """Allocate MSI component GUIDs for any payload file lacking one.
 
-    The GUIDs live in .guidsForInstaller.xml files inside the payload itself and
-    pin per-file MSI component identities, so a file the new Mercurial adds
-    needs one allocating and a file it drops keeps its old entry for continuity.
-    SIL.BuildTasks' MakeWixForDirTree writes them into the tree it scans, so
-    they are updated in place here.
+    The GUIDs pin per-file MSI component identities, so a file a new Mercurial
+    adds needs one allocated, and a file it drops keeps its old entry.
+    MakeWixForDirTree writes them into the tree it scans, so they are updated
+    in place.
 
-    Any newly allocated id is listed afterwards, and is worth reading rather
-    than skimming: an id that looks like an existing file under a different name
-    is a rename, and has just been handed a second installer identity. The move
-    from the TortoiseHg build to this one contains one by construction --
-    contrib/hgk became contrib/hgk.tcl, which is the name Mercurial's own
-    installers use -- so expect the first run after that move to allocate a very
-    large number of ids and read the list for the ones that are not simply the
-    new lib/ layout.
+    Read the list of new ids it prints rather than skimming it: an id that
+    looks like an existing file under a different name is a rename that has
+    just been given a second installer identity.
 
-    assets/regen-guids.proj drives the task directly. Chorus has an equivalent
-    MakeWixForDistFiles target, but reaching it means compiling ChorusHub and
-    therefore LibChorus, a net462 WinForms build that the task does not need.
-    See the comments in the .proj for what has to stay in step with Chorus.
+    assets/regen-guids.proj drives the task directly, rather than going through
+    Chorus's equivalent MakeWixForDistFiles target, which would mean compiling
+    ChorusHub and LibChorus for a task that only walks a directory.
     """
     project = here / REGEN_PROJECT
     if not project.is_file():
@@ -639,23 +583,22 @@ def check_guids(here: pathlib.Path, payload: pathlib.Path,
     """Verify the GUID files describe the payload, without writing anything.
 
     Runs MakeWixForDirTree again with CheckOnly, which allocates nothing and
-    instead errors out naming what it would have had to allocate. Run straight
-    after regenerate_guids(), where it is a post-condition rather than a
-    question: everything has just been allocated, so a complaint here means
-    something is wrong rather than something is new.
+    errors out naming what it would have had to allocate. It runs straight
+    after regenerate_guids(), where everything has just been allocated, so any
+    complaint means something is wrong rather than something is new.
 
-    Three things it catches that the regeneration itself does not report:
+    It catches three things the regeneration does not report:
 
-      * a file with no GUID anywhere, which after a successful regeneration
-        means the task did not write what it said it wrote;
-      * a GUID still held only in a per-directory .guidsForInstaller.xml and
-        not in the consolidated file, which is what says whether the
-        per-directory files can finally be deleted;
-      * a per-directory file and the consolidated file disagreeing about one
+      * a file with no GUID anywhere, meaning the task did not write what it
+        said it wrote;
+      * a GUID held only in a per-directory .guidsForInstaller.xml and not in
+        the consolidated one, which is what tells you whether those files can
+        finally be deleted;
+      * a per-directory file and the consolidated file disagreeing about an
         id, which is two GUIDs claiming one installer component.
 
-    The check is skipped along with the regeneration under --no-regen-guids,
-    since it needs the same .NET SDK and the same restored package.
+    Skipped along with the regeneration under --no-regen-guids, since it needs
+    the same SDK and package.
     """
     project = here / REGEN_PROJECT
     print("\nverifying the GUID files describe the payload")
@@ -741,15 +684,12 @@ def documentation_build_skipped(module):
     """Neuter the HTML documentation step in the layout build.
 
     create_pyoxidizer_install_layout() calls build_docs_html(), which shells
-    out to `setup.py build_doc --html` and so needs docutils importable by
-    whichever interpreter is running this script. Upstream gets that from the
-    bootstrap venv contrib/packaging/packaging.py creates from requirements.txt;
-    we call into hgpackaging directly and so never have it.
+    out to `setup.py build_doc --html` and needs docutils importable by
+    whichever interpreter runs this script. Upstream gets that from a bootstrap
+    venv we never create.
 
-    Nothing downstream misses it: the only staging rule that consumes the
-    result is a doc/*.html glob, which simply matches nothing, and doc/ is
-    dropped. doc/style.css is a rule of its own and is staged either way, into
-    the same dropped directory.
+    Nothing misses it: the only rule that consumes the result is a doc/*.html
+    glob, which then matches nothing, and doc/ is dropped anyway.
     """
     original = module.build_docs_html
 
@@ -785,10 +725,10 @@ def assemble_payload(stage: pathlib.Path, payload: pathlib.Path,
 
     before = files_in(payload)
 
-    # Every GUID file in the payload, wherever it sits, is carried across and
-    # restored afterwards. A GUID has to stay attached to its path for the life
-    # of the product, and an entry has to outlive the file it describes so the
-    # installer can still remove it.
+    # Every GUID file, wherever it sits, is carried across and restored
+    # afterwards: a GUID must stay attached to its path for the life of the
+    # product, and outlive the file it describes so the installer can still
+    # remove it.
     guids = {relative: (payload / relative).read_bytes()
              for relative in sorted(before)
              if _is_guid_file(relative.rsplit("/", 1)[-1])}
