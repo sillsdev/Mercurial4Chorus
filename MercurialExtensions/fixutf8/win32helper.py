@@ -22,9 +22,6 @@ from ctypes.wintypes import *
 import os, sys, threading
 import ctypes, msvcrt
 
-usecpmap = True
-mapcp = None
-
 # Using ctypes we can call the unicode versions of win32 api calls that
 # python does not call.
 if sys.platform == "win32" and windll:
@@ -168,10 +165,3 @@ else:
 	win32getargs = False
 	hStdOut = 0
 	hStdErr = 0
-
-def uisetup(ui):
-	global usecpmap, mapcp
-	usecpmap = ui.config(b'fixutf8', b'usecpmap', usecpmap)
-	if usecpmap:
-		import cpmap
-		mapcp = cpmap.reduce
