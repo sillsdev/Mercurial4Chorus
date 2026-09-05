@@ -102,8 +102,29 @@ def _is_guid_file(name: str) -> bool:
     return name == GUID_FILE or name == CONSOLIDATED_GUID_FILE
 
 
-def die(msg: str) -> None:
+# Where die(payload_wiped=True) tells you to restore from, relative to the
+# repository. main() sets it once --output is known; None means --output put
+# the payload somewhere git cannot reach.
+PAYLOAD_PATH: str | None = "win/Mercurial"
+
+
+def die(msg: str, payload_wiped: bool = False) -> None:
+    """Print *msg* and stop.
+
+    Pass *payload_wiped* from anything that fails after assemble_payload() has
+    emptied the payload directory. What is on disk is then a half-finished
+    build, and the last thing printed should be how to get the committed one
+    back -- `restore` alone would leave behind any file the new payload added.
+    """
     print("error: %s" % msg, file=sys.stderr)
+    if payload_wiped and PAYLOAD_PATH:
+        print("\n%s has already been replaced. Put the committed one back with:"
+              "\n  git restore %s && git clean -fdq %s"
+              % (PAYLOAD_PATH, PAYLOAD_PATH, PAYLOAD_PATH), file=sys.stderr)
+    elif payload_wiped:
+        print("\nthe payload has already been replaced, and --output put it"
+              " outside this\nrepository, so git cannot put it back.",
+              file=sys.stderr)
     raise SystemExit(1)
 
 
@@ -405,9 +426,8 @@ def check_native_dependencies(payload: pathlib.Path, removed: set) -> None:
         for consumer, dll in broken:
             print("  %s imports %s, which was removed" % (consumer, dll),
                   file=sys.stderr)
-        die("a trim rule removed a DLL a surviving binary loads. The payload"
-            " is already\n       replaced: git checkout <commit> --"
-            " win/Mercurial")
+        die("a trim rule removed a DLL a surviving binary loads.",
+            payload_wiped=True)
 
     print("native deps: %d binaries, none dangling"
           % sum(1 for p in payload.rglob("*")
@@ -503,9 +523,8 @@ def check_python_imports(stage: pathlib.Path, trim: bool, trim_hgext: bool) -> N
                   file=sys.stderr)
         die("a trim rule removed a package a surviving module needs. If the"
             " module is\n       reachable only from tooling this payload does"
-            " not ship, add it to\n       IMPORT_ALLOWED and say why. The"
-            " payload is already replaced:\n       git checkout <commit> --"
-            " win/Mercurial")
+            " not ship, add it to\n       IMPORT_ALLOWED and say why.",
+            payload_wiped=True)
 
     print("python imports: %d modules, none reaching a removed package" % len(kept))
 
@@ -579,13 +598,15 @@ def is_trimmed(relative: str, trim_hgext: bool = True) -> str | None:
 REGEN_PROJECT = pathlib.Path("assets") / "regen-guids.proj"
 
 
-def run(command: list, cwd: pathlib.Path | None = None, what: str | None = None) -> None:
+def run(command: list, cwd: pathlib.Path | None = None, what: str | None = None,
+        payload_wiped: bool = False) -> None:
     printable = " ".join(str(part) for part in command)
     print("+ %s" % printable)
     result = subprocess.run([str(part) for part in command],
                             cwd=str(cwd) if cwd else None)
     if result.returncode != 0:
-        die("%s failed with exit code %d" % (what or printable, result.returncode))
+        die("%s failed with exit code %d" % (what or printable, result.returncode),
+            payload_wiped=payload_wiped)
 
 
 def _guid_files(payload: pathlib.Path) -> list:
@@ -624,7 +645,7 @@ def regenerate_guids(here: pathlib.Path, payload: pathlib.Path,
     """
     project = here / REGEN_PROJECT
     if not project.is_file():
-        die("%s is missing" % project)
+        die("%s is missing" % project, payload_wiped=True)
 
     print("\nGUIDs (SIL.BuildTasks %s)" % version)
     before_entries = _guid_entries(payload)
@@ -639,17 +660,18 @@ def regenerate_guids(here: pathlib.Path, payload: pathlib.Path,
     if nuget_source:
         command.append("-p:RestoreAdditionalProjectSources=%s"
                        % pathlib.Path(nuget_source).resolve())
-    run(command, cwd=here, what="dotnet msbuild -t:RegenerateGuids")
+    run(command, cwd=here, what="dotnet msbuild -t:RegenerateGuids",
+        payload_wiped=True)
 
     consolidated = payload / CONSOLIDATED_GUID_FILE
     if not consolidated.is_file():
         die("%s was not written; does SIL.BuildTasks %s have"
-            " ConsolidatedGuidFile?" % (consolidated, version))
+            " ConsolidatedGuidFile?" % (consolidated, version), payload_wiped=True)
 
     after = _guid_files(payload)
     if not after:
         die("no %s files under %s; did the task actually run?"
-            % (GUID_FILE, payload))
+            % (GUID_FILE, payload), payload_wiped=True)
 
     added = sorted(set(_guid_entries(payload)) - set(before_entries))
     if added:
@@ -717,10 +739,10 @@ def check_guids(here: pathlib.Path, payload: pathlib.Path,
     print("+ %s" % printable)
     result = subprocess.run([str(part) for part in command], cwd=str(here))
     if result.returncode != 0:
-        die("the payload and its GUID files disagree; see above. %s must not"
-            " be\n       committed until this passes -- an id allocated now and"
-            " lost later is a\n       component that changes identity next"
-            " build. git checkout <commit> -- win/Mercurial" % payload)
+        die("the payload and its GUID files disagree; see above. It must not"
+            " be committed\n       until this passes -- an id allocated now and"
+            " lost later is a component\n       that changes identity next"
+            " build.", payload_wiped=True)
     print("  every file has a GUID, all of them in the consolidated file")
 
 
@@ -1027,6 +1049,12 @@ def main() -> None:
     here = pathlib.Path(__file__).resolve().parent
     payload = (pathlib.Path(args.output).resolve() if args.output
                else here / "win" / "Mercurial")
+
+    global PAYLOAD_PATH
+    try:
+        PAYLOAD_PATH = payload.relative_to(here).as_posix()
+    except ValueError:
+        PAYLOAD_PATH = None
 
     if os.name != "nt":
         die("building Mercurial for Windows needs Windows")
