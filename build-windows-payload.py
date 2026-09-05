@@ -733,8 +733,14 @@ def hg_command(repo: pathlib.Path, *args: str) -> str:
     return result.stdout.strip()
 
 
+def _working_copy_changes(repo: pathlib.Path) -> list:
+    """What hg status reports: modified, added, removed, missing, unknown."""
+    return [line for line in hg_command(repo, "status").splitlines() if line.strip()]
+
+
 def build_staging_tree(hg: pathlib.Path, tag: str | None, target_triple: str,
-                       stage: pathlib.Path) -> pathlib.Path:
+                       stage: pathlib.Path, allow_dirty: bool = False
+                       ) -> pathlib.Path:
     """Build Mercurial and return the staging tree its packaging produces.
 
     This drives Mercurial's own contrib/packaging code rather than
@@ -745,13 +751,35 @@ def build_staging_tree(hg: pathlib.Path, tag: str | None, target_triple: str,
     if not (packaging / "hgpackaging" / "pyoxidizer.py").is_file():
         die("%s does not look like a Mercurial checkout (no hgpackaging)" % hg)
 
+    # Before the update, not after. `hg update` carries compatible edits
+    # across rather than refusing, and `identify --tags` prints the tag with no
+    # sign of them -- the + that marks a dirty working copy is on the node id,
+    # which --tags does not show. So a modified checkout would build, ship its
+    # modifications, and report itself as the tag.
+    changes = _working_copy_changes(hg)
+    if changes and not allow_dirty:
+        print("error: %s has uncommitted changes:" % hg, file=sys.stderr)
+        for line in changes[:15]:
+            print("  %s" % line, file=sys.stderr)
+        if len(changes) > 15:
+            print("  ... and %d more" % (len(changes) - 15), file=sys.stderr)
+        die("the build installs the working copy, not the tag, so these would"
+            " ship.\n       Commit, revert or shelve them, or pass"
+            " --allow-dirty.")
+
     if tag:
         print("updating %s to %s" % (hg, tag))
         hg_command(hg, "update", tag)
 
+    dirty = bool(_working_copy_changes(hg))
     tags = hg_command(hg, "identify", "--tags").split()
-    print("building Mercurial %s for %s" % (" ".join(tags) or "(untagged)",
-                                            target_triple))
+    print("building Mercurial %s%s for %s"
+          % (" ".join(tags) or "(untagged)",
+             " plus uncommitted changes" if dirty else "", target_triple))
+    if dirty:
+        print("warning: building a modified checkout; this payload is not the"
+              " tag it names.\n         setuptools_scm marks"
+              " mercurial/__version__.py, MercurialVersion will not.")
     if tag and DEFAULT_HG_TAG not in tags:
         print("note: building %s, not the %s this payload is meant to be"
               % (tag, DEFAULT_HG_TAG))
@@ -945,6 +973,11 @@ def main() -> None:
         help="PyOxidizer target to build for (default: %(default)s)",
     )
     parser.add_argument(
+        "--allow-dirty", action="store_true",
+        help="build even though the Mercurial checkout has uncommitted"
+             " changes, which the payload will then contain",
+    )
+    parser.add_argument(
         "--output",
         help="payload directory to refresh, which is emptied first (default:"
              " win/Mercurial beside this script)",
@@ -1002,7 +1035,7 @@ def main() -> None:
     if not hg.is_dir():
         die("no Mercurial checkout at %s (pass --hg-source)" % hg)
     stage = build_staging_tree(hg, args.tag, args.target_triple,
-                               here / "build" / "stage")
+                               here / "build" / "stage", args.allow_dirty)
 
     if not (stage / "hg.exe").is_file():
         die("the build produced no hg.exe in %s" % stage)

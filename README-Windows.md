@@ -118,6 +118,15 @@ Expect the build to take tens of minutes. `--no-regen-guids` skips the only step
 A directory holding neither `hg.exe` nor `mercurial.ini` nor a `.guidsForInstaller` file is not a
 payload, so the script refuses to empty it; `--force` says you meant it anyway.
 
+The build also refuses to start if `..\hg` has uncommitted changes of any kind — modified, added,
+removed, missing or untracked. It is not enough to pass `--tag`: `hg update` carries compatible
+edits across rather than refusing them, and `hg identify --tags` shows no sign of them, because
+the `+` that marks a dirty working copy is on the node id and `--tags` does not print it. A
+modified checkout would therefore build, ship its modifications, and report itself as the tag.
+`--allow-dirty` builds anyway and labels the run; `setuptools_scm` also marks the version it
+writes into `mercurial/__version__.py`, though `MercurialVersion` in the csproj will still claim
+the release.
+
 ## Trimming
 
 Mercurial's Windows install layout carries a great deal that Chorus cannot reach:
