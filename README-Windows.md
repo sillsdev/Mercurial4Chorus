@@ -199,6 +199,8 @@ it keeps under `lib/` and fails if one reaches a top-level entry the rules remov
 imports that run on import count — not those inside a `try`, a function, or an `if
 TYPE_CHECKING:`. `IMPORT_ALLOWED` lists the handful of modules that legitimately import something
 removed because nothing hg runs can reach them; adding to it means establishing that first.
+`test-build-windows-payload.py` pins which constructs count and which do not; run it after
+touching that code.
 
 ## Installer GUIDs
 

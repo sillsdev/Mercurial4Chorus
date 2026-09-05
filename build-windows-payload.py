@@ -434,29 +434,56 @@ def check_native_dependencies(payload: pathlib.Path, removed: set) -> None:
                 if p.suffix.lower() in (".pyd", ".dll", ".exe")))
 
 
+# Compound statements _runs_on_import() does not enter. A try is where an
+# optional import belongs, and a function body waits to be called. A class body
+# does run at definition, but an import there is deliberately not treated as a
+# payload dependency. TryStar is except*, which only exists from 3.11.
+_NOT_ON_IMPORT = tuple(
+    node for node in (getattr(ast, name, None) for name in
+                      ("Try", "TryStar", "FunctionDef", "AsyncFunctionDef",
+                       "ClassDef"))
+    if node is not None)
+
+# match, which only exists from 3.10.
+_MATCH = getattr(ast, "Match", None)
+
+
+def _is_typechecking(test) -> bool:
+    """Is *test* the `if TYPE_CHECKING:` guard, in any of its spellings?"""
+    return any((isinstance(node, ast.Name) and node.id == "TYPE_CHECKING")
+               or (isinstance(node, ast.Attribute) and node.attr == "TYPE_CHECKING")
+               for node in ast.walk(test))
+
+
 def _runs_on_import(body: list) -> list:
     """The statements in *body* that run when the module is imported.
 
-    Descends into `if` and `with`, which run, but not into `try`, functions or
-    classes, which is where an optional import belongs. `if TYPE_CHECKING:`
-    does not run either: Mercurial uses it to point pytype at the non-vendored
-    attrs, and taking those blocks at face value flags two dozen modules.
-    """
-    def typechecking(test) -> bool:
-        return any((isinstance(n, ast.Name) and n.id == "TYPE_CHECKING")
-                   or (isinstance(n, ast.Attribute) and n.attr == "TYPE_CHECKING")
-                   for n in ast.walk(test))
+    Descends into every compound statement whose body runs on the way past --
+    `if`, `for`, `while`, `with`, `match`, and the `else` of the ones that have
+    one -- but not into the statements in _NOT_ON_IMPORT.
 
+    `if TYPE_CHECKING:` does not run either: Mercurial uses it to point pytype
+    at the non-vendored attrs, and taking those blocks at face value flags two
+    dozen modules for a package that is correctly trimmed. Its `else` does run,
+    so that branch is still followed.
+    """
     runs = []
     for node in body:
+        if isinstance(node, _NOT_ON_IMPORT):
+            continue
         if isinstance(node, ast.If):
-            if not typechecking(node.test):
+            if not _is_typechecking(node.test):
                 runs += _runs_on_import(node.body)
             runs += _runs_on_import(node.orelse)
-        elif isinstance(node, ast.With):
+        elif isinstance(node, (ast.For, ast.AsyncFor, ast.While)):
             runs += _runs_on_import(node.body)
-        elif not isinstance(node, (ast.Try, ast.FunctionDef, ast.AsyncFunctionDef,
-                                   ast.ClassDef)):
+            runs += _runs_on_import(node.orelse)
+        elif isinstance(node, (ast.With, ast.AsyncWith)):
+            runs += _runs_on_import(node.body)
+        elif _MATCH is not None and isinstance(node, _MATCH):
+            for case in node.cases:
+                runs += _runs_on_import(case.body)
+        else:
             runs.append(node)
     return runs
 
