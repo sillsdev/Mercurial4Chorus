@@ -503,8 +503,22 @@ def _imported_on_import(source: pathlib.Path) -> set:
     return names
 
 
+def _module_of(entry: str) -> str | None:
+    """The name an `import` would use for a top-level entry under lib/.
+
+    A directory is a package and keeps its name. `six.py` is the module `six`.
+    A compiled module carries an ABI tag, so `_curses.cp39-win_amd64.pyd` is
+    `_curses`. Anything left -- a DLL, a `.dist-info` -- no import can name.
+    """
+    if entry.endswith(".py"):
+        return entry[:-3]
+    if entry.endswith(".pyd"):
+        return entry.split(".")[0]
+    return entry if "." not in entry else None
+
+
 def check_python_imports(stage: pathlib.Path, trim: bool, trim_hgext: bool) -> None:
-    """Refuse to ship a payload whose own modules import something we removed.
+    """Refuse to build a payload whose own modules import something removed.
 
     check_native_dependencies() reads PE import tables and so sees none of
     this. A trim rule can take out a package that a surviving module imports at
@@ -516,6 +530,9 @@ def check_python_imports(stage: pathlib.Path, trim: bool, trim_hgext: bool) -> N
     and only an import that runs when the module is imported. Both halves are
     re-derived from the same rules here rather than passed in, so this asks its
     question of the rules as they stand rather than of one run's bookkeeping.
+
+    Nothing here reads the payload, so main() runs it before assemble_payload()
+    empties it: a rule caught out this way then costs nothing to recover from.
     """
     seen: dict = {}
     gone: dict = {}
@@ -534,7 +551,19 @@ def check_python_imports(stage: pathlib.Path, trim: bool, trim_hgext: bool) -> N
         if not removed and relative.endswith(".py") and relative.startswith("lib/"):
             kept.append((relative, source))
 
-    dropped_whole = {entry for entry in seen if gone.get(entry, 0) == seen[entry]}
+    # Compare module names, not file names: the rules remove `six.py` and
+    # `_curses.cp39-win_amd64.pyd`, while an import says `six` and `_curses`.
+    # A name some surviving entry still provides is not removed at all.
+    removed_modules, surviving_modules = set(), set()
+    for entry, total in seen.items():
+        module = _module_of(entry)
+        if module is None:
+            continue
+        if gone.get(entry, 0) == total:
+            removed_modules.add(module)
+        else:
+            surviving_modules.add(module)
+    dropped_whole = removed_modules - surviving_modules
     broken = []
     for relative, source in kept:
         if relative in IMPORT_ALLOWED:
@@ -550,8 +579,7 @@ def check_python_imports(stage: pathlib.Path, trim: bool, trim_hgext: bool) -> N
                   file=sys.stderr)
         die("a trim rule removed a package a surviving module needs. If the"
             " module is\n       reachable only from tooling this payload does"
-            " not ship, add it to\n       IMPORT_ALLOWED and say why.",
-            payload_wiped=True)
+            " not ship, add it to\n       IMPORT_ALLOWED and say why.")
 
     print("python imports: %d modules, none reaching a removed package" % len(kept))
 
@@ -1101,12 +1129,13 @@ def main() -> None:
     trim_hgext = trim and not args.no_trim_hgext
     trim_sources = trim and not args.no_trim_sources
 
+    check_python_imports(stage, trim, trim_hgext)
+
     added, removed, dropped, trimmed, removed_names = assemble_payload(
         stage, payload, trim=trim, trim_hgext=trim_hgext,
         trim_sources=trim_sources, force=args.force)
 
     check_native_dependencies(payload, removed_names)
-    check_python_imports(stage, trim, trim_hgext)
 
     if trimmed:
         total_files = sum(n for n, _ in trimmed.values())

@@ -45,27 +45,31 @@ bwp = _load("build-windows-payload")
 
 # A package every trim rule removes in full, and one the payload keeps.
 REMOVED = "fuzzywuzzy"        # in TRIM_UNIMPORTED_PACKAGES
+REMOVED_LAYOUT = ("lib/%s/__init__.py" % REMOVED,)
 KEPT = "lib/mercurial/probe.py"
 
 
 class StageMixin:
     """A two-file staging tree: one package trimmed away, one module kept."""
 
-    def stage_with(self, source: str, module: str = KEPT) -> pathlib.Path:
+    def stage_with(self, source: str, module: str = KEPT,
+                   removed: tuple = REMOVED_LAYOUT) -> pathlib.Path:
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         stage = pathlib.Path(tmp.name)
-        removed = stage / "lib" / REMOVED
-        removed.mkdir(parents=True)
-        (removed / "__init__.py").write_text("")
+        for relative in removed:
+            gone = stage / relative
+            gone.parent.mkdir(parents=True, exist_ok=True)
+            gone.write_text("")
         kept = stage / module
         kept.parent.mkdir(parents=True, exist_ok=True)
         kept.write_text(source + "\n")
         return stage
 
-    def check(self, source: str, module: str = KEPT) -> bool:
+    def check(self, source: str, module: str = KEPT,
+              removed: tuple = REMOVED_LAYOUT) -> bool:
         """Does check_python_imports() reject a payload built from *source*?"""
-        stage = self.stage_with(source, module)
+        stage = self.stage_with(source, module, removed)
         noise = io.StringIO()
         try:
             with contextlib.redirect_stdout(noise), contextlib.redirect_stderr(noise):
@@ -74,11 +78,15 @@ class StageMixin:
             return True
         return False
 
-    def assertRejected(self, source: str, module: str = KEPT) -> None:
-        self.assertTrue(self.check(source, module), "should have been rejected")
+    def assertRejected(self, source: str, module: str = KEPT,
+                       removed: tuple = REMOVED_LAYOUT) -> None:
+        self.assertTrue(self.check(source, module, removed),
+                        "should have been rejected")
 
-    def assertAccepted(self, source: str, module: str = KEPT) -> None:
-        self.assertFalse(self.check(source, module), "should have been accepted")
+    def assertAccepted(self, source: str, module: str = KEPT,
+                       removed: tuple = REMOVED_LAYOUT) -> None:
+        self.assertFalse(self.check(source, module, removed),
+                         "should have been accepted")
 
 
 class ImportsThatRun(StageMixin, unittest.TestCase):
@@ -177,6 +185,80 @@ class WhatCountsAsRemoved(StageMixin, unittest.TestCase):
         allowed = sorted(bwp.IMPORT_ALLOWED)[0]
         sibling = allowed.rsplit("/", 1)[0] + "/not_allowlisted.py"
         self.assertRejected("import %s" % REMOVED, module=sibling)
+
+
+class ShapesOfRemoval(StageMixin, unittest.TestCase):
+    """The rules remove packages, plain files and compiled modules alike.
+
+    The name an import uses is not the name on disk for the last two, and
+    comparing the wrong one made two thirds of the trim lists invisible here.
+    """
+
+    def test_package_directory(self):
+        self.assertRejected("import fuzzywuzzy",
+                            removed=("lib/fuzzywuzzy/__init__.py",))
+
+    def test_single_file_module(self):
+        self.assertRejected("import six", removed=("lib/six.py",))
+
+    def test_single_file_module_by_from_import(self):
+        self.assertRejected("from six import moves", removed=("lib/six.py",))
+
+    def test_compiled_module_with_an_abi_tag(self):
+        self.assertRejected("import _curses",
+                            removed=("lib/_curses.cp39-win_amd64.pyd",))
+
+    def test_compiled_module_without_a_tag(self):
+        self.assertRejected("import _msi", removed=("lib/_msi.pyd",))
+
+    def test_a_dll_is_not_an_import_name(self):
+        self.assertAccepted("import tcl86t", removed=("lib/tcl86t.dll",))
+
+    def test_a_partly_trimmed_package_is_not_removed(self):
+        # lib/mercurial keeps probe.py, so trimming its locale does not make
+        # `import mercurial` an import of something gone.
+        self.assertAccepted("import mercurial",
+                            removed=("lib/mercurial/locale/x.rc",))
+
+
+class Fixtures(unittest.TestCase):
+    """The names these tests lean on really are the ones the rules remove."""
+
+    def test_the_fixtures_are_trimmed_by_the_real_rules(self):
+        for relative in ("lib/%s/__init__.py" % REMOVED, "lib/six.py",
+                         "lib/_curses.cp39-win_amd64.pyd", "lib/_msi.pyd",
+                         "lib/tcl86t.dll"):
+            with self.subTest(relative):
+                self.assertIsNotNone(bwp.is_trimmed(relative, True),
+                                     "%s is no longer trimmed" % relative)
+
+    def test_the_kept_module_really_is_kept(self):
+        self.assertIsNone(bwp.is_trimmed(KEPT, True))
+        self.assertFalse(bwp.is_dropped(KEPT))
+
+    def test_no_allowlist_entry_is_dead(self):
+        # pygments/sphinxext.py only survives under --no-trim-hgext, which is
+        # the mode where it would be checked, so "kept in some mode" is the
+        # test. An entry kept in none of them is one nothing can reach.
+        for relative in sorted(bwp.IMPORT_ALLOWED):
+            with self.subTest(relative):
+                self.assertTrue(bwp.is_trimmed(relative, True) is None
+                                or bwp.is_trimmed(relative, False) is None,
+                                "%s is trimmed in every mode" % relative)
+
+
+class ModuleOf(unittest.TestCase):
+    """What an entry under lib/ is called when something imports it."""
+
+    def test_names(self):
+        for entry, want in (("fuzzywuzzy", "fuzzywuzzy"),
+                            ("six.py", "six"),
+                            ("_msi.pyd", "_msi"),
+                            ("_curses.cp39-win_amd64.pyd", "_curses"),
+                            ("tcl86t.dll", None),
+                            ("zipp-3.1.0.dist-info", None)):
+            with self.subTest(entry):
+                self.assertEqual(bwp._module_of(entry), want)
 
 
 class RunsOnImport(unittest.TestCase):
