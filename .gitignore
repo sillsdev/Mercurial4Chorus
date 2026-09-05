@@ -1,2 +1,8 @@
-nuget.exe
-output/
+# Anchored to the repository root. Unanchored these match at any depth, and
+# would quietly leave out a payload directory a later Mercurial ships under
+# one of these names.
+/nuget.exe
+/output/
+/build/
+/artifacts/
+/obj/

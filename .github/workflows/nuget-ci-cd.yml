@@ -10,9 +10,11 @@ on:
   pull_request:
     branches: [ master ]
 
-# Cancel any workflow jobs running if the PR is re-triggered
+# Cancel any workflow jobs running if the PR is re-triggered. head_ref is empty
+# on a push, so without the run_id fallback every push to master would share one
+# group and cancel the one before it -- possibly mid nuget push.
 concurrency:
-  group: ci-${{ github.head_ref }}-group
+  group: ci-${{ github.head_ref || github.run_id }}-group
   cancel-in-progress: true
 
 jobs:
@@ -62,6 +64,9 @@ jobs:
     - name: Move chg binary next to hg prior to upload
       run: mv contrib/chg/chg .
       working-directory: hg
+    - name: Remove the object files that building chg left behind
+      run: rm -f contrib/chg/*.o
+      working-directory: hg
     - name: Set executable bit on hg and chg binaries before upload
       run: chmod +x hg chg
       working-directory: hg
@@ -80,12 +85,31 @@ jobs:
           hg/hg
           hg/hgdemandimport
           hg/hgext
+          hg/hgext3rd
           hg/mercurial
         if-no-files-found: error
 
+  check-fixutf8-bytecode:
+    # The committed fixutf8 .pyc must be PEP 552 checked-hash and match its
+    # sources. A timestamp-based one records the source mtime, git does not
+    # preserve mtimes, so it is rejected everywhere and hg recompiles the
+    # extension on every invocation. Needs CPython 3.9 specifically: the source
+    # hash is keyed by the interpreter's magic number, and 3.9 is what
+    # rust/hgcli/pyoxidizer.bzl embeds.
+    runs-on: ubuntu-22.04
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+    - name: Setup Python 3.9
+      uses: actions/setup-python@82c7e631bb3cdc910f68e0081d67478d79c6982d # v5.1.0
+      with:
+        python-version: "3.9"
+    - name: Check the committed fixutf8 bytecode
+      run: python check-fixutf8-bytecode.py
+
   build:
     runs-on: ubuntu-latest
-    needs: build-python
+    needs: [build-python, check-fixutf8-bytecode]
     steps:
     - name: Checkout
       uses: actions/checkout@v4
@@ -116,7 +140,7 @@ jobs:
       run: chmod +x linux-x64/Mercurial/hg linux-x64/Mercurial/chg
 
     - name: Nuget pack
-      run: dotnet pack -p:PackageVersion=$PackageVersion
+      run: dotnet pack -c Release -p:PackageVersion=$PackageVersion
 
     - name: Upload Artifacts
       uses: actions/upload-artifact@v4

@@ -18,9 +18,9 @@ dotnet pack /p:BuildCounter=1
 
 Output will be found in `artifacts/package/release` directory
 
-To release a nuget package:
+To release a nuget package, push a commit to `master` and the GitHub Actions workflow will
+release the package. The `linux-x64` directory is out-of-date and no longer updated by hand;
+instead, it is updated at packaging time by the GHA workflow. So you cannot create a release
+by hand from the current state of the repo.
 
-```bash
-dotnet pack /p:PreRelease=.
-dotnet nuget push artifacts/package/release/*.nupkg --source https://api.nuget.org/v3/index.json --api-key INSERT_NUGET_API_KEY_HERE
-```
+See [README-Windows.md](/README-Windows.md) for tips on updating the `win/Mercurial` folder.
