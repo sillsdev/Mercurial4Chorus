@@ -70,6 +70,9 @@ jobs:
     - name: Set executable bit on hg and chg binaries before upload
       run: chmod +x hg chg
       working-directory: hg
+    - name: Strip debug symbols from compiled extensions
+      run: find mercurial hgext -name '*.so' -exec strip --strip-unneeded {} +
+      working-directory: hg
     - name: Upload Mercurial build results
       uses: actions/upload-artifact@1746f4ab65b179e0ea60a494b83293b640dd5bba # v4.3.2
       with:
