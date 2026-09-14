@@ -58,6 +58,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import xml.etree.ElementTree as ElementTree
 
 # The Mercurial tag this script expects to see in `../hg`. Will be overridden
 # by `--tag`, but if the Mercurial source tree is NOT at this version, script
@@ -670,19 +671,89 @@ def _guid_files(payload: pathlib.Path) -> list:
                   if p.is_file() and _is_guid_file(p.name))
 
 
-def _guid_entries(payload: pathlib.Path) -> dict:
-    """Every File Id recorded in the payload, mapped to the file recording it."""
-    entries = {}
-    for path in sorted(_guid_files(payload)):
-        text = path.read_text(encoding="utf-8-sig", errors="replace")
-        for identifier in re.findall(r'Id="([^"]+)"', text):
-            entries[identifier] = path
+def _guid_entries(payload: pathlib.Path) -> tuple[dict, list]:
+    """Every File Id in the payload, with its GUID, and any disagreements.
+
+    Parsed as XML rather than scraped, so the GUID travels with the id. An id
+    whose GUID changed is a different installer component wearing an existing
+    name, which a scrape collecting only ids cannot see.
+
+    The second return value lists ids two files give different GUIDs for. The
+    task notices that too, but only for the ids a per-directory file still
+    witnesses, and only while those files exist.
+    """
+    entries: dict = {}
+    conflicts = []
+    for path in _guid_files(payload):
+        try:
+            root = ElementTree.parse(path).getroot()
+        except ElementTree.ParseError as error:
+            die("%s is not valid XML: %s" % (path, error), payload_wiped=True)
+        for node in root.iter("File"):
+            identifier, guid = node.get("Id"), node.get("Guid")
+            if not identifier or not guid:
+                continue
+            if identifier in entries and entries[identifier][0] != guid:
+                conflicts.append((identifier, entries[identifier], (guid, path)))
+            entries.setdefault(identifier, (guid, path))
+    return entries, conflicts
+
+
+def _committed_guid_entries(payload: pathlib.Path,
+                            here: pathlib.Path) -> dict | None:
+    """The GUID entries as HEAD has them, or None when git cannot say.
+
+    The working tree is no baseline. Every way a GUID goes missing -- a bad
+    merge, a hand-edit, deleting a per-directory file -- happens before this
+    script starts, so a reading taken at the top of the run is already missing
+    it. The task then allocates a fresh GUID for any file still present, which
+    reads as a new id rather than as a component that changed identity.
+
+    What "pre-existing" means is committed, so that is what this reads.
+    """
+    try:
+        relative = payload.resolve().relative_to(here.resolve()).as_posix()
+    except ValueError:
+        return None
+    listing = subprocess.run(
+        ["git", "-C", str(here), "ls-tree", "-r", "--name-only", "HEAD", relative],
+        capture_output=True, text=True)
+    if listing.returncode != 0:
+        return None
+
+    entries: dict = {}
+    for name in listing.stdout.split("\n"):
+        name = name.strip()
+        if not name or not _is_guid_file(name.rsplit("/", 1)[-1]):
+            continue
+        blob = subprocess.run(["git", "-C", str(here), "show", "HEAD:%s" % name],
+                              capture_output=True)
+        if blob.returncode != 0:
+            continue
+        try:
+            root = ElementTree.fromstring(blob.stdout)
+        except ElementTree.ParseError:
+            continue
+        for node in root.iter("File"):
+            identifier, guid = node.get("Id"), node.get("Guid")
+            if identifier and guid:
+                entries.setdefault(identifier, (guid, pathlib.PurePosixPath(name)))
     return entries
+
+
+def _guid_differences(before: dict, after: dict) -> tuple[list, list, list]:
+    """Ids added, ids lost, and ids whose GUID changed, between two readings."""
+    added = sorted(set(after) - set(before))
+    removed = sorted(set(before) - set(after))
+    changed = sorted(identifier for identifier in set(before) & set(after)
+                     if before[identifier][0] != after[identifier][0])
+    return added, removed, changed
 
 
 def regenerate_guids(here: pathlib.Path, payload: pathlib.Path,
                      version: str = DEFAULT_SIL_BUILDTASKS_VERSION,
-                     nuget_source: str | None = None) -> int:
+                     nuget_source: str | None = None,
+                     allow_guid_changes: bool = False) -> int:
     """Allocate MSI component GUIDs for any payload file lacking one.
 
     The GUIDs pin per-file MSI component identities, so a file a new Mercurial
@@ -694,6 +765,11 @@ def regenerate_guids(here: pathlib.Path, payload: pathlib.Path,
     looks like an existing file under a different name is a rename that has
     just been given a second installer identity.
 
+    A new id is the benign case, and the only one this used to report. An id
+    that disappears, or keeps its name and changes its GUID, is the one that
+    breaks upgrades on machines that already have the product, so those stop
+    the build unless --allow-guid-changes says the change was meant.
+
     assets/regen-guids.proj drives the task directly, rather than going through
     Chorus's equivalent MakeWixForDistFiles target, which would mean compiling
     ChorusHub and LibChorus for a task that only walks a directory.
@@ -703,7 +779,14 @@ def regenerate_guids(here: pathlib.Path, payload: pathlib.Path,
         die("%s is missing" % project, payload_wiped=True)
 
     print("\nGUIDs (SIL.BuildTasks %s)" % version)
-    before_entries = _guid_entries(payload)
+    # HEAD if git can tell us, since damage usually predates the run; the
+    # working tree only if it cannot, which at least still catches the task.
+    baseline = _committed_guid_entries(payload, here)
+    from_head = baseline is not None
+    if not from_head:
+        baseline, _ = _guid_entries(payload)
+        print("  note: comparing against the working tree, not HEAD -- git"
+              " could not read it")
     before_bytes = {path: path.read_bytes() for path in _guid_files(payload)}
 
     # -restore in the same invocation: the task assembly arrives via
@@ -728,7 +811,9 @@ def regenerate_guids(here: pathlib.Path, payload: pathlib.Path,
         die("no %s files under %s; did the task actually run?"
             % (GUID_FILE, payload), payload_wiped=True)
 
-    added = sorted(set(_guid_entries(payload)) - set(before_entries))
+    after_entries, conflicts = _guid_entries(payload)
+    added, removed, changed = _guid_differences(baseline, after_entries)
+
     if added:
         print("  %d new id(s) -- check for renames, which get a second"
               " installer identity:" % len(added))
@@ -737,24 +822,52 @@ def regenerate_guids(here: pathlib.Path, payload: pathlib.Path,
     else:
         print("  no new ids")
 
-    changed = 0
+    where = "HEAD" if from_head else "the working tree"
+    for identifier in removed:
+        print("  LOST %s (%s had %s, in %s)"
+              % (identifier, where, baseline[identifier][0],
+                 baseline[identifier][1].name), file=sys.stderr)
+    for identifier in changed:
+        print("  CHANGED %s: %s had %s, now %s"
+              % (identifier, where, baseline[identifier][0],
+                 after_entries[identifier][0]), file=sys.stderr)
+    for identifier, (first, first_path), (second, second_path) in conflicts:
+        print("  CONFLICT %s: %s in %s, %s in %s"
+              % (identifier, first, first_path.name, second, second_path.name),
+              file=sys.stderr)
+
+    if removed or changed or conflicts:
+        summary = ("%d lost, %d changed, %d in conflict"
+                   % (len(removed), len(changed), len(conflicts)))
+        if allow_guid_changes:
+            print("  warning: %s; --allow-guid-changes let the build continue."
+                  " Be sure\n           this was meant: an id that stops naming"
+                  " the same component\n           breaks upgrades on machines"
+                  " that already have the product." % summary)
+        else:
+            die("pre-existing installer GUIDs are not as they were: %s. Each id"
+                "\n       must outlive the file it names, or an upgrade cannot"
+                " remove that file\n       from a user's machine. Put the GUID"
+                " files back, or pass\n       --allow-guid-changes if this was"
+                " deliberate." % summary, payload_wiped=True)
+
+    rewritten = 0
     for path in after:
         was = before_bytes.get(path)
         if was is None or was != path.read_bytes():
             print("  %s %s" % ("added  " if was is None else "updated", path))
-            changed += 1
-    if changed:
-        print("  %d of %d file(s) changed" % (changed, len(after)))
+            rewritten += 1
+    if rewritten:
+        print("  %d of %d file(s) changed" % (rewritten, len(after)))
 
-    total = len(_guid_entries(payload))
-    in_consolidated = len(re.findall(
-        r'Id="([^"]+)"', consolidated.read_text(encoding="utf-8-sig",
-                                                errors="replace")))
+    total = len(after_entries)
+    in_consolidated = len(ElementTree.parse(consolidated).getroot()
+                          .findall("File"))
     print("  %s: %d of %d id(s)"
           % (CONSOLIDATED_GUID_FILE, in_consolidated, total))
     if in_consolidated < total:
         print("  warning: the rest are only in the per-directory files")
-    return changed
+    return rewritten
 
 
 def check_guids(here: pathlib.Path, payload: pathlib.Path,
@@ -1095,6 +1208,12 @@ def main() -> None:
              " trying a build of it that is not on nuget.org",
     )
     parser.add_argument(
+        "--allow-guid-changes", action="store_true",
+        help="carry on when a pre-existing installer GUID has been lost,"
+             " changed, or given two values, instead of stopping. Only for a"
+             " change you meant, such as dropping an id committed by mistake",
+    )
+    parser.add_argument(
         "--no-regen-guids", action="store_true",
         help="do not reallocate MSI component GUIDs; skips the only step that"
              " needs the .NET SDK",
@@ -1155,7 +1274,7 @@ def main() -> None:
     regenerated = not args.no_regen_guids
     if regenerated:
         regenerate_guids(here, payload, args.sil_buildtasks_version,
-                         args.nuget_source)
+                         args.nuget_source, args.allow_guid_changes)
         check_guids(here, payload, args.sil_buildtasks_version,
                     args.nuget_source)
 

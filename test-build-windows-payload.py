@@ -261,6 +261,97 @@ class ModuleOf(unittest.TestCase):
                 self.assertEqual(bwp._module_of(entry), want)
 
 
+class GuidEntries(StageMixin, unittest.TestCase):
+    """Reading the GUID files, which now has to carry the GUID as well."""
+
+    def guid_dir(self, files: dict) -> pathlib.Path:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = pathlib.Path(tmp.name)
+        for name, entries in files.items():
+            body = "".join('  <File Id="%s" Guid="%s" />\n' % pair for pair in entries)
+            path = root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text('<?xml version="1.0" encoding="utf-8"?>\n'
+                            "<InstallerMetadata>\n%s</InstallerMetadata>\n" % body,
+                            encoding="utf-8")
+        return root
+
+    def test_id_and_guid_are_both_read(self):
+        root = self.guid_dir({".guidsForInstaller.all.xml": [("a", "G1")]})
+        entries, conflicts = bwp._guid_entries(root)
+        self.assertEqual(entries["a"][0], "G1")
+        self.assertEqual(conflicts, [])
+
+    def test_entries_are_unioned_across_files(self):
+        root = self.guid_dir({".guidsForInstaller.all.xml": [("a", "G1")],
+                              "sub/.guidsForInstaller.xml": [("b", "G2")]})
+        entries, _ = bwp._guid_entries(root)
+        self.assertEqual(sorted(entries), ["a", "b"])
+
+    def test_the_same_guid_in_two_files_is_not_a_conflict(self):
+        root = self.guid_dir({".guidsForInstaller.all.xml": [("a", "G1")],
+                              "sub/.guidsForInstaller.xml": [("a", "G1")]})
+        _, conflicts = bwp._guid_entries(root)
+        self.assertEqual(conflicts, [])
+
+    def test_two_files_disagreeing_is_a_conflict(self):
+        root = self.guid_dir({".guidsForInstaller.all.xml": [("a", "G1")],
+                              "sub/.guidsForInstaller.xml": [("a", "G2")]})
+        _, conflicts = bwp._guid_entries(root)
+        self.assertEqual(len(conflicts), 1)
+        self.assertEqual(conflicts[0][0], "a")
+
+    def test_a_byte_order_mark_is_tolerated(self):
+        root = self.guid_dir({".guidsForInstaller.all.xml": [("a", "G1")]})
+        path = root / ".guidsForInstaller.all.xml"
+        path.write_bytes(b"\xef\xbb\xbf" + path.read_bytes())
+        entries, _ = bwp._guid_entries(root)
+        self.assertEqual(entries["a"][0], "G1")
+
+    def test_malformed_xml_stops_the_build(self):
+        root = self.guid_dir({".guidsForInstaller.all.xml": [("a", "G1")]})
+        (root / ".guidsForInstaller.all.xml").write_text("<InstallerMetadata>")
+        noise = io.StringIO()
+        with contextlib.redirect_stderr(noise):
+            with self.assertRaises(SystemExit):
+                bwp._guid_entries(root)
+
+    def test_a_payload_outside_the_repository_has_no_committed_baseline(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.assertIsNone(
+            bwp._committed_guid_entries(pathlib.Path(tmp.name), HERE))
+
+
+class GuidDifferences(unittest.TestCase):
+    """What changed between the committed GUIDs and the ones on disk."""
+
+    def diff(self, before: dict, after: dict):
+        return bwp._guid_differences(
+            {k: (v, pathlib.PurePosixPath("x")) for k, v in before.items()},
+            {k: (v, pathlib.PurePosixPath("x")) for k, v in after.items()})
+
+    def test_nothing_changed(self):
+        self.assertEqual(self.diff({"a": "G1"}, {"a": "G1"}), ([], [], []))
+
+    def test_an_id_was_added(self):
+        self.assertEqual(self.diff({"a": "G1"}, {"a": "G1", "b": "G2"}),
+                         (["b"], [], []))
+
+    def test_an_id_was_lost(self):
+        self.assertEqual(self.diff({"a": "G1", "b": "G2"}, {"a": "G1"}),
+                         ([], ["b"], []))
+
+    def test_an_id_kept_its_name_and_changed_its_guid(self):
+        self.assertEqual(self.diff({"a": "G1"}, {"a": "G9"}), ([], [], ["a"]))
+
+    def test_all_three_at_once(self):
+        self.assertEqual(
+            self.diff({"a": "G1", "b": "G2"}, {"a": "G9", "c": "G3"}),
+            (["c"], ["b"], ["a"]))
+
+
 class RunsOnImport(unittest.TestCase):
     """_runs_on_import() on its own, where the recursion is easiest to read."""
 
