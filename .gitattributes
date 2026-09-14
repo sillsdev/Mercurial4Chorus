@@ -1,0 +1,6 @@
+# The committed fixutf8 bytecode is PEP 552 checked-hash, keyed to a hash of
+# these files' exact bytes. Git for Windows offers core.autocrlf=true as its
+# installer default, which would check them out CRLF and so invalidate every
+# committed .pyc: the checker reports all three as compiled from something
+# else, and regenerating there keys the bytecode to CRLF and fails CI instead.
+MercurialExtensions/fixutf8/*.py text eol=lf
