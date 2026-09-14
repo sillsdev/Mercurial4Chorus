@@ -33,12 +33,13 @@ v6.5.1: Upgrade to Mercurial 6.5.1
 
 v7.0.1: Upgrade to Mercurial 7.0.1 and remove requirement to depend directly on this package (just depend on Chorus or LibChorus)
     </PackageReleaseNotes>
-    <PackageReadmeFile>docs/README.md</PackageReadmeFile>
+    <PackageReadmeFile>docs/README-nuget.md</PackageReadmeFile>
   </PropertyGroup>
 
   <!-- What to pack -->
   <ItemGroup>
-    <ReadmeFile Include="$(RootDir)\README.md" />
+    <!-- The package page gets its own text; README.md is for the repository. -->
+    <ReadmeFile Include="$(RootDir)\README-nuget.md" />
     <LinuxArtifacts Include="$(RootDir)\linux-x64\**\*.*" />
     <!-- A failed payload build leaves its half-finished tree beside the real
          one, as Mercurial.new or Mercurial.old. Neither belongs in a package. -->
