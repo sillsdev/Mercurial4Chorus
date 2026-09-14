@@ -41,24 +41,34 @@ HASH_BASED = 0b01
 CHECK_SOURCE = 0b10
 
 
+def _sources(root: pathlib.Path) -> list:
+    """Every module under *root*, at any depth, that wants bytecode."""
+    return sorted(source for source in root.rglob("*.py")
+                  if CACHE not in source.parts)
+
+
 def check(root: pathlib.Path) -> list:
     """Every reason the bytecode under *root* is not what it should be."""
     problems = []
-    cache = root / CACHE
 
     for stray in sorted(root.rglob("*.pyo")):
-        problems.append("%s: Python 2 bytecode, which no Python since 3.4 loads"
-                        % stray)
-    for stray in sorted(cache.glob("*.opt-*.pyc")):
+        problems.append("%s: Python 2 bytecode, which no Python since 3.4"
+                        " loads. Delete it." % stray)
+    for stray in sorted(root.rglob("*.opt-*.pyc")):
         problems.append("%s: optimised bytecode, which the embedded interpreter"
-                        " never looks for" % stray)
+                        " never looks for. Delete it." % stray)
 
-    sources = sorted(root.glob("*.py"))
+    sources = _sources(root)
     if not sources:
         problems.append("%s holds no Python sources; is the path right?" % root)
 
-    for source in sources:
-        pyc = cache / ("%s.%s.pyc" % (source.stem, TAG))
+    # cache_from_source() knows both the tag and where __pycache__ goes, so the
+    # expected name is derived rather than spelled out again -- and anything
+    # else found later is, by construction, not one of them.
+    expected = {pathlib.Path(importlib.util.cache_from_source(str(source))): source
+                for source in sources}
+
+    for pyc, source in sorted(expected.items()):
         if not pyc.is_file():
             problems.append("%s: no bytecode beside %s" % (pyc, source.name))
             continue
@@ -84,9 +94,12 @@ def check(root: pathlib.Path) -> list:
             problems.append("%s: does not match %s; it was compiled from"
                             " something else" % (pyc, source.name))
 
-    for pyc in sorted(cache.glob("*.pyc")):
-        if not (root / (pyc.name.split(".")[0] + ".py")).is_file():
-            problems.append("%s: bytecode for a source that is gone" % pyc)
+    for pyc in sorted(root.rglob("*.pyc")):
+        if pyc in expected or ".opt-" in pyc.name:
+            continue
+        problems.append("%s: not bytecode for any source here, built as %s."
+                        " Delete it."
+                        % (pyc, pyc.name.split(".", 1)[-1].rsplit(".", 1)[0]))
 
     return problems
 
@@ -99,6 +112,15 @@ def main() -> None:
             " `uv run --python 3.9 python %s`."
             % (".".join(str(n) for n in sys.version_info[:3]),
                pathlib.Path(__file__).name))
+
+    # The expected .pyc names come from cache_from_source(), which uses the
+    # running interpreter's tag. MAGIC has already tied that to 3.9; this ties
+    # TAG to it too, so the two ways of naming the same interpreter cannot
+    # drift apart when the payload's Python moves.
+    if sys.implementation.cache_tag != TAG:
+        raise SystemExit(
+            "error: this interpreter tags bytecode %s, but TAG says %s."
+            % (sys.implementation.cache_tag, TAG))
 
     root = pathlib.Path(__file__).resolve().parent / EXTENSION
     problems = check(root)
@@ -115,8 +137,8 @@ def main() -> None:
             "The -f matters: that directory's .gitignore excludes *.pyc."
             % (EXTENSION, EXTENSION / CACHE))
 
-    print("fixutf8 bytecode: %d module(s), all checked-hash and matching their"
-          " sources" % len(sorted(root.glob("*.py"))))
+    print("fixutf8 bytecode: %d module(s), all %s, checked-hash and matching"
+          " their sources" % (len(_sources(root)), TAG))
 
 
 if __name__ == "__main__":

@@ -293,9 +293,10 @@ git add -f MercurialExtensions\fixutf8\__pycache__
 The `-f` is not optional: that directory's own `.gitignore` excludes `*.pyc`, so a plain `git add`
 stages nothing and says nothing.
 
-`check-fixutf8-bytecode.py` enforces all of it — a `.pyc` per source, the right magic number,
-checked-hash, hashes that match, no bytecode left behind by a deleted source, and no `.pyo` or
-`.opt-N.pyc`, neither of which any interpreter here will ever load. It must run under CPython 3.9,
+`check-fixutf8-bytecode.py` enforces all of it — a `.pyc` per source at any depth, built for
+`cpython-39` and no other interpreter, the right magic number, checked-hash, hashes that match,
+and nothing else in any `__pycache__`: no orphan, no `.pyo`, no `.opt-N.pyc`. It names anything it
+finds, because the fix is usually to delete the file. It must run under CPython 3.9,
 since importlib keys the source hash with the interpreter's magic number and any other version
 calls every file stale; it says so rather than guessing. The `check-fixutf8-bytecode` job in CI
 runs it, and packing waits on that job.
