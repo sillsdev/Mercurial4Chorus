@@ -1243,10 +1243,16 @@ def main() -> None:
              " changed, or given two values, instead of stopping. Only for a"
              " change you meant, such as dropping an id committed by mistake",
     )
-    parser.add_argument(
+    guids = parser.add_mutually_exclusive_group()
+    guids.add_argument(
         "--no-regen-guids", action="store_true",
         help="do not reallocate MSI component GUIDs; skips the only step that"
              " needs the .NET SDK",
+    )
+    guids.add_argument(
+        "--regen-guids", action="store_true",
+        help="reallocate MSI component GUIDs even under --no-trim, which"
+             " otherwise skips the step",
     )
     args = parser.parse_args()
 
@@ -1305,7 +1311,15 @@ def main() -> None:
     elif args.no_trim:
         print("\ntrimming disabled")
 
+    # --no-trim keeps thousands of files the payload never ships, and every id
+    # allocated for one is kept for the life of the product. So it turns the
+    # GUID step off, and only --regen-guids turns it back on.
     regenerated = not args.no_regen_guids
+    if regenerated and args.no_trim and not args.regen_guids:
+        regenerated = False
+        print("\nnot regenerating GUIDs: --no-trim keeps files the payload never"
+              " ships, and an id\n  allocated for one could never be retired."
+              " Pass --regen-guids to do it anyway.")
     if regenerated:
         regenerate_guids(here, payload, args.sil_buildtasks_version,
                          args.nuget_source, args.allow_guid_changes)
@@ -1333,6 +1347,8 @@ def main() -> None:
            "Commit the payload with .guidsForInstaller.all.xml and the"
            " per-directory files."
            if regenerated else
+           "Do not commit this payload: it has no GUIDs for whatever it added."
+           if args.no_trim else
            "Re-run without --no-regen-guids before committing this payload.")
     )
 

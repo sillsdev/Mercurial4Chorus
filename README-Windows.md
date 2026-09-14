@@ -112,7 +112,9 @@ accepted value. Unlike the previous py2exe-based build, the architecture does **
 the interpreter you launch the script with.
 
 Expect the build to take tens of minutes. `--no-regen-guids` skips the only step that needs the
-.NET SDK.
+.NET SDK. `--no-trim` skips it too, and on purpose: that mode keeps thousands of files the payload
+never ships, every id allocated for one is kept for the life of the product, and none of them can
+be retired. `--regen-guids` allocates them anyway if you really mean to.
 
 `--output DIR` writes somewhere other than `win\Mercurial`, and **replaces that directory**. A
 directory holding neither `hg.exe` nor `mercurial.ini` nor a `.guidsForInstaller` file is not a
