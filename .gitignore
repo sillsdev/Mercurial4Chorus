@@ -6,3 +6,7 @@
 /build/
 /artifacts/
 /obj/
+
+# Where a payload build assembles before swapping the result in.
+/win/*.new/
+/win/*.old/

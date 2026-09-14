@@ -57,7 +57,6 @@ import shutil
 import struct
 import subprocess
 import sys
-import tempfile
 import xml.etree.ElementTree as ElementTree
 
 # The Mercurial tag this script expects to see in `../hg`. Will be overridden
@@ -407,6 +406,9 @@ def check_native_dependencies(payload: pathlib.Path, removed: set) -> None:
     A name is looked for beside the binary that needs it and in the payload
     root, which is where Windows resolves it from. Asking whether it exists
     anywhere in the tree would let an unrelated file answer for it.
+
+    Runs against the tree assemble_payload() built, before swap_payload() puts
+    it in place, so a failure here costs the committed payload nothing.
     """
     removed = {name.lower() for name in removed}
     beside_exe = {p.name.lower() for p in payload.iterdir() if p.is_file()}
@@ -427,8 +429,7 @@ def check_native_dependencies(payload: pathlib.Path, removed: set) -> None:
         for consumer, dll in broken:
             print("  %s imports %s, which was removed" % (consumer, dll),
                   file=sys.stderr)
-        die("a trim rule removed a DLL a surviving binary loads.",
-            payload_wiped=True)
+        die("a trim rule removed a DLL a surviving binary loads.")
 
     print("native deps: %d binaries, none dangling"
           % sum(1 for p in payload.rglob("*")
@@ -1020,18 +1021,25 @@ def documentation_build_skipped(module):
 
 
 def assemble_payload(stage: pathlib.Path, payload: pathlib.Path,
-                     trim: bool = True, trim_hgext: bool = True,
-                     trim_sources: bool = True, force: bool = False
+                     fresh: pathlib.Path, trim: bool = True,
+                     trim_hgext: bool = True, trim_sources: bool = True,
+                     force: bool = False
                      ) -> tuple[list[str], list[str], int, dict, set]:
-    """Replace *payload* with the wanted part of *stage*, keeping our own files."""
-    # The payload is emptied before the staging tree is copied into it, so if
-    # the two overlap the delete takes the files about to be copied.
-    here, there = stage.resolve(), payload.resolve()
-    if here == there or there in here.parents or here in there.parents:
-        die("the staging tree and the payload overlap:\n"
-            "         stage   %s\n         payload %s\n"
-            "       Emptying the payload would delete the files being copied"
-            " from it." % (here, there))
+    """Build the wanted part of *stage* into *fresh*, beside *payload*.
+
+    Nothing here touches *payload*. It is read -- for the files carried across
+    and to say what changed -- and left where it is, so a copy that fails, a
+    handle Windows will not release, or Ctrl-C costs nothing. swap_payload()
+    puts the result in its place once the checks that can still fail have run.
+    """
+    # A tree assembled from the staging tree cannot sit inside it, or the
+    # walk would find what it is writing.
+    source_root, target = stage.resolve(), fresh.resolve()
+    if source_root == target or target in source_root.parents \
+            or source_root in target.parents:
+        die("the staging tree and the tree being built overlap:\n"
+            "         stage %s\n         build %s" % (source_root, target))
+    there = payload.resolve()
 
     # Emptying the payload deletes whatever --output names, so anything that
     # is not recognisably a payload has to say so first. An empty directory,
@@ -1067,73 +1075,64 @@ def assemble_payload(stage: pathlib.Path, payload: pathlib.Path,
              for relative in sorted(before)
              if _is_guid_file(relative.rsplit("/", 1)[-1])}
 
-    with tempfile.TemporaryDirectory() as tmp:
-        kept = pathlib.Path(tmp)
-        missing = []
-        for relative in PRESERVE:
-            source = payload / relative
-            if not source.is_file():
-                missing.append(relative)
-                continue
-            destination = kept / relative
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(source, destination)
-        if missing:
-            print("warning: not in the old payload, so not in the new one: %s"
-                  "\n         Nothing stages these; they come only from the"
-                  " payload they are copied out of." % ", ".join(missing))
+    missing = [relative for relative in PRESERVE
+               if not (payload / relative).is_file()]
+    if missing:
+        print("warning: not in the old payload, so not in the new one: %s"
+              "\n         Nothing stages these; they come only from the"
+              " payload they are copied out of." % ", ".join(missing))
 
-        if payload.exists():
-            shutil.rmtree(payload)
-        payload.mkdir(parents=True)
+    if fresh.exists():
+        shutil.rmtree(fresh)
+    fresh.mkdir(parents=True)
 
-        dropped = 0
-        trimmed: dict = {}
-        removed_names: set = set()
-        compiled = _sources_with_bytecode(stage) if trim_sources else set()
-        uncompiled = 0
-        for source in sorted(stage.rglob("*")):
-            if not source.is_file():
-                continue
-            relative = str(source.relative_to(stage)).replace(os.sep, "/")
-            if is_dropped(relative):
-                dropped += 1
+    dropped = 0
+    trimmed: dict = {}
+    removed_names: set = set()
+    compiled = _sources_with_bytecode(stage) if trim_sources else set()
+    uncompiled = 0
+    for source in sorted(stage.rglob("*")):
+        if not source.is_file():
+            continue
+        relative = str(source.relative_to(stage)).replace(os.sep, "/")
+        if is_dropped(relative):
+            dropped += 1
+            removed_names.add(source.name)
+            continue
+        if trim:
+            reason = is_trimmed(relative, trim_hgext)
+            if reason is not None:
+                entry = trimmed.setdefault(reason, [0, 0])
+                entry[0] += 1
+                entry[1] += source.stat().st_size
                 removed_names.add(source.name)
                 continue
-            if trim:
-                reason = is_trimmed(relative, trim_hgext)
-                if reason is not None:
-                    entry = trimmed.setdefault(reason, [0, 0])
-                    entry[0] += 1
-                    entry[1] += source.stat().st_size
-                    removed_names.add(source.name)
-                    continue
-            if (trim_sources and relative.startswith("lib/")
-                    and relative.endswith(".py")):
-                if relative in compiled:
-                    entry = trimmed.setdefault(
-                        "Python source (hg.exe loads the bytecode)", [0, 0])
-                    entry[0] += 1
-                    entry[1] += source.stat().st_size
-                    removed_names.add(source.name)
-                    continue
-                uncompiled += 1
-            destination = payload / relative
+        if (trim_sources and relative.startswith("lib/")
+                and relative.endswith(".py")):
+            if relative in compiled:
+                entry = trimmed.setdefault(
+                    "Python source (hg.exe loads the bytecode)", [0, 0])
+                entry[0] += 1
+                entry[1] += source.stat().st_size
+                removed_names.add(source.name)
+                continue
+            uncompiled += 1
+        destination = fresh / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
+
+    if uncompiled:
+        print("note: kept %d .py with no bytecode beside them" % uncompiled)
+
+    for relative in PRESERVE:
+        source = payload / relative
+        if source.is_file():
+            destination = fresh / relative
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, destination)
 
-        if uncompiled:
-            print("note: kept %d .py with no bytecode beside them" % uncompiled)
-
-        for relative in PRESERVE:
-            source = kept / relative
-            if source.is_file():
-                destination = payload / relative
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(source, destination)
-
     for relative, content in guids.items():
-        destination = payload / relative
+        destination = fresh / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_bytes(content)
     if guids:
@@ -1142,9 +1141,40 @@ def assemble_payload(stage: pathlib.Path, payload: pathlib.Path,
         print("guids: carried %d file(s) across (%d per-directory, %d consolidated)"
               % (len(guids), len(guids) - consolidated, consolidated))
 
-    after = files_in(payload)
+    after = files_in(fresh)
     return (sorted(after - before), sorted(before - after), dropped, trimmed,
             removed_names)
+
+
+def swap_payload(fresh: pathlib.Path, payload: pathlib.Path) -> None:
+    """Put *fresh* in *payload*'s place, keeping the old one until it is in.
+
+    Two renames rather than a delete and a copy, so the window where neither
+    tree is at the final path is two metadata operations wide instead of the
+    length of a file-by-file write. Every way this can fail leaves one whole
+    tree somewhere and says where.
+    """
+    previous = payload.with_name(payload.name + ".old")
+    if previous.exists():
+        shutil.rmtree(previous, ignore_errors=True)
+    if payload.exists():
+        try:
+            payload.rename(previous)
+        except OSError as error:
+            die("could not move the existing payload aside: %s\n       Nothing"
+                " has been replaced; the new tree is at %s." % (error, fresh))
+    try:
+        fresh.rename(payload)
+    except OSError as error:
+        try:
+            previous.rename(payload)
+        except OSError:
+            die("could not put the new payload in place (%s), and the old one"
+                " could not\n       be moved back. The old payload is at %s and"
+                " the new one at %s." % (error, previous, fresh))
+        die("could not put the new payload in place: %s\n       The old one is"
+            " back where it was; the new one is at %s." % (error, fresh))
+    shutil.rmtree(previous, ignore_errors=True)
 
 
 def main() -> None:
@@ -1250,11 +1280,15 @@ def main() -> None:
 
     check_python_imports(stage, trim, trim_hgext)
 
+    # Built beside the payload, checked, and only then swapped in, so that a
+    # failure up to this point leaves the committed payload untouched.
+    fresh = payload.with_name(payload.name + ".new")
     added, removed, dropped, trimmed, removed_names = assemble_payload(
-        stage, payload, trim=trim, trim_hgext=trim_hgext,
+        stage, payload, fresh, trim=trim, trim_hgext=trim_hgext,
         trim_sources=trim_sources, force=args.force)
 
-    check_native_dependencies(payload, removed_names)
+    check_native_dependencies(fresh, removed_names)
+    swap_payload(fresh, payload)
 
     if trimmed:
         total_files = sum(n for n, _ in trimmed.values())

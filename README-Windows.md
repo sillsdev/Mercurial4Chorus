@@ -114,9 +114,17 @@ the interpreter you launch the script with.
 Expect the build to take tens of minutes. `--no-regen-guids` skips the only step that needs the
 .NET SDK.
 
-`--output DIR` writes somewhere other than `win\Mercurial`, and **empties that directory first**.
-A directory holding neither `hg.exe` nor `mercurial.ini` nor a `.guidsForInstaller` file is not a
-payload, so the script refuses to empty it; `--force` says you meant it anyway.
+`--output DIR` writes somewhere other than `win\Mercurial`, and **replaces that directory**. A
+directory holding neither `hg.exe` nor `mercurial.ini` nor a `.guidsForInstaller` file is not a
+payload, so the script refuses to replace it; `--force` says you meant it anyway.
+
+The new tree is assembled in `<payload>.new` beside the old one and swapped in with two renames
+once the native-dependency check has passed, so a copy that fails, a handle Windows will not
+release, or Ctrl-C leaves the committed payload exactly as it was. A failed run leaves its
+half-built tree behind for you to look at; the next run replaces it. Both `<payload>.new` and
+`<payload>.old` are gitignored and excluded from the package. The GUID steps run after the swap,
+so a failure there does still leave the payload replaced -- that is what the `git restore` line
+those errors print is for.
 
 The build also refuses to start if `..\hg` has uncommitted changes of any kind — modified, added,
 removed, missing or untracked. It is not enough to pass `--tag`: `hg update` carries compatible

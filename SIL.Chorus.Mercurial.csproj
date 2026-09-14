@@ -40,7 +40,10 @@ v7.0.1: Upgrade to Mercurial 7.0.1 and remove requirement to depend directly on 
   <ItemGroup>
     <ReadmeFile Include="$(RootDir)\README.md" />
     <LinuxArtifacts Include="$(RootDir)\linux-x64\**\*.*" />
-    <WinArtifacts Include="$(RootDir)\win\**\*.*" />
+    <!-- A failed payload build leaves its half-finished tree beside the real
+         one, as Mercurial.new or Mercurial.old. Neither belongs in a package. -->
+    <WinArtifacts Include="$(RootDir)\win\**\*.*"
+                  Exclude="$(RootDir)\win\*.new\**\*.*;$(RootDir)\win\*.old\**\*.*" />
     <Extensions Include="$(RootDir)\MercurialExtensions\**\*.*" />
     <!-- Not needed when `dotnet pack` is running the show: -->
     <!-- <NuSpecFile Include="$(RootDir)\assets\*.nuspec" /> -->
