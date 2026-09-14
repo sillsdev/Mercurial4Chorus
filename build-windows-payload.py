@@ -191,8 +191,8 @@ def is_dropped(relative: str) -> bool:
 #     --no-trim                             3272   347   99.9 MB  37.9 MB
 #     --no-trim-hgext --no-trim-sources     1515    99   75.9 MB  29.0 MB
 #     --no-trim-hgext                        832    65   63.3 MB  25.5 MB
-#     --no-trim-sources                      658    58   60.1 MB  23.8 MB
-#     (default)                              384    40   54.0 MB  22.1 MB
+#     --no-trim-sources                      668    58   60.7 MB  23.8 MB
+#     (default)                              389    40   54.2 MB  22.1 MB
 #     TortoiseHg                              99     6   46.3 MB  23.4 MB  <- replaced
 #
 # Watch the directory count as much as the megabytes. Every directory needs a
@@ -260,8 +260,23 @@ TRIM_DEAD_DATA = {"locale", "templates"}
 #
 # Unlike the lists above these are live code paths, so this was opt-in until
 # the full LibChorus suite passed on Windows against a payload built this way.
-# What is still reachable is a config file outside this package enabling one of
-# them, which is what the flag is for.
+#
+# A config file outside this package can still name one, and that is not
+# hypothetical. Fixing a broken Send/Receive repository means opening it in
+# TortoiseHg and turning on strip and rebase, which TortoiseHg writes into
+# %USERPROFILE%\mercurial.ini. Chorus sets no HGRCPATH -- LibChorus contains no
+# reference to it -- so hg reads that file on every invocation and writes
+# "failed to import extension" to stderr for anything this payload does not
+# carry. HgRepository.cs treats a non-empty stderr as failure whatever the exit
+# code, including at :1229 fetching a historical file and :634 and :1709
+# recovering, so the breakage lands on the recovery paths of the person doing
+# the recovering. The old library.zip carried 142 hgext entries and never hit
+# this; this payload carries 18.
+#
+# So strip, rebase, mq, histedit and purge stay, at about 130 KB of bytecode.
+# They are a guess at what gets typed, not a closed set -- the real fix is
+# HGRCPATH on the Chorus side, which covers every extension and every other
+# stray user setting. Take these five back out once that lands.
 #
 # Chorus enables eol, hgext.graphlog and convert in the payload's mercurial.ini,
 # plus the vendored fixutf8. Those are kept, as is anything not named here --
@@ -271,12 +286,11 @@ TRIM_HGEXT = {
     "bookflow", "bugzilla", "censor", "children", "churn", "clonebundles",
     "closehead", "commitextras", "extdiff", "factotum", "fastannotate",
     "fastexport", "fetch", "fix", "fsmonitor", "git", "githelp", "gpg", "hgk",
-    "highlight", "histedit", "hooklib", "journal", "keyword", "largefiles",
-    "lfs", "logtoprocess", "mq", "narrow", "notify", "pager", "patchbomb",
-    "phabricator", "purge", "rebase", "record", "relink", "releasenotes",
-    "remotefilelog", "remotenames", "schemes", "share", "show", "sparse",
-    "split", "sqlitestore", "strip", "transplant", "uncommit", "win32mbcs",
-    "win32text", "zeroconf",
+    "highlight", "hooklib", "journal", "keyword", "largefiles", "lfs",
+    "logtoprocess", "narrow", "notify", "pager", "patchbomb", "phabricator",
+    "record", "relink", "releasenotes", "remotefilelog", "remotenames",
+    "schemes", "share", "show", "sparse", "split", "sqlitestore", "transplant",
+    "uncommit", "win32mbcs", "win32text", "zeroconf",
 }
 
 # Reached only from an extension in TRIM_HGEXT, so they go with it: highlight

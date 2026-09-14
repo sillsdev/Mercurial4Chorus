@@ -154,17 +154,18 @@ tooling, plus extensions Chorus never enables.
 | `--no-trim-sources` | Keep the `.py` files under `lib/`. |
 
 Measured over the official Mercurial 7.0.1 x64 MSI, unpacked with `msiexec /a`, which is the same
-install layout this script stages. The nupkg column is
-a real `dotnet pack`, which carries the committed `linux-x64` tree, so the published package is
-larger; the column is there to compare the modes with each other:
+install layout this script stages. The nupkg column is a real `dotnet pack`, which carries the
+committed `linux-x64` tree, so the published package is larger; the column is there to compare the
+modes with each other. The two rows that the five kept `hgext` extensions changed were adjusted by
+their measured size; only the default row's nupkg was re-packed:
 
 | mode | files | directories | raw | nupkg |
 | --- | ---: | ---: | ---: | ---: |
 | `--no-trim` | 3272 | 347 | 99.9 MB | 37.9 MB |
 | `--no-trim-hgext --no-trim-sources` | 1515 | 99 | 75.9 MB | 29.0 MB |
 | `--no-trim-hgext` | 832 | 65 | 63.3 MB | 25.5 MB |
-| `--no-trim-sources` | 658 | 58 | 60.1 MB | 23.8 MB |
-| **default** | **384** | **40** | **54.0 MB** | **22.1 MB** |
+| `--no-trim-sources` | 668 | 58 | 60.7 MB | 23.8 MB |
+| **default** | **389** | **40** | **54.2 MB** | **22.1 MB** |
 | *the old TortoiseHg payload* | 99 | 6 | 46.3 MB | 23.4 MB |
 
 The directory count matters as much as the megabytes, because it is the number of
