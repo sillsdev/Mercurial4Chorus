@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <!--This file is generated and then updated by an MSBuild task.  It preserves the automatically-generated guids assigned files that will be installed on user machines. So it should be held in source control.-->
 <InstallerMetadata>
   <File Id="mercurial.add_path.exe" Guid="D63A8C10-90B6-4843-9BCB-187366FEFED0" />
@@ -469,4 +469,9 @@
   <File Id="_.lib.mercurial.__pycache__.__main__.cpython_39.pyc" Guid="14003d26-3e26-46be-a814-d837c5a26596" />
   <File Id="curial.__pycache__.__modulepolicy__.cpython_39.pyc" Guid="f069a975-0cc3-4644-be1e-29933163f0dc" />
   <File Id="b.mercurial.__pycache__.__version__.cpython_39.pyc" Guid="0e9535b1-8f49-4e33-857c-7bd5a6917f30" />
+  <File Id="rial.lib.hgext.__pycache__.histedit.cpython_39.pyc" Guid="9faa38f9-6227-4e29-8a88-6c1e54a27717" />
+  <File Id="mercurial.lib.hgext.__pycache__.mq.cpython_39.pyc" Guid="25c75608-a114-44ae-9f84-c62f463290a8" />
+  <File Id="rcurial.lib.hgext.__pycache__.purge.cpython_39.pyc" Guid="e78540b9-f259-4623-987d-aa42109d7f0f" />
+  <File Id="curial.lib.hgext.__pycache__.rebase.cpython_39.pyc" Guid="b56cb670-3e80-40f2-bd6f-3b31ef20e3e0" />
+  <File Id="rcurial.lib.hgext.__pycache__.strip.cpython_39.pyc" Guid="9eb57910-8abd-414c-8c6e-372570169d08" />
 </InstallerMetadata>
