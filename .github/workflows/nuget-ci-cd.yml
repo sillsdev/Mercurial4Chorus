@@ -107,9 +107,27 @@ jobs:
     - name: Check the committed fixutf8 bytecode
       run: python check-fixutf8-bytecode.py
 
+  test-build-payload:
+    # The payload build's own tests. No Windows, no Mercurial checkout, no
+    # network, and about a tenth of a second.
+    runs-on: ubuntu-22.04
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+    - name: Setup Python 3.9
+      uses: actions/setup-python@82c7e631bb3cdc910f68e0081d67478d79c6982d # v5.1.0
+      with:
+        # The version rust/hgcli/pyoxidizer.bzl embeds, so the tests run on
+        # what the payload runs on. Move this when the payload's Python moves.
+        python-version: "3.9"
+    - name: Run the payload build's tests
+      # Invoked directly: the hyphen in the name means unittest discover
+      # collects nothing and still exits 0.
+      run: python test-build-windows-payload.py
+
   build:
     runs-on: ubuntu-latest
-    needs: [build-python, check-fixutf8-bytecode]
+    needs: [build-python, check-fixutf8-bytecode, test-build-payload]
     steps:
     - name: Checkout
       uses: actions/checkout@v4
