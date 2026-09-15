@@ -16,7 +16,7 @@
   <PropertyGroup>
     <PackageId>SIL.Chorus.Mercurial</PackageId>
     <Authors>SIL International</Authors>
-    <Copyright>Copyright (c) 2020-2022 SIL International</Copyright>
+    <Copyright>Copyright (c) 2020-2026 SIL International</Copyright>
     <PackageLicenseExpression>GPL-2.0-or-later</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/sillsdev/Mercurial4Chorus</PackageProjectUrl>
     <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
@@ -33,14 +33,18 @@ v6.5.1: Upgrade to Mercurial 6.5.1
 
 v7.0.1: Upgrade to Mercurial 7.0.1 and remove requirement to depend directly on this package (just depend on Chorus or LibChorus)
     </PackageReleaseNotes>
-    <PackageReadme>docs\README.md</PackageReadme>
+    <PackageReadmeFile>docs/README-nuget.md</PackageReadmeFile>
   </PropertyGroup>
 
   <!-- What to pack -->
   <ItemGroup>
-    <ReadmeFile Include="$(RootDir)\README.md" />
+    <!-- The package page gets its own text; README.md is for the repository. -->
+    <ReadmeFile Include="$(RootDir)\README-nuget.md" />
     <LinuxArtifacts Include="$(RootDir)\linux-x64\**\*.*" />
-    <WinArtifacts Include="$(RootDir)\win\**\*.*" />
+    <!-- A failed payload build leaves its half-finished tree beside the real
+         one, as Mercurial.new or Mercurial.old. Neither belongs in a package. -->
+    <WinArtifacts Include="$(RootDir)\win\**\*.*"
+                  Exclude="$(RootDir)\win\*.new\**\*.*;$(RootDir)\win\*.old\**\*.*" />
     <Extensions Include="$(RootDir)\MercurialExtensions\**\*.*" />
     <!-- Not needed when `dotnet pack` is running the show: -->
     <!-- <NuSpecFile Include="$(RootDir)\assets\*.nuspec" /> -->

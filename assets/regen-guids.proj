@@ -1,0 +1,127 @@
+<Project Sdk="Microsoft.NET.Sdk">
+<!-- Reallocates the MSI component GUIDs recorded in the Windows payload's
+     .guidsForInstaller.xml (or .guidsForInstaller.all.xml) files.
+
+     Those files pin per-file MSI component identities, so a file the new
+     Mercurial adds needs a GUID allocating, while a file it drops keeps its old
+     entry for continuity. They are written by SIL.BuildTasks' MakeWixForDirTree,
+     which writes them into the directory tree it scans, so pointing
+     RootDirectory at the payload updates them in place.
+
+     Chorus drives the same task from the MakeWixForDistFiles target in
+     src/ChorusHub/ChorusHub.csproj, and THAT IS THE SOURCE OF TRUTH for the
+     parameters below: keep them in step. We invoke the task directly rather
+     than building Chorus because Chorus's target carries
+     DependsOnTargets="Compile", which drags in LibChorus and a net462 WinForms
+     build that MakeWixForDirTree does not need, since it only walks a directory.
+
+     Normally driven by build-windows-payload.py. By hand:
+
+         dotnet msbuild assets/regen-guids.proj -restore -t:RegenerateGuids
+
+     SIL.BuildTasks ships only lib/net472, which is why TargetFramework below
+     has to be net472 for restore to succeed. The task assembly itself loads
+     and runs fine under MSBuild on .NET, so plain `dotnet msbuild` works and
+     no full-framework MSBuild.exe is needed (verified against 3.0.0). -->
+
+  <PropertyGroup>
+    <!-- Use net472 to match SIL.BuildTasks -->
+    <TargetFramework>net472</TargetFramework>
+    <IsPackable>false</IsPackable>
+    <!-- No sources, and no default globbing over assets/ either. Note
+         UseArtifactsOutput is inherited from Directory.Build.props and must NOT
+         be overridden here: the SDK reads it before the project body, and
+         flipping it late leaves output path properties empty, which makes the
+         default item globs expand to "/**" and enumerate the whole drive
+         (MSB5029). Intermediate output therefore lands under artifacts/. -->
+    <EnableDefaultItems>false</EnableDefaultItems>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <!-- 3.3.0 is the first release with MakeWixForDirTree.ConsolidatedGuidFile.
+         An earlier version restores fine but fails the build the moment the
+         task is invoked, with MSB4064, "The parameter ConsolidatedGuidFile is
+         not supported by the MakeWixForDirTree task".
+
+         Overridable, so a newer release can be tried without editing this file:
+
+           -p:SilBuildTasksVersion=3.3.1
+
+         and, for a build of it that is not on nuget.org:
+
+           -p:RestoreAdditionalProjectSources=<directory holding the .nupkg>
+
+         build-windows-payload.py passes both for you; see its
+         "sil-buildtasks-version" and "nuget-source" options.
+
+         KEEP THIS IN STEP WITH CHORUS. Chorus runs the same task over the same
+         payload from MakeWixForDistFiles in src/ChorusHub/ChorusHub.csproj, and
+         allocates the GUIDs that actually ship. It pins 3.0.0 and does not pass
+         ConsolidatedGuidFile, so until it is updated it still reads the
+         per-directory files. That is why they are not deleted here. -->
+    <SilBuildTasksVersion Condition="'$(SilBuildTasksVersion)'==''">3.3.0</SilBuildTasksVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The UsingTask for MakeWixForDirTree comes from this package's own
+         build/SIL.BuildTasks.props, which NuGet imports automatically. -->
+    <PackageReference Include="SIL.BuildTasks" Version="$(SilBuildTasksVersion)" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <RepoRoot>$(MSBuildThisFileDirectory)..\</RepoRoot>
+    <PayloadDir Condition="'$(PayloadDir)'==''">$(RepoRoot)win\Mercurial</PayloadDir>
+    <!-- MakeWixForDirTree insists on writing a .wxs. Only the GUID files matter
+         here; Chorus keeps its own copy under src/Installer/ and regenerates it
+         there. build/ is gitignored. -->
+    <WxsOutputPath Condition="'$(WxsOutputPath)'==''">$(RepoRoot)build\wxs\GeneratedMercurial.wxs</WxsOutputPath>
+    <!-- New Mercurial 7.x build needs consolidated .guidsForInstaller.all.xml
+         file, otherwise we would have to track 40 or more directories with
+         individual .guidsForInstaller.xml files in each.
+
+         After .guidsForInstaller.all.xml file created, run again with CheckOnly;
+         if it reports no errors, safe to delete individual .guidsForInstaller.xml
+         files from git. (Though Chorus will then need SIL.BuildTasks 3.3.0). -->
+    <ConsolidatedGuidFile Condition="'$(ConsolidatedGuidFile)'==''">$(PayloadDir)\.guidsForInstaller.all.xml</ConsolidatedGuidFile>
+    <!-- Set to true to run in CheckOnly mode, e.g. the CheckGuids target below. -->
+    <GuidCheckOnly Condition="'$(GuidCheckOnly)'==''">false</GuidCheckOnly>
+  </PropertyGroup>
+
+  <Target Name="RegenerateGuids">
+    <Error Condition="!Exists('$(PayloadDir)')"
+           Text="No payload at $(PayloadDir). Build it first." />
+
+    <MakeDir Directories="$([System.IO.Path]::GetDirectoryName('$(WxsOutputPath)'))" />
+
+    <!-- Keep this in sync with ChorusHub.csproj, especially DirectoryReferenceId
+         and ComponentGroupId (case matters, and the inconsistent case is exactly
+         what ChorusHub already has so it should not be changed). The two excluded
+         files are the ones that the SIL.Chorus.Mercurial targets rewrite
+         on the user's machine, so they should not be assigned installer GUIDs.
+
+         MercurialExtensions is deliberately not reassigned GUIDs here. -->
+    <MakeWixForDirTree
+      DirectoryReferenceId="mercurial"
+      ComponentGroupId="Mercurial"
+      RootDirectory="$(PayloadDir)"
+      OutputFilePath="$(WxsOutputPath)"
+      IgnoreRegExPattern="IGNOREME|\.gitignore"
+      Exclude="$(PayloadDir)\mercurial.ini;$(PayloadDir)\default.d\cacerts.rc"
+      ConsolidatedGuidFile="$(ConsolidatedGuidFile)"
+      CheckOnly="$(GuidCheckOnly)"
+      MatchRegExPattern=".*" />
+  </Target>
+
+  <!-- Run this to verify that the .guidsForInstaller.all.xml file contains
+       everything it should:
+
+           dotnet msbuild assets/regen-guids.proj -t:CheckGuids
+
+       Add -restore if the project has not been restored in this checkout. -->
+  <Target Name="CheckGuids">
+    <MSBuild Projects="$(MSBuildThisFileFullPath)"
+             Targets="RegenerateGuids"
+             Properties="GuidCheckOnly=true" />
+  </Target>
+
+</Project>

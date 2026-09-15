@@ -18,7 +18,7 @@ This package provides the Mercurial implementation that Chorus uses.
 
 v3.0.3: Allow specifying an alternate destination directory using `Mercurial4ChorusDestDir`
 		</releaseNotes>
-		<readme>docs\README.md</readme>
+		<readme>docs/README-nuget.md</readme>
 		<language>en-US</language>
 		<references/>
 	</metadata>
