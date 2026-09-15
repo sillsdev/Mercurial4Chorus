@@ -64,8 +64,8 @@ jobs:
     - name: Move chg binary next to hg prior to upload
       run: mv contrib/chg/chg .
       working-directory: hg
-    - name: Remove the object files that building chg left behind
-      run: rm -f contrib/chg/*.o
+    - name: Strip debug symbols from chg binary
+      run: strip --strip-unneeded chg
       working-directory: hg
     - name: Set executable bit on hg and chg binaries before upload
       run: chmod +x hg chg
