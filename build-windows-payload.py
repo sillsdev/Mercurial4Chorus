@@ -102,26 +102,26 @@ def _is_guid_file(name: str) -> bool:
     return name == GUID_FILE or name == CONSOLIDATED_GUID_FILE
 
 
-# Where die(payload_wiped=True) tells you to restore from, relative to the
+# Where die(payload_replaced=True) tells you to restore from, relative to the
 # repository. main() sets it once --output is known; None means --output put
 # the payload somewhere git cannot reach.
 PAYLOAD_PATH: str | None = "win/Mercurial"
 
 
-def die(msg: str, payload_wiped: bool = False) -> None:
+def die(msg: str, payload_replaced: bool = False) -> None:
     """Print *msg* and stop.
 
-    Pass *payload_wiped* from anything that fails after assemble_payload() has
-    emptied the payload directory. What is on disk is then a half-finished
-    build, and the last thing printed should be how to get the committed one
-    back -- `restore` alone would leave behind any file the new payload added.
+    Pass *payload_replaced* from anything that fails after swap_payload() has
+    put the new tree in place. What is on disk is then a half-finished build,
+    and the last thing printed should be how to get the committed one back --
+    `restore` alone would leave behind any file the new payload added.
     """
     print("error: %s" % msg, file=sys.stderr)
-    if payload_wiped and PAYLOAD_PATH:
+    if payload_replaced and PAYLOAD_PATH:
         print("\n%s has already been replaced. Put the committed one back with:"
               "\n  git restore %s && git clean -fdq %s"
               % (PAYLOAD_PATH, PAYLOAD_PATH, PAYLOAD_PATH), file=sys.stderr)
-    elif payload_wiped:
+    elif payload_replaced:
         print("\nthe payload has already been replaced, and --output put it"
               " outside this\nrepository, so git cannot put it back.",
               file=sys.stderr)
@@ -547,8 +547,8 @@ def check_python_imports(stage: pathlib.Path, trim: bool, trim_hgext: bool) -> N
     re-derived from the same rules here rather than passed in, so this asks its
     question of the rules as they stand rather than of one run's bookkeeping.
 
-    Nothing here reads the payload, so main() runs it before assemble_payload()
-    empties it: a rule caught out this way then costs nothing to recover from.
+    Nothing here reads the payload, so main() runs it before the payload is
+    replaced: a rule caught out this way then costs nothing to recover from.
     """
     seen: dict = {}
     gone: dict = {}
@@ -670,14 +670,14 @@ REGEN_PROJECT = pathlib.Path("assets") / "regen-guids.proj"
 
 
 def run(command: list, cwd: pathlib.Path | None = None, what: str | None = None,
-        payload_wiped: bool = False) -> None:
+        payload_replaced: bool = False) -> None:
     printable = " ".join(str(part) for part in command)
     print("+ %s" % printable)
     result = subprocess.run([str(part) for part in command],
                             cwd=str(cwd) if cwd else None)
     if result.returncode != 0:
         die("%s failed with exit code %d" % (what or printable, result.returncode),
-            payload_wiped=payload_wiped)
+            payload_replaced=payload_replaced)
 
 
 def _guid_files(payload: pathlib.Path) -> list:
@@ -703,7 +703,8 @@ def _guid_entries(payload: pathlib.Path) -> tuple[dict, list]:
         try:
             root = ElementTree.parse(path).getroot()
         except ElementTree.ParseError as error:
-            die("%s is not valid XML: %s" % (path, error), payload_wiped=True)
+            die("%s is not valid XML: %s" % (path, error),
+                payload_replaced=True)
         for node in root.iter("File"):
             identifier, guid = node.get("Id"), node.get("Guid")
             if not identifier or not guid:
@@ -791,7 +792,7 @@ def regenerate_guids(here: pathlib.Path, payload: pathlib.Path,
     """
     project = here / REGEN_PROJECT
     if not project.is_file():
-        die("%s is missing" % project, payload_wiped=True)
+        die("%s is missing" % project, payload_replaced=True)
 
     print("\nGUIDs (SIL.BuildTasks %s)" % version)
     # HEAD if git can tell us, since damage usually predates the run; the
@@ -814,17 +815,18 @@ def regenerate_guids(here: pathlib.Path, payload: pathlib.Path,
         command.append("-p:RestoreAdditionalProjectSources=%s"
                        % pathlib.Path(nuget_source).resolve())
     run(command, cwd=here, what="dotnet msbuild -t:RegenerateGuids",
-        payload_wiped=True)
+        payload_replaced=True)
 
     consolidated = payload / CONSOLIDATED_GUID_FILE
     if not consolidated.is_file():
         die("%s was not written; does SIL.BuildTasks %s have"
-            " ConsolidatedGuidFile?" % (consolidated, version), payload_wiped=True)
+            " ConsolidatedGuidFile?" % (consolidated, version),
+            payload_replaced=True)
 
     after = _guid_files(payload)
     if not after:
         die("no %s files under %s; did the task actually run?"
-            % (GUID_FILE, payload), payload_wiped=True)
+            % (GUID_FILE, payload), payload_replaced=True)
 
     after_entries, conflicts = _guid_entries(payload)
     added, removed, changed = _guid_differences(baseline, after_entries)
@@ -864,7 +866,7 @@ def regenerate_guids(here: pathlib.Path, payload: pathlib.Path,
                 "\n       must outlive the file it names, or an upgrade cannot"
                 " remove that file\n       from a user's machine. Put the GUID"
                 " files back, or pass\n       --allow-guid-changes if this was"
-                " deliberate." % summary, payload_wiped=True)
+                " deliberate." % summary, payload_replaced=True)
 
     rewritten = 0
     for path in after:
@@ -925,7 +927,7 @@ def check_guids(here: pathlib.Path, payload: pathlib.Path,
         die("the payload and its GUID files disagree; see above. It must not"
             " be committed\n       until this passes -- an id allocated now and"
             " lost later is a component\n       that changes identity next"
-            " build.", payload_wiped=True)
+            " build.", payload_replaced=True)
     print("  every file has a GUID, all of them in the consolidated file")
 
 
@@ -1055,9 +1057,9 @@ def assemble_payload(stage: pathlib.Path, payload: pathlib.Path,
             "         stage %s\n         build %s" % (source_root, target))
     there = payload.resolve()
 
-    # Emptying the payload deletes whatever --output names, so anything that
-    # is not recognisably a payload has to say so first. An empty directory,
-    # or none at all, is the ordinary case for a new --output.
+    # The swap replaces whatever --output names, so anything that is not
+    # recognisably a payload has to say so first. An empty directory, or
+    # none at all, is the ordinary case for a new --output.
     if payload.exists():
         if not payload.is_dir():
             die("%s is not a directory; --output names the payload directory"
@@ -1068,8 +1070,8 @@ def assemble_payload(stage: pathlib.Path, payload: pathlib.Path,
                 for name in contents):
             die("%s holds no hg.exe, mercurial.ini or GUID file, so it does"
                 " not look\n       like a payload to replace:\n         %s\n"
-                "       Refusing to empty it. Pass --force if it really is the"
-                " one to rebuild."
+                "       Refusing to replace it. Pass --force if it really"
+                " is the one to rebuild."
                 % (there, ", ".join(contents[:8])
                    + (", ..." if len(contents) > 8 else "")))
 
@@ -1213,12 +1215,12 @@ def main() -> None:
     )
     parser.add_argument(
         "--output",
-        help="payload directory to refresh, which is emptied first (default:"
-             " win/Mercurial beside this script)",
+        help="payload directory to refresh, which is replaced at the end"
+             " (default: win/Mercurial beside this script)",
     )
     parser.add_argument(
         "--force", action="store_true",
-        help="empty the --output directory even though nothing in it looks"
+        help="replace the --output directory even though nothing in it looks"
              " like a payload",
     )
     parser.add_argument(
