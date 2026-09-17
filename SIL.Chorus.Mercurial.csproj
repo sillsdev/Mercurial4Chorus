@@ -32,8 +32,7 @@ v3.0.3: Allow specifying an alternate destination directory using `Mercurial4Cho
 v6.5.1: Upgrade to Mercurial 6.5.1
 
 v7.0.1: Upgrade to Mercurial 7.0.1 and remove requirement to depend directly on this package (just depend on Chorus or LibChorus)
-
-v7.0.2: Ship the Mercurial payload outside the runtimes/ convention path so an RID-specific `dotnet publish` no longer double-ships it (fixes NETSDK1152; consumers no longer need `ExcludeAssets="native"`)
+v7.0.1: Ship the Mercurial payload outside the runtimes/ convention path so an RID-specific `dotnet publish` no longer double-ships it (fixes NETSDK1152; consumers no longer need `ExcludeAssets="native"`)
     </PackageReleaseNotes>
     <PackageReadmeFile>docs/README-nuget.md</PackageReadmeFile>
   </PropertyGroup>
