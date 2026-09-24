@@ -27,9 +27,11 @@ by hand if you prefer.
 
 1. **Python 3.** Any reasonably recent Python 3 will do: it only runs `hgpackaging`, which is
    ordinary Python 3 code. It is *not* the interpreter that ends up in the payload — PyOxidizer
-   downloads and embeds its own CPython 3.9, as `rust/hgcli/pyoxidizer.bzl` asks for
-   (`default_python_distribution(python_version = "3.9")`). That is what keeps the committed
-   `cpython-39` bytecode in `MercurialExtensions/fixutf8` valid.
+   downloads and embeds its own CPython 3.9, which is what keeps the committed `cpython-39`
+   bytecode in `MercurialExtensions/fixutf8` valid. Which 3.9 is the script's choice, not
+   upstream's: `rust/hgcli/pyoxidizer.bzl` asks for PyOxidizer 0.17's default, 3.9.6, and the
+   script builds from an untracked copy of it that asks for 3.9.13 instead — the version the 6.5.1
+   payload shipped. See `PYTHON_DISTRIBUTIONS` for why an older one breaks upgrades.
 
    ```powershell
    winget install Python.Python.3.12
@@ -312,11 +314,17 @@ interpreters to keep on hand at every edit, and a set that grows with every Pyth
 
 ## After the build
 
-1. Smoke-test the result:
+1. Smoke-test the result. The script has already run `hg version --quiet` with no config; this
+   one reads the payload's own `mercurial.ini`:
 
    ```powershell
    win\Mercurial\hg.exe version
    ```
+
+   The build also stamps a version resource on `hg.exe`, which `rust/hgcli` does not have, and
+   refuses to finish if any `.exe`, `.dll` or `.pyd` has a lower file version than the one it
+   replaces. Both are for the installer: MSI will not replace a file with an older or
+   unversioned one, and Chorus Hub's upgrade then deletes it with the old product.
 
 2. Read the summary the script prints — both the trimming table and the added/removed list.
    `0 added, 0 removed` at the same tag is what you want; any added file at a new tag deserves a

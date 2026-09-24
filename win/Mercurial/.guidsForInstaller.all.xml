@@ -474,4 +474,5 @@
   <File Id="rcurial.lib.hgext.__pycache__.purge.cpython_39.pyc" Guid="e78540b9-f259-4623-987d-aa42109d7f0f" />
   <File Id="curial.lib.hgext.__pycache__.rebase.cpython_39.pyc" Guid="b56cb670-3e80-40f2-bd6f-3b31ef20e3e0" />
   <File Id="rcurial.lib.hgext.__pycache__.strip.cpython_39.pyc" Guid="9eb57910-8abd-414c-8c6e-372570169d08" />
+  <File Id="mercurial.lib.libffi_8.dll" Guid="255417e8-6c92-4a63-b17c-13e48a6a12b0" />
 </InstallerMetadata>
