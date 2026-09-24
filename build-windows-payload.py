@@ -71,6 +71,45 @@ DEFAULT_HG_TAG = "7.0.1"
 DEFAULT_TARGET_TRIPLE = "x86_64-pc-windows-msvc"
 TARGET_TRIPLES = ["i686-pc-windows-msvc", "x86_64-pc-windows-msvc"]
 
+# The CPython hg.exe embeds, by target triple, in place of the one pyoxidizer.bzl
+# asks for. Its default_python_distribution(python_version = "3.9") is 3.9.6
+# from python-build-standalone 20210724 under PyOxidizer 0.17, older than the
+# 3.9.13 the TortoiseHg-built 6.5.1 payload shipped. MSI never replaces a file
+# with an older version of itself, so upgrading from 6.5.1 left python39.dll,
+# lib/sqlite3.dll and 17 lib/*.pyd uninstalled.
+#
+# 3.9.13 is the version 6.5.1 shipped, so python39.dll and the .pyd files carry
+# exactly the version of the files they replace. 20220802 is the last
+# python-build-standalone release of it, with the newest OpenSSL (1.1.1q) of
+# the three that have one; its sqlite3.dll is 3.39.2, above 6.5.1's 3.37.2.
+#
+# PyOxidizer reads only python-build-standalone's format version 7, which its
+# releases keep up to 20240909, so a newer 3.9 is available if it is ever
+# wanted: 3.9.20. The hashes are the .sha256 each release publishes.
+PYTHON_RELEASE = ("https://github.com/astral-sh/python-build-standalone"
+                  "/releases/download/20220802/")
+PYTHON_DISTRIBUTIONS = {
+    "i686-pc-windows-msvc": (
+        PYTHON_RELEASE + "cpython-3.9.13%2B20220802"
+                         "-i686-pc-windows-msvc-shared-pgo-full.tar.zst",
+        "3860abee418825c6a33f76fe88773fb05eb4bc724d246f1af063106d9ea3f999"),
+    "x86_64-pc-windows-msvc": (
+        PYTHON_RELEASE + "cpython-3.9.13%2B20220802"
+                         "-x86_64-pc-windows-msvc-shared-pgo-full.tar.zst",
+        "6ef2b164cae483c61da30fb6d245762b8d6d91346d66cb421989d6d1462e5a48"),
+}
+
+# What pinned_pyoxidizer_config() replaces in pyoxidizer.bzl. Matched exactly,
+# so that an upstream change to it stops the build instead of quietly building
+# with whatever the new line asks for.
+DEFAULT_DISTRIBUTION_CALL = 'default_python_distribution(python_version = "3.9")'
+
+# Where python_distribution_pinned() writes its copy of pyoxidizer.bzl,
+# relative to the checkout. It has to sit beside the original: Starlark's CWD
+# is the directory of the config file, and pyoxidizer.bzl finds the checkout
+# as CWD + "/../..".
+PINNED_CONFIG = pathlib.Path("rust") / "hgcli" / "pyoxidizer-payload.bzl"
+
 # Files not to delete when cleaning out the old win/Mercurial build
 PRESERVE = [
     "mercurial.ini",
@@ -448,6 +487,260 @@ def check_native_dependencies(payload: pathlib.Path, removed: set) -> None:
     print("native deps: %d binaries, none dangling"
           % sum(1 for p in payload.rglob("*")
                 if p.suffix.lower() in (".pyd", ".dll", ".exe")))
+
+
+# ---------------------------------------------------------------------------
+# File versions
+#
+# Windows Installer replaces neither a versioned file with an unversioned one
+# nor a file with an older version of itself. Chorus Hub's installer removes
+# the old product after costing the new one (MajorUpgrade afterInstallValidate),
+# so a file refused that way is deleted along with the old product and nothing
+# puts it back. The first 7.0.1 payload upgraded a Chorus Hub into one with no
+# hg.exe, python39.dll or sqlite3.dll that way.
+
+# hg.exe's version resource: US English, Unicode, as the TortoiseHg-built
+# hg.exe had it.
+HG_EXE_LANGUAGE = 0x0409
+HG_EXE_CODEPAGE = 1200
+
+RT_VERSION = 16
+ERROR_FILE_INVALID = 1006
+
+
+def mercurial_version(stage: pathlib.Path) -> str:
+    """The version hg.exe reports, read from the __version__.py it carries."""
+    path = stage / "lib" / "mercurial" / "__version__.py"
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as error:
+        die("cannot read the Mercurial version from %s: %s" % (path, error))
+    match = re.search(r"""^(?:__version__\s*=\s*)?version\s*=\s*['"]([^'"]+)['"]""",
+                      text, re.MULTILINE)
+    if not match:
+        die("%s does not say version = '...'" % path)
+    return match.group(1)
+
+
+def file_version_numbers(version: str) -> tuple:
+    """The four 16-bit fields of a version resource for *version*.
+
+    7.0.1 is (7, 0, 1, 0), and so is a development build such as
+    7.0.1.post1.dev3+h1234: only the leading numbers mean anything to MSI.
+    """
+    match = re.match(r"\d+(?:\.\d+){0,3}", version)
+    if not match:
+        die("%r does not start with a version number" % version)
+    numbers = [int(part) for part in match.group(0).split(".")]
+    if any(number > 0xFFFF for number in numbers):
+        die("%r does not fit in a version resource, whose fields are 16 bits"
+            % version)
+    return tuple(numbers + [0] * (4 - len(numbers)))
+
+
+def _version_node(key: str, value: bytes = b"", children: tuple = (),
+                  binary: bool = False) -> bytes:
+    """One node of a VS_VERSIONINFO tree.
+
+    Header, key, value, children, each starting on a 32-bit boundary. The
+    header gives the node's whole length, and its value's length in bytes when
+    the value is binary but in UTF-16 units when it is text. A node with no
+    value is a text node, which is how rc.exe writes StringFileInfo.
+    """
+    node = bytearray(6)
+    node += (key + "\0").encode("utf-16-le")
+    node += b"\0" * (-len(node) % 4)
+    node += value
+    for child in children:
+        node += b"\0" * (-len(node) % 4)
+        node += child
+    struct.pack_into("<HHH", node, 0, len(node),
+                     len(value) if binary else len(value) // 2,
+                     0 if binary else 1)
+    return bytes(node)
+
+
+def version_resource(version: str) -> bytes:
+    """A VS_VERSIONINFO for hg.exe at *version*, as UpdateResource wants it."""
+    major, minor, patch, build = file_version_numbers(version)
+    high, low = major << 16 | minor, patch << 16 | build
+    # VS_FIXEDFILEINFO: signature, structure version 1.0, file and product
+    # version, every flag valid and none set, VOS_NT_WINDOWS32, VFT_APP, no
+    # subtype, no date.
+    fixed = struct.pack("<13I", 0xFEEF04BD, 0x00010000, high, low, high, low,
+                        0x3F, 0, 0x00040004, 1, 0, 0, 0)
+    strings = (
+        ("FileDescription", "Mercurial Distributed SCM"),
+        ("FileVersion", version),
+        ("InternalName", "hg"),
+        ("OriginalFilename", "hg.exe"),
+        ("ProductName", "Mercurial"),
+        ("ProductVersion", version),
+    )
+    table = _version_node(
+        "%04X%04X" % (HG_EXE_LANGUAGE, HG_EXE_CODEPAGE),
+        children=tuple(_version_node(name, (text + "\0").encode("utf-16-le"))
+                       for name, text in strings))
+    translation = _version_node(
+        "Translation", struct.pack("<HH", HG_EXE_LANGUAGE, HG_EXE_CODEPAGE),
+        binary=True)
+    return _version_node(
+        "VS_VERSION_INFO", fixed, binary=True,
+        children=(_version_node("StringFileInfo", children=(table,)),
+                  _version_node("VarFileInfo", children=(translation,))))
+
+
+def file_version(path: pathlib.Path) -> str | None:
+    """*path*'s version as Windows Installer reads it, or None if it has none.
+
+    Asks msi.dll rather than parsing the resource: the question is what MSI
+    will compare, and this is how MSI reads it.
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    msi = ctypes.WinDLL("msi")
+    msi.MsiGetFileVersionW.argtypes = (
+        wintypes.LPCWSTR, wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD),
+        wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD))
+    msi.MsiGetFileVersionW.restype = wintypes.UINT
+
+    buffer = ctypes.create_unicode_buffer(64)
+    size = wintypes.DWORD(len(buffer))
+    result = msi.MsiGetFileVersionW(str(path), buffer, ctypes.byref(size),
+                                    None, None)
+    if result == 0:
+        return buffer.value
+    if result == ERROR_FILE_INVALID:
+        return None
+    die("MsiGetFileVersion could not read %s: error %d" % (path, result))
+
+
+def stamp_version_resource(exe: pathlib.Path, version: str) -> None:
+    """Give *exe* a version resource saying *version*, unless it has one.
+
+    rust/hgcli builds hg.exe with none, and a versioned file is never replaced
+    by an unversioned one, so without this every upgrade from a payload whose
+    hg.exe had a version loses it. If upstream ever adds one, it is left alone.
+
+    This rewrites a file hgpackaging staged, which nothing else here does. The
+    resource section is the only part UpdateResource touches, and
+    check_hg_runs() runs the result before it can be swapped in.
+    """
+    existing = file_version(exe)
+    if existing is not None:
+        print("hg.exe: carries version %s already; left as built" % existing)
+        return
+
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.BeginUpdateResourceW.argtypes = (wintypes.LPCWSTR, wintypes.BOOL)
+    kernel32.BeginUpdateResourceW.restype = wintypes.HANDLE
+    kernel32.UpdateResourceW.argtypes = (
+        wintypes.HANDLE, wintypes.LPVOID, wintypes.LPVOID, wintypes.WORD,
+        wintypes.LPVOID, wintypes.DWORD)
+    kernel32.UpdateResourceW.restype = wintypes.BOOL
+    kernel32.EndUpdateResourceW.argtypes = (wintypes.HANDLE, wintypes.BOOL)
+    kernel32.EndUpdateResourceW.restype = wintypes.BOOL
+
+    resource = version_resource(version)
+    buffer = ctypes.create_string_buffer(resource, len(resource))
+    handle = kernel32.BeginUpdateResourceW(str(exe), False)
+    if not handle:
+        die("cannot open %s to add a version resource: %s"
+            % (exe, ctypes.WinError(ctypes.get_last_error())))
+    # RT_VERSION and resource id 1 are integer resource names, which the API
+    # takes in place of a string pointer.
+    if not kernel32.UpdateResourceW(handle, RT_VERSION, 1, HG_EXE_LANGUAGE,
+                                    buffer, len(resource)):
+        error = ctypes.WinError(ctypes.get_last_error())
+        kernel32.EndUpdateResourceW(handle, True)
+        die("cannot add a version resource to %s: %s" % (exe, error))
+    if not kernel32.EndUpdateResourceW(handle, False):
+        die("cannot write the version resource into %s: %s"
+            % (exe, ctypes.WinError(ctypes.get_last_error())))
+
+    stamped = file_version(exe)
+    wanted = ".".join(str(number) for number in file_version_numbers(version))
+    if stamped != wanted:
+        die("%s was stamped with %s but MSI reads it as %s"
+            % (exe, wanted, stamped))
+    print("hg.exe: stamped version %s (%s)" % (stamped, version))
+
+
+def check_hg_runs(payload: pathlib.Path) -> None:
+    """Run the new hg.exe once, since stamp_version_resource() rewrote it.
+
+    HGRCPATH is emptied so that no config outside the payload, or in it, can
+    load an extension and fail for reasons of its own.
+    """
+    env = dict(os.environ, HGRCPATH="", HGPLAIN="1")
+    result = subprocess.run([str(payload / "hg.exe"), "version", "--quiet"],
+                            capture_output=True, text=True, env=env)
+    if result.returncode != 0:
+        die("the new hg.exe does not run (exit code %d): %s"
+            % (result.returncode, (result.stderr or result.stdout).strip()))
+    print("hg.exe: %s" % result.stdout.strip())
+
+
+def _version_tuple(version: str) -> tuple:
+    return tuple(int(part) for part in version.split("."))
+
+
+def version_regressions(before: dict, after: dict) -> list:
+    """The files whose version would stop an upgrade replacing them.
+
+    *before* and *after* map a payload path to its file version, or to None
+    when it has none. MSI compares a file only with the one installed at the
+    same path, so only paths in both count. A lower version is refused, and so
+    is no version where there was one. An equal version is let through: MSI
+    withholds a component only when the installed key file is of a *higher*
+    version, and every upgrade that ships an unchanged DLL relies on that.
+    """
+    found = []
+    for path in sorted(set(before) & set(after)):
+        old, new = before[path], after[path]
+        if old is None:
+            continue
+        if new is None or _version_tuple(new) < _version_tuple(old):
+            found.append((path, old, new))
+    return found
+
+
+def check_file_versions(payload: pathlib.Path, fresh: pathlib.Path) -> None:
+    """Refuse to ship a binary an upgrade from *payload* would not install.
+
+    The baseline is the payload being replaced. If every committed payload has
+    passed this, then no file is older than in any earlier one, whichever
+    release a user is upgrading from. Paths are compared case-insensitively,
+    as Windows compares them.
+
+    Runs against the tree assemble_payload() built, before swap_payload() puts
+    it in place, like check_native_dependencies().
+    """
+    def versions(root: pathlib.Path) -> dict:
+        return {str(p.relative_to(root)).replace(os.sep, "/").lower():
+                file_version(p)
+                for p in root.rglob("*")
+                if p.is_file() and p.suffix.lower() in (".exe", ".dll", ".pyd")}
+
+    if not payload.exists():
+        print("file versions: no previous payload to compare with")
+        return
+    before, after = versions(payload), versions(fresh)
+    regressions = version_regressions(before, after)
+    if regressions:
+        print("\nerror: an upgrade from the current payload would not install:",
+              file=sys.stderr)
+        for path, old, new in regressions:
+            print("  %s  %s -> %s" % (path, old, new or "no version"),
+                  file=sys.stderr)
+        die("MSI keeps the installed file, then removes it with the old"
+            " product, and\n       nothing puts it back.")
+    print("file versions: %d binaries, none older than the ones they replace"
+          % len(set(before) & set(after)))
 
 
 # Compound statements _runs_on_import() does not enter. A try is where an
@@ -1004,12 +1297,66 @@ def build_staging_tree(hg: pathlib.Path, tag: str | None, target_triple: str,
     build_dir.mkdir(parents=True, exist_ok=True)
 
     # create_pyoxidizer_install_layout() purges its output directory itself.
-    with documentation_build_skipped(hgpyoxidizer):
+    with documentation_build_skipped(hgpyoxidizer), \
+            python_distribution_pinned(hg, target_triple):
         hgpyoxidizer.create_pyoxidizer_install_layout(
             hg, build_dir, stage, target_triple
         )
 
     return stage
+
+
+def pinned_pyoxidizer_config(text: str, target_triple: str) -> str:
+    """pyoxidizer.bzl *text*, building with PYTHON_DISTRIBUTIONS instead.
+
+    flavor is "standalone" because PyOxidizer 0.17 accepts nothing else;
+    whether the distribution is a shared or a static build comes from the
+    archive itself.
+    """
+    count = text.count(DEFAULT_DISTRIBUTION_CALL)
+    if count != 1:
+        die("expected pyoxidizer.bzl to call %s once, found it %d times.\n"
+            "       Upstream has changed how it picks its Python; check that"
+            " PYTHON_DISTRIBUTIONS\n       still makes sense before updating"
+            " DEFAULT_DISTRIBUTION_CALL."
+            % (DEFAULT_DISTRIBUTION_CALL, count))
+    url, sha256 = PYTHON_DISTRIBUTIONS[target_triple]
+    return text.replace(
+        DEFAULT_DISTRIBUTION_CALL,
+        'PythonDistribution(sha256 = "%s", url = "%s", flavor = "standalone")'
+        % (sha256, url))
+
+
+@contextlib.contextmanager
+def python_distribution_pinned(hg: pathlib.Path, target_triple: str):
+    """Build with PYTHON_DISTRIBUTIONS rather than PyOxidizer's default.
+
+    The change goes into an untracked copy of pyoxidizer.bzl, which
+    PYOXIDIZER_CONFIG points PyOxidizer at, and not into pyoxidizer.bzl. The
+    version string comes from setuptools_scm, which marks a checkout with a
+    modified tracked file as 7.0.1+d<date>. It does not count unknown files,
+    which is why this is created only after build_staging_tree() has checked
+    that the checkout is clean.
+    """
+    original = hg / "rust" / "hgcli" / "pyoxidizer.bzl"
+    pinned = hg / PINNED_CONFIG
+    # Bytes, so that Windows does not rewrite the line endings on the way.
+    text = original.read_bytes().decode("utf-8")
+    pinned.write_bytes(pinned_pyoxidizer_config(text, target_triple)
+                       .encode("utf-8"))
+    url = PYTHON_DISTRIBUTIONS[target_triple][0]
+    print("  embedding %s" % url.rsplit("/", 1)[-1].replace("%2B", "+"))
+
+    previous = os.environ.get("PYOXIDIZER_CONFIG")
+    os.environ["PYOXIDIZER_CONFIG"] = str(pinned)
+    try:
+        yield
+    finally:
+        if previous is None:
+            del os.environ["PYOXIDIZER_CONFIG"]
+        else:
+            os.environ["PYOXIDIZER_CONFIG"] = previous
+        pinned.unlink(missing_ok=True)
 
 
 @contextlib.contextmanager
@@ -1309,7 +1656,10 @@ def main() -> None:
         stage, payload, fresh, trim=trim, trim_hgext=trim_hgext,
         trim_sources=trim_sources, force=args.force)
 
+    stamp_version_resource(fresh / "hg.exe", mercurial_version(stage))
     check_native_dependencies(fresh, removed_names)
+    check_file_versions(payload, fresh)
+    check_hg_runs(fresh)
     swap_payload(fresh, payload)
 
     if trimmed:
