@@ -80,6 +80,34 @@ of minutes because you're compiling everything.
 
 See the "Checking for Rust" section to see if the install succeeded.
 
+Using pipx
+----------
+
+Using pipx is an efficient way to get an isolated installation of mercurial
+available for a user or globally.
+
+  $ pipx install mercurial \
+        --pip-args '--no-cache-dir --config-settings --global-option=--rust --no-binary=mercurial'
+
+You can then add extensions to that install using
+
+  $ pipx inject mercurial hg-foo
+
+Using uv tool
+-------------
+
+Using `uv tool` is another efficient way to get an isolated installation of
+mercurial available for a user or globally.
+
+  $ uv tool install mercurial \
+        --no-binary=mercurial \
+        --no-cache \
+        --config-setting=--build-option=--rust
+
+You can bring extensions along using the `--with` flag. For example
+
+  $ uv tool install mercurial --with hg-evolve [...]
+
 From your distribution
 ----------------------
 
@@ -91,7 +119,7 @@ that, or ask their team to add support for hg+Rust!
 From source
 -----------
 
-Please refer to the `rust/README.rst` file in the Mercurial repository for
+Please refer to the `rust/README.md` file in the Mercurial repository for
 instructions on how to install from source.
 
 MSRV
@@ -109,12 +137,12 @@ fallback mechanism for unsupported invocations. It allows for much faster
 execution of certain commands while adding no discernable overhead for the rest.
 
 The only way of trying it out is by building it from source. Please refer to
-`rust/README.rst` in the Mercurial repository.
+`rust/README.md` in the Mercurial repository.
 
 See `hg help config.rhg` for configuration options.
 
 Contributing
 ============
 
-If you would like to help the Rust endeavor, please refer to `rust/README.rst`
+If you would like to help the Rust endeavor, please refer to `rust/README.md`
 in the Mercurial repository.

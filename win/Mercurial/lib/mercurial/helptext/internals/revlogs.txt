@@ -311,3 +311,40 @@ Index:
 Data:
 
   raw bytes block containing all filename concatenated without any separator.
+
+
+Mapping filename to filelog and path encoding
+=============================================
+
+Within Mercurial storage, The path of a filelog storing data for a filename can
+be computed from that filename. The over simplified version of that computation
+is that a filename `foo/bar/baz.txt` will have an associated
+`data/foo/bar/baz.txt.i` revlog.
+
+However this simple approach could create conflicts on some file systems and
+invalid filename on some operating systems. So the actual name is transformed in
+various ways. This process is often called "path encoding", you can see it
+performed by `vfs.encode`.
+
+There are three main kinds of transformation:
+
+- *Directory encoding* refers to `_direncode` in mercurial/store.py which avoids
+  collisions by appending `.hg` to directories ending in `.i`, `.d`, or `.hg`.
+
+- *Path encoding* refers to `_pathencode` in mercurial/store.py. It encodes
+  various characters and sequences to ensure broad operating system
+  compatibility.
+
+- *Path shortening*: when a path is too long, it encodes it to a path in
+  `.hg/store/dh` (instead of `.hg/store/data`) and includes a hash of the input
+  path.
+
+The details of the transformation we use depends on repository format (see ``hg
+help internals.requirements`` for example, the ``dotencode`` one.)
+
+The above logic and encoding also apply to manifestlog when tree manifest is
+used. The manifestlog for a directory `foo/bar/` is stored in a revlog at
+`meta/foo/bar.i`... + encoding.
+
+Paths that have not been transformed yet are often called "unencoded path",
+while the ones that have are called "encoded path".
