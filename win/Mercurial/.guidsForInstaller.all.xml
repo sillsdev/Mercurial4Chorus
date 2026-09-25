@@ -475,4 +475,53 @@
   <File Id="curial.lib.hgext.__pycache__.rebase.cpython_39.pyc" Guid="b56cb670-3e80-40f2-bd6f-3b31ef20e3e0" />
   <File Id="rcurial.lib.hgext.__pycache__.strip.cpython_39.pyc" Guid="9eb57910-8abd-414c-8c6e-372570169d08" />
   <File Id="mercurial.lib.libffi_8.dll" Guid="255417e8-6c92-4a63-b17c-13e48a6a12b0" />
+  <File Id="curial.cmd_impls.__pycache__.bundle.cpython_39.pyc" Guid="4ec3785e-647e-4fb6-9224-faab96bc711b" />
+  <File Id="rcurial.cmd_impls.__pycache__.clone.cpython_39.pyc" Guid="f7d82788-93d0-4760-88da-861e2174e705" />
+  <File Id="rial.cmd_impls.__pycache__.incoming.cpython_39.pyc" Guid="f52d75f4-f030-4c27-915c-330d1f40b1cd" />
+  <File Id="rial.cmd_impls.__pycache__.outgoing.cpython_39.pyc" Guid="b4141386-f516-4ce5-a4fc-c689003c17bc" />
+  <File Id="curial.cmd_impls.__pycache__.update.cpython_39.pyc" Guid="e84eee37-d609-45d8-8898-8f2f241d6dbc" />
+  <File Id="_.exchanges.__pycache__.bundle_cache.cpython_39.pyc" Guid="f1521398-fb7e-4631-8e4f-7372e551abde" />
+  <File Id="l.exchanges.__pycache__.bundle_caps.cpython_39.pyc" Guid="aba49c9e-111d-412c-a71a-1f289190cf9f" />
+  <File Id="ercurial.exchanges.__pycache__.peer.cpython_39.pyc" Guid="d6c61622-ba10-4119-b8cb-ec2bdad1f82b" />
+  <File Id="rial.exchanges.__pycache__.__init__.cpython_39.pyc" Guid="5c75f2ee-77d5-44d3-8d57-63bfeb7767ef" />
+  <File Id="al.lib.mercurial.helptext.internals.file_index.txt" Guid="7f69c9cb-50a1-46a1-adbd-1647e2ec631d" />
+  <File Id="gweb.__pycache__.hgwebdir_mod_inner.cpython_39.pyc" Guid="b3300067-2234-4a32-9cd8-33fb22b60c5c" />
+  <File Id="l.hgweb.__pycache__.hgweb_mod_inner.cpython_39.pyc" Guid="cfe47930-3c4f-42e2-9347-4b78c908c7e7" />
+  <File Id="ial.hgweb.__pycache__.wsgicgi_inner.cpython_39.pyc" Guid="69cfa184-6b09-44c6-916e-0ae99cd8f378" />
+  <File Id="urial.interfaces.__pycache__.bundle.cpython_39.pyc" Guid="317fb946-6c4e-4800-b5a5-c40121618327" />
+  <File Id="_.interfaces.__pycache__.changegroup.cpython_39.pyc" Guid="aa716245-ba57-40bb-a270-05674ac27a2f" />
+  <File Id="_.interfaces.__pycache__.compression.cpython_39.pyc" Guid="9ac7d26b-d523-4ee6-aeaa-1584354ca92d" />
+  <File Id="urial.interfaces.__pycache__.config.cpython_39.pyc" Guid="d6038bab-e18d-4064-81f4-12fadcb32953" />
+  <File Id="rial.interfaces.__pycache__.context.cpython_39.pyc" Guid="5ae81b15-17ad-40a5-a5c3-396cb4d39ec7" />
+  <File Id="ial.interfaces.__pycache__.exchange.cpython_39.pyc" Guid="b513e2ee-7bef-46a6-b225-54d5394e81a8" />
+  <File Id="l.interfaces.__pycache__.file_index.cpython_39.pyc" Guid="2d6011f6-db9e-45e1-9c5a-cb2f8e5612c3" />
+  <File Id="urial.interfaces.__pycache__.revlog.cpython_39.pyc" Guid="5face1b9-3c2f-49a5-bc13-31fedec78daa" />
+  <File Id="mercurial.interfaces.__pycache__.ui.cpython_39.pyc" Guid="76bf5867-5b5c-4239-9eea-88ef8a51879c" />
+  <File Id="_.main_script.__pycache__.cmd_finder.cpython_39.pyc" Guid="c42a529f-9009-4ef9-b6d6-e8c92551b7c9" />
+  <File Id="ial.main_script.__pycache__.options.cpython_39.pyc" Guid="d03fd2d6-476f-4ac8-8dc3-4ab4c23f4464" />
+  <File Id="urial.main_script.__pycache__.paths.cpython_39.pyc" Guid="5fce2b40-bce3-4d01-9265-7490c2ae4ffb" />
+  <File Id="al.main_script.__pycache__.__init__.cpython_39.pyc" Guid="58bd240b-b116-48db-b63c-ccd3d62bffb3" />
+  <File Id="curial.merge_utils.__pycache__.diff.cpython_39.pyc" Guid="3efb1dc1-e5cc-4966-a1ad-fd61d4cc13d4" />
+  <File Id="rial.merge_utils.__pycache__.update.cpython_39.pyc" Guid="4589afa4-1bd2-4a2a-89e5-39d200107b3d" />
+  <File Id="al.merge_utils.__pycache__.__init__.cpython_39.pyc" Guid="2243134e-67e9-4a65-a84b-189a3cdc3706" />
+  <File Id="ial.narrow.__pycache__.working_copy.cpython_39.pyc" Guid="7ce53f58-2840-4991-aba7-d4cceef1b352" />
+  <File Id="rcurial.narrow.__pycache__.__init__.cpython_39.pyc" Guid="3559c68d-2e6c-4efa-909f-5dec662b3c5f" />
+  <File Id="b.mercurial.pure.__pycache__.deltas.cpython_39.pyc" Guid="d6ca0f06-4e6c-4091-b8f5-6747c3e56d0c" />
+  <File Id="mercurial.repo.__pycache__.creation.cpython_39.pyc" Guid="b8b72eb0-c8a9-4e07-bb6a-c09297db8f0d" />
+  <File Id="_.mercurial.repo.__pycache__.factory.cpython_39.pyc" Guid="29f1ceb1-391b-488a-b1c7-f41848523602" />
+  <File Id="urial.repo.__pycache__.requirements.cpython_39.pyc" Guid="a720316c-b526-4bf1-b3c1-f86c0f692e4f" />
+  <File Id="curial.repo.__pycache__.vfs_options.cpython_39.pyc" Guid="33e991c6-9a7f-45f9-9408-0dd1b21e72be" />
+  <File Id="mercurial.repo.__pycache__.__init__.cpython_39.pyc" Guid="f21e2ca6-a8b3-4d5f-a5b3-3645d953e686" />
+  <File Id="rial.revlogutils.__pycache__.config.cpython_39.pyc" Guid="7224565f-9165-402b-8173-980d5bbeef71" />
+  <File Id="_.store_utils.__pycache__.file_index.cpython_39.pyc" Guid="1190c825-874b-4d5a-b649-8ba9959c39b9" />
+  <File Id="e_utils.__pycache__.file_index_util.cpython_39.pyc" Guid="21f822c3-b28b-4bc3-be13-3e2c0dea47ee" />
+  <File Id="al.store_utils.__pycache__.__init__.cpython_39.pyc" Guid="ef6718d0-f9ab-48f4-884b-63cc109efb96" />
+  <File Id="pgrade_utils.__pycache__.share_safe.cpython_39.pyc" Guid="56cddbb5-4a6b-4d2b-9432-e1bb54136145" />
+  <File Id="ercurial.utils.__pycache__.dag_util.cpython_39.pyc" Guid="3fe782b2-8c93-44b8-a2ee-91325c182f76" />
+  <File Id="_.mercurial.utils.__pycache__.docket.cpython_39.pyc" Guid="b1ca264a-3fe0-4bfa-9b9d-433cb2f4ac28" />
+  <File Id="l.__pycache__.bundle2_part_handlers.cpython_39.pyc" Guid="6c8a7675-2b76-4536-848c-a5a246a248d2" />
+  <File Id="ercurial.__pycache__.initialization.cpython_39.pyc" Guid="f10dd668-62a9-41b6-b4c8-46909fd7534c" />
+  <File Id="urial.__pycache__.revset_predicates.cpython_39.pyc" Guid="62053086-a04d-4214-af37-c8046668a30e" />
+  <File Id="ial.lib.mercurial.__pycache__.shape.cpython_39.pyc" Guid="8306358e-1f90-4954-bbf5-e9cd621239ca" />
+  <File Id="al.lib.mercurial.__pycache__.tables.cpython_39.pyc" Guid="30416997-adf9-4887-8bfb-97e0223598bb" />
 </InstallerMetadata>

@@ -24,14 +24,16 @@ jobs:
     strategy:
       matrix:
         mercurial-version:
-          - "7.0.1"
+          - "7.2.4"
         python-version:
           - "3.9"
           - "3.10"
           - "3.11"
           - "3.12"
           - "3.13"
-          - "3.14.0-beta.4"
+          - "3.14"
+          # Update this to 3.15 once it's officially released (planned for 2026-10-01)
+          - "3.15.0-rc.2"
     outputs:
       mercurial-version: ${{ steps.output-version.outputs.mercurial-version }}
     steps:
@@ -45,6 +47,11 @@ jobs:
         allow-prereleases: true
     - name: Install Python setuptools
       run: pip install setuptools
+    # Starting from Mercurial 7.2, `make local` needs `uv` to run. We pin `uv`
+    # version so we can't be automatically upgraded to a compromised package;
+    # update this to the latest known-good version each time we bump Mercurial.
+    - name: Install uv
+      run: pip install uv==0.12.19
     - name: Checkout Mercurial
       run: hg clone https://foss.heptapod.net/mercurial/mercurial-devel hg
     - name: Checkout hg version to build
@@ -57,6 +64,18 @@ jobs:
       working-directory: hg/contrib/chg
     - name: Build Mercurial
       run: make local
+      working-directory: hg
+    - name: Check the C extensions were built for this Python
+      # The package's Linux side works only through the .so files built here,
+      # and nothing downstream notices if there are none: the strip step below
+      # finds nothing and succeeds. `make local` picks its interpreter with
+      # `uv venv -p python3`, so this also checks that it found the one
+      # setup-python installed rather than some other python3.
+      run: |
+        suffix=$(python -c "import sysconfig; print(sysconfig.get_config_var('EXT_SUFFIX'))")
+        found=$(find mercurial -name "*${suffix}" | wc -l)
+        echo "${found} extension module(s) ending ${suffix}"
+        test "${found}" -gt 0
       working-directory: hg
     - name: Delete .hg folder prior to upload
       run: rm -rf .hg
