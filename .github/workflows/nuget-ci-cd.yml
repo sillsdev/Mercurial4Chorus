@@ -32,8 +32,7 @@ jobs:
           - "3.12"
           - "3.13"
           - "3.14"
-          # Update this to 3.15 once it's officially released (planned for 2026-10-01)
-          - "3.15.0-rc.2"
+          - "3.15"
     outputs:
       mercurial-version: ${{ steps.output-version.outputs.mercurial-version }}
     steps:
@@ -45,8 +44,6 @@ jobs:
       with:
         python-version: ${{ matrix.python-version }}
         allow-prereleases: true
-    - name: Install Python setuptools
-      run: pip install setuptools
     # Starting from Mercurial 7.2, `make local` needs `uv` to run. We pin `uv`
     # version so we can't be automatically upgraded to a compromised package;
     # update this to the latest known-good version each time we bump Mercurial.
