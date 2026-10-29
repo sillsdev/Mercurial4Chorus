@@ -41,7 +41,7 @@ any lines. New GUIDs are fine, losing or changing pre-existing GUIDs is not.
 Usage::
 
     py -3 build-windows-payload.py                   # build ../hg as checked out
-    py -3 build-windows-payload.py --tag 7.0.1       # update it to a tag first
+    py -3 build-windows-payload.py --tag 7.2.4       # update it to a tag first
     py -3 build-windows-payload.py --no-trim         # useful for debugging a build
 """
 
@@ -65,7 +65,7 @@ import xml.etree.ElementTree as ElementTree
 #
 # Keep this in sync with MercurialVersion in SIL.Chorus.Mercurial.csproj and
 # the mercurial-version matrix in .github/workflows/nuget-ci-cd.yml.
-DEFAULT_HG_TAG = "7.0.1"
+DEFAULT_HG_TAG = "7.2.4"
 
 # Target triples for PyOxidizer; you usually won't need to change this.
 DEFAULT_TARGET_TRIPLE = "x86_64-pc-windows-msvc"

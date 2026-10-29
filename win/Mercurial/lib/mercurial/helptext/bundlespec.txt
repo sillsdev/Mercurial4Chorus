@@ -80,9 +80,20 @@ changegroup
     Include the changegroup data in the bundle (default to True).
 
 cg.version
-    Select the version of the changegroup to use. Available options are : 01, 02
-    or 03. By default it will be automatically selected according to the current
-    repository format.
+    Select the version of the changegroup to use. Available options are : 01,
+    02, 03, or 04. By default it will be automatically selected according to the
+    current repository format.
+
+cg.delta-compression
+    Starting with `cg.version` "04", changegroups can include pre-compressed
+    deltas that the receiving end might reuse as-is. If this option is omitted,
+    no such delta will be part of the changegroup. The option accepts a
+    comma-separated list of accepted compression formats. Supported format are:
+
+    - none: delta explicitly non-compressed (useful to prevent the receiver from
+            even trying to compress such deltas)
+    - zlib: zlib-compressed delta
+    - zstd: zstd-compressed delta
 
 obsolescence
     Include obsolescence-markers relevant to the bundled changesets.
@@ -91,7 +102,7 @@ phases
     Include phase information relevant to the bundled changesets.
 
 revbranchcache
-    Include the "tags-fnodes" cache inside the bundle.
+    Include the "rev-branch" cache inside the bundle.
 
 tagsfnodescache
     Include the "tags-fnodes" cache inside the bundle.

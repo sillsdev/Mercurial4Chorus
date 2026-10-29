@@ -1,0 +1,369 @@
+The *file-index* is a part of the Mercurial store that tracks all file-paths used
+within a repository store.
+
+WARNING: The "file-index" is an experimental feature still in development.
+While the file format (`fileindex-v1`) is frozen and you can thus expect it to be supported,
+the feature itself may still have bugs or need API/config changes.
+
+
+The file index supersedes the fncache (see the "Difference with the Fncache"
+section) and is independent of the working copy, only tracking file-paths relevant
+for the history.
+
+The file index is used by operations that needs to iterate over all the
+information in the store, like local and stream cloning, repository upgrades or
+various debug commands computing statistics.
+
+The file index also provides a bidirectional mapping between "file-path" and
+"file-token". The "file-token" are an internal opaque fixed size identifiers
+that can be used by algorithms for efficiency.
+
+The file index is designed for efficient querying and updating.
+
+The file index supersede the "fncache" feature, see the `Difference with
+FnCache` section for details. It is also currently incompatible with the
+experimental `tree manifest` feature.
+
+This feature is guarded by the `fileindex-v1` requirement. See
+:hg:`help internals.requirements` for details.
+
+High level design
+=================
+
+Functionality
+-------------
+
+The file-index features revolve around two main concepts:
+
+* file-path: The path of a file for which we have file revision stored in the
+  store of a repository.
+
+  The "file-path" is the same as the path initially tracked and committed from
+  the working copy without any transformation or encoding, except for path
+  separator being normalised to "/". The "file-path" is a relative path (from
+  the working copy root).
+
+  When using a narrow repository, filtered file-paths whose file-revisions are
+  missing from the store are not stored in the file-index.
+
+* file-token: An opaque, fixed size identifier that uniquely identifies a
+  file-path within a given repository. The file tokens are local only and not
+  consistent between clones.
+
+  In practice, a file index *token* is a nonzero unsigned 31-bit integer: it
+  fits in 32 bits but we reserve the value 0 and all values with the high bit
+  for other uses. However, this is not a core guarantee for "file-token" and
+  might change in the future.
+
+
+The feature envelop of the file-index is:
+
+    * records the full set of "file-path" for whom we have file-revision stored
+     in the repository store.
+
+     For a standard repository, this mean all the "file-path" ever seen in the
+     history.
+
+     For a narrow repository, this mean all the "file-path" seen in the history
+     that are also selected by the narrow spec.
+
+    * provides an efficient mapping from "file-path" to "file-token",
+
+    * provides an efficient mapping from "file-token" to "file-path",
+
+    * listing the set of all stored "file-path" efficiently,
+
+    * adding new "file-path" efficiently, without affecting the validity of
+      existing "file-token". A set of addition can be done in an "atomic" and
+      transactional way.
+
+      - A series of update will be either no visible and visible all at once on
+        commit.
+
+      - An ongoing updates can be aborted, not adding the new "file-path"
+        recorded so far.
+
+      - "pending visibility": external process, like hooks can be made to see
+        the changes from the in-progress transaction.
+
+    * removing some "file-path" from the file-index. However, such operation:
+        - may affects the validity of existing "file-token"
+        - is not guaranteed to be efficient,
+        - doesn't ensure transactionality
+
+    * It is mmap friendly.
+
+    * Using this feature or not should not affect exchange between peers.
+
+    * Once loaded, read only accesses can be done without memory allocations
+
+As the feature set and format is not frozen yet, this feature set is subject to
+change.
+
+
+Implementation summary
+----------------------
+
+There are four main component to the `file-index`.
+
+Three are related to the data themselves:
+
+- the "path-index" that maps "file-path" to "file-token",
+- the "token-index" that maps "file-token" to "file-path",
+- the "file-path-data" that contains all the "file-path" themself.
+
+The last one is the "docket". It stores various metadata and provides
+transactionality, mmap safety, and other lower level details. See the "Internal
+filesystem representation" section for details on the docket.
+
+The "file-path-data" contains all the "file-path" stored in the repository. They
+are each stored in full, to be able access them directly without processing or
+memory allocation. This content is "append only" and it's size complexity is
+`O(N)`.
+
+The "token-index" is a linear index that can resolve each "file-token" to a
+"file-path" in `O(1)` time. It also contains extra metadata to efficiently split
+the "basename" of "file-path" from the directories containing it. This content
+is append only and it's size complexity is `O(N)`.
+
+The "path-index" is a prefix tree that allow to map a "file-path" into a
+"file-token" (if the "file-path" is known to the `file-index`). The prefix tree
+rely on the content of the "file-path-data" to encode its prefix. This allow it
+to use fixed size node. The complexity of search or adding a "file-path" is
+`O(log(N))` time. To preserve the append-only property on disk, this prefix tree
+is stored on disk as "persistent" tree, only adding new nodes pointing to
+existing one when inserting data, never overwriting existing nodes.  As we will
+eventually vacuum the "dead" nodes, its size complexity remains `O(N)`.
+
+Difference with FnCache
+-----------------------
+
+The `fncache` and the `file-index` store similar but different information.
+While the `file-index` store plain `file-path`, the `fncache` store the path of
+filelog related files (stored on disk in `.hg/store/data/`).
+
+So when committing a "Foo/Bar/luz.txt" file:
+
+- the `file-index` stores "Foo/Bar/luz.txt"
+- the `fncache` stores "data/Foo/Bar/luz.txt.i"
+  (and possibly "data/Foo/Bar/luz.txt.d")
+
+Note: that the path stored in the `fncache` are "unencoded", so they are the
+path before any "path encoding happens", so in practice, the actual file system
+file will likely be "data/_foo/_bar/luz.txt.i", and some of the filelogs may
+live in `.hg/store/dh/`.
+
+See :hg:`help internals.revlogs` for details on the revlog related files and
+path encoding.
+
+
+By leaking revlog's implementation details, the `fncache` offer less flexibility
+to the revlog, and the storage layer in general. A repository using `fncache`
+must use one filelog per "file-path" and its revlogs cannot use flexible
+filenames. On the other hand, a `file-index` repository store an higher level
+information from which the filelog on can be computed. So it offers the same
+features while offering more flexibility.
+
+The only "drawback" is that the `fncache` provides a way to know that a given
+filelog is not inlined (even after lock release), while with the `file-index` we
+need to open the filelog to get that information. However, the `fncache` doesn't
+provide a way to know that a given filelog is inlined, once the lock is
+released. In addition, revlog's inlining is overall a quite flawed feature that
+we are slowly moving away from, so this is not expected to be a major problem.
+
+
+Another significant difference is that the `fncache` doesn't provides
+`file-token`.
+
+Unlike the `file-index`, the `fncache` is currently not visible during "pending"
+operations.
+
+Finally, but not least, the `fncache` file format is not tailored for
+performance. Stored as flat, line based listing of path, the `fncache` needs to
+load all the paths from disk to be able to find if a path exist within itself,
+slowing down searches and updates. This affects the performance of higher level
+operation like `commit` or `pull`.
+
+Internal filesystem representation
+==================================
+
+File organization
+-----------------
+
+The file index storage consists of four files:
+
+* `.hg/store/fileindex`: the docket file
+* `.hg/store/fileindex-list.{ID1}`: the list file, containing the "file-path-data"
+* `.hg/store/fileindex-meta.{ID2}`: the meta file, containing the "token-index"
+* `.hg/store/fileindex-tree.{ID3}`: the tree file, containing the "path-index"
+
+The docket is a small file that functions similarly to the `dirstate-v2` docket.
+It stores metadata about the other files, including their active sizes and IDs.
+The files with ID suffixes are append-only and never truncated. This provide use
+with "transactionality" and "mmap safety". When we ever need to rewrite their
+content, we write to a file with a new ID and update the docket to point to it.
+
+The docket file format
+----------------------
+
+The purpose of the docket file is to provide a consistent view of the file
+index. Changes to the other files are only visible to other process when the
+docket is updated on disk, hence only the docket needs to be rolled back when a
+transaction is aborted.
+
+The docket file contains the following fields at fixed byte offsets counting
+from the start of the file:
+
+* Offset 0:
+  The 12-byte marker string "fileindex-v1". This makes it easier to distinguish
+  in case we introduce a new format in the future, although it is not strictly
+  necessary since `.hg/store/requires` determines which format to use.
+
+The following five "used size" fields are stored as 32-bit big-endian integers.
+The actual size of the respective files may be larger (if another Mercurial
+process is appending but has not updated the docket yet). That extra data at the
+end of the files must be ignored.
+
+* Offset 12: The used size of the list file in bytes.
+* Offset 16: The used size of the meta file in bytes.
+* Offset 20: The used size of the tree file in bytes.
+
+The following four "ID" fields are stored as 8-byte strings. They indicate
+where the corresponding data file is stored. For example, if the list file ID is
+"ab19b7c0", then the list file is stored at `.hg/store/fileindex-list.ab19b7c0`.
+
+* Offset 24: The list file ID.
+* Offset 32: The meta file ID.
+* Offset 40: The tree file ID.
+
+* Offset 48: Prefix tree root node address
+
+  Pseudo-pointer to the root node in the prefix tree, counted in bytes from the
+  start of the tree file, as a 32-bit big-endian integer.
+
+* Offset 52: Amount of "dead" data
+
+  How many bytes of the tree file (within its used size) are unused, as a 32-bit
+  big-endian integer. When appending to an existing tree file, some existing
+  nodes can be unreachable from the new root but they still take up space. This
+  counter is used to decide when to write a new tree file from scratch instead
+  of appending to an existing one. Effectively vacuuming the "dead" data.
+
+* Offset 56: Four flag bytes, currently ignored and reset to zero when saving
+  the docket file.
+
+* Offset 60: Number of garbage entries as a 32-bit big-endian integer.
+
+* Offset 64: Size of the garbage path buffer in bytes, as a 32-bit big-endian
+  integer.
+
+* Offset 68:
+  Array of garbage entries. Each has the following 12-byte layout:
+
+  * Offset 0:
+    Time-to-live (TTL) as a 16-bit big-endian integer. This is the remaining
+    number of transactions the file must be kept around for.
+  * Offset 2:
+    Timestamp when the entry was added, in seconds since the Unix epoch, as a
+    32-bit big-endian integer.
+  * Offset 6:
+    Offset of the path within the path buffer, as a 32-bit big-endian integer.
+  * Offset 10:
+    Length of the path in bytes, as a 16-bit big-endian integer.
+
+* Next offset (68 + 12 * number of garbage entries):
+  The garbage path buffer, containing file paths relative to `.hg/store/`
+  terminated by null bytes, one after the other. The presence of the null bytes
+  is optional and should not be relied on.
+
+The list file format
+---------------------
+
+The purpose of the list file is to allow the meta file and tree file to
+reference paths from fixed-length structures. It also enables code to construct
+file paths without allocation, assuming the list file is mapped in memory.
+
+Because the list file is append-only, to remove paths from it, we must write a
+new list file from scratch. This is necessary in rare cases such as when
+narrowing a repository or stripping changesets.
+
+The list file contains all the file paths terminated by null bytes, one after
+the other. The order of the paths is arbitrary and should not be relied on.
+The presence of the null bytes is optional and should not be relied on.
+
+The meta file format
+--------------------
+
+The purpose of the meta file is to store information for each token (in
+particular, its file path) with constant time lookup.
+
+Because the meta file is append-only, to remove elements from it, we must write
+a new meta file from scratch. This is necessary in rare cases such as when
+narrowing a repository or stripping changesets.
+
+The meta file contains an array of 8-byte elements. The element for token T is
+found at byte offset T*8. Each element has the following layout:
+
+* Offset 0:
+  Pseudo-pointer to the start of the token's file path, counted in bytes from
+  the start of the list file, as a 32-bit big-endian integer.
+
+* Offset 4:
+  Length of the token's file path in bytes, as a 16-bit big-endian integer.
+  This does not include the potential null terminator.
+
+* Offset 6:
+  Length of the path's directory name prefix in bytes, as a 16-bit big-endian
+  integer. This is the byte index of the final "/" character in the path. If
+  there is no "/", meaning this represents a file in the root of the repository,
+  then this field is zero.
+
+The tree file format
+--------------------
+
+The purpose of the tree file is to store information for each file path (in
+particular, its token) and support fast lookup.
+
+The tree file contains nodes that form a prefix tree. The docket file indicates
+which node is the root node. Because the tree file is append-only, every time we
+insert a path into the tree, we must create new internal nodes all the way up to
+the root. This results in a growing number of unreachable nodes over time. When
+this unused space exceeds a threshold, we rebuild the tree file from scratch.
+Note that we don't do this process for each individual insertion, but only when
+we flush the current inserted batch to disk.
+
+Each node has a string *label*, and a *prefix* obtained by concatenating labels
+from the root to the node. The node does not store its label directly, only its
+first character, its length, and a file token. The label is a substring of the
+file path associated with the token, where the starting index is obtained by
+adding label lengths from the root to the node.
+
+There must not be a common prefix between any pair of sibling node labels. This
+limits the number of children to 256 based on initial bytes 0x00 to 0xff, and
+further to 253 since "\n", "\r", and "\0" are forbidden in file paths. This
+limit allows us to store the number of children in an 8-bit integer.
+
+Each node has the following 6-byte header:
+
+* Offset 0: Token as a 32-bit big-endian integer.
+* Offset 4: Label length as an 8-bit integer.
+* Offset 5: Number of children as an 8-bit integer.
+
+The root node has token 0 and label length 0. For non-root nodes, the token and
+the label length must be nonzero.
+
+The header is followed by two arrays:
+
+* Offset 6:
+  For each child, its label's first character as an 8-bit integer.
+  As explained above, these characters are all distinct.
+
+* Next offset (6 + number of children):
+  For each child, a 32-bit big-endian integer value.
+
+  If the high bit is 0, then the value is a pseudo-pointer to the child node,
+  counting in bytes from the start of the tree file.
+
+  If the high bit is 1, then the child is a leaf node and the remaining 31 bits
+  are its token. Its label length is implicit: the label extends to the end of
+  the file path associated with the token.

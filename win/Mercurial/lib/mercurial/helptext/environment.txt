@@ -122,3 +122,19 @@ EDITOR
 PYTHONPATH
     This is used by Python to find imported modules and may need to be
     set appropriately if this Mercurial is not installed system-wide.
+
+
+HGZSTDPOLICY
+    Control which zstd implementation will be used for the Python code. This is
+    a list of options in priority order.
+
+    - vendored: use the pinned version of python-zstandard shipped in Mercurial
+    - system: use a possibly installed "zstandard" python package
+    - none: don't use zstd (ommiting this will raise an error if the above
+      fails)
+
+    Default value is "vendored,system,none"
+
+    This variable might be deprecated in the future depending on how zstd wrapper
+    library and they integration in Mercurial evolves. This config has no
+    effect on the Rust code.

@@ -8,7 +8,7 @@
     <teamcity_agent_home_dir Condition="'$(teamcity_agent_home_dir)'=='' And '$(OS)'!='Windows_NT'">/var/lib/TeamCity/agent</teamcity_agent_home_dir>
     <BuildCounter Condition="'$(BuildCounter)' == ''">0</BuildCounter>
     <PreRelease Condition="'$(PreRelease)' == ''">-beta.</PreRelease>
-    <MercurialVersion Condition="'$(MercurialVersion)' == ''">7.0.1</MercurialVersion>
+    <MercurialVersion Condition="'$(MercurialVersion)' == ''">7.2.4</MercurialVersion>
     <PackageVersion Condition="'$(PackageVersion)' == ''">$(MercurialVersion)$(PreRelease)$(BuildCounter)</PackageVersion>
   </PropertyGroup>
 
@@ -33,6 +33,8 @@ v6.5.1: Upgrade to Mercurial 6.5.1
 
 v7.0.1: Upgrade to Mercurial 7.0.1 and remove requirement to depend directly on this package (just depend on Chorus or LibChorus)
 v7.0.1: Ship the Mercurial payload outside the runtimes/ convention path so an RID-specific `dotnet publish` no longer double-ships it (fixes NETSDK1152; consumers no longer need `ExcludeAssets="native"`)
+
+v7.2.4: Upgrade to Mercurial 7.2.4
     </PackageReleaseNotes>
     <PackageReadmeFile>docs/README-nuget.md</PackageReadmeFile>
   </PropertyGroup>

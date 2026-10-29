@@ -102,7 +102,7 @@ need `docutils`, because the payload does not ship documentation.
 ## Building
 
 ```powershell
-py -3 build-windows-payload.py --tag 7.0.1
+py -3 build-windows-payload.py --tag 7.2.4
 ```
 
 `--tag` updates the checkout before building. Without it the checkout is built as it stands, and

@@ -753,6 +753,9 @@ for related options for the annotate command.
 ``git``
     Use git extended diff format.
 
+``merge``
+    :config-doc:`diff.merge`
+
 ``nobinary``
     Omit git binary patches.
 
@@ -884,9 +887,10 @@ A default setting can we set using the special `*` extension key::
 ----------
 
 Configuration that controls the repository format. Newer format options are more
-powerful, but incompatible with some older versions of Mercurial. Format options
-are considered at repository initialization only. You need to make a new clone
-for config changes to be taken into account.
+powerful, but incompatible with some older versions of Mercurial.
+
+Format options are considered at repository initialization only. You need to
+make a new clone for config changes to be taken into account.
 
 For more details about repository format and version compatibility, see
 https://www.mercurial-scm.org/wiki/MissingRequirement
@@ -899,7 +903,7 @@ https://www.mercurial-scm.org/wiki/MissingRequirement
 
     Repositories with this on-disk format require Mercurial version 1.9.
 
-    Enabled by default.
+    Enabled by default. Implied by `sparse-revlog`
 
 ``dotencode``
     Enable or disable the "dotencode" repository format which enhances
@@ -921,6 +925,9 @@ https://www.mercurial-scm.org/wiki/MissingRequirement
 
     Enabled by default.
 
+``use-delta-info-flags``
+    :config-doc:`format.use-delta-info-flags`
+
 ``use-dirstate-v2``
     Enable or disable the experimental "dirstate-v2" feature. The dirstate
     functionality is shared by all commands interacting with the working copy.
@@ -941,12 +948,12 @@ https://www.mercurial-scm.org/wiki/MissingRequirement
     available, and enabled by default if the fast implementation is available.
 
     To accomodate installations of Mercurial without the fast implementation,
-    you can downgrade your repository. To do so run the following command:
+    you can downgrade your repository. To do so run the following command::
 
-    $ hg debugupgraderepo \
-          --run \
-          --config format.use-dirstate-v2=False \
-          --config storage.dirstate-v2.slow-path=allow
+        $ hg debugupgraderepo \
+              --run \
+              --config format.use-dirstate-v2=False \
+              --config storage.dirstate-v2.slow-path=allow
 
     For a more comprehensive guide, see :hg:`help internals.dirstate-v2`.
 
@@ -975,36 +982,7 @@ https://www.mercurial-scm.org/wiki/MissingRequirement
     Hide message when performing such automatic upgrade.
 
 ``use-dirstate-tracked-hint``
-    Enable or disable the writing of "tracked key" file alongside the dirstate.
-    (default to disabled)
-
-    That "tracked-hint" can help external automations to detect changes to the
-    set of tracked files. (i.e the result of `hg files` or `hg status -macd`)
-
-    The tracked-hint is written in a new `.hg/dirstate-tracked-hint`. That file
-    contains two lines:
-    - the first line is the file version (currently: 1),
-    - the second line contains the "tracked-hint".
-    That file is written right after the dirstate is written.
-
-    The tracked-hint changes whenever the set of file tracked in the dirstate
-    changes. The general idea is:
-    - if the hint is identical, the set of tracked file SHOULD be identical,
-    - if the hint is different, the set of tracked file MIGHT be different.
-
-    The "hint is identical" case uses `SHOULD` as the dirstate and the hint file
-    are two distinct files and therefore that cannot be read or written to in an
-    atomic way. If the key is identical, nothing garantees that the dirstate is
-    not updated right after the hint file. This is considered a negligible
-    limitation for the intended usecase. It is actually possible to prevent this
-    race by taking the repository lock during read operations.
-
-    They are two "ways" to use this feature:
-
-    1) monitoring changes to the `.hg/dirstate-tracked-hint`, if the file
-    changes, the tracked set might have changed.
-
-    2) storing the value and comparing it to a later value.
+    :config-doc:`format.use-dirstate-tracked-hint`
 
 
 ``use-dirstate-tracked-hint.automatic-upgrade-of-mismatching-repositories``
@@ -1058,12 +1036,12 @@ https://www.mercurial-scm.org/wiki/MissingRequirement
     available, and enabled by default if the fast implementation is available.
 
     To accomodate installations of Mercurial without the fast implementation,
-    you can downgrade your repository. To do so run the following command:
+    you can downgrade your repository. To do so run the following command::
 
-    $ hg debugupgraderepo \
-          --run \
-          --config format.use-persistent-nodemap=False \
-          --config storage.revlog.persistent-nodemap.slow-path=allow
+        $ hg debugupgraderepo \
+              --run \
+              --config format.use-persistent-nodemap=False \
+              --config storage.revlog.persistent-nodemap.slow-path=allow
 
 ``use-share-safe``
     Enforce "safe" behaviors for all "shares" that access this repository.
@@ -1131,6 +1109,8 @@ https://www.mercurial-scm.org/wiki/MissingRequirement
     performance (by using shortened delta chains.)
 
     Repositories with this on-disk format require Mercurial version 4.7
+
+    Implies `usegeneraldelta`.
 
     Enabled by default.
 
@@ -2088,6 +2068,12 @@ statistical text report generated from the profiling data.
     file exists, it is replaced. (default: None, data is printed on
     stderr)
 
+``output-dir``
+  :config-doc:`profiling.output-dir`
+
+``output-dir:create``
+  :config-doc:`profiling.output-dir:create`
+
 ``sort``
     Sort field.  Specific to the ``ls`` instrumenting profiler.
     One of ``callcount``, ``reccallcount``, ``totaltime`` and
@@ -2218,7 +2204,7 @@ Alias definitions for revsets. See :hg:`help revsets` for details.
 ``rhg``
 -------
 
-The pure Rust fast-path for Mercurial. See `rust/README.rst` in the Mercurial repository.
+The pure Rust fast-path for Mercurial. See `rust/README.md` in the Mercurial repository.
 
 ``fallback-executable``
     Path to the executable to run in a sub-process when falling back to
@@ -2331,6 +2317,9 @@ category impact performance and repository size.
 ``revlog.dirstate-v2.slow-path``
     :config-doc:`storage.dirstate-v2.slow-path`
 
+``revlog.exchange-compressed-delta``
+    :config-doc:`storage.revlog.exchange-compressed-delta`
+
 ``revlog.issue6528.fix-incoming``
     Version 5.8 of Mercurial had a bug leading to altering the parent of file
     revision with copy information (or any other metadata) on exchange. This
@@ -2430,6 +2419,9 @@ category impact performance and repository size.
 
     This option is enabled by default. When disabled, it also disables the
     related ``storage.revlog.reuse-external-delta-parent`` option.
+
+``revlog.reuse-external-delta-compression``
+    :config-doc:`storage.revlog.reuse-external-delta-compression`
 
 ``revlog.zlib.level``
     Zlib compression level used when storing data into the repository. Accepted
@@ -3092,6 +3084,21 @@ User interface controls.
     - ``low``: reduces memory usage when possible at the cost of overall
       performance.
 
+``resources.bandwidth``
+    How aggressive Mercurial can be in terms of bandwidth usage:
+
+    Currently recognised values are::
+
+    - ``default``: the default value, inherits the value from `usage.resources`,
+
+    - ``high``: allows for more aggressive bandwidth usage to improve overall
+      performance,
+
+    - ``medium``:  aims at a moderate bandwidth usage,
+
+    - ``low``: reduces bandwidth usage when possible at the cost of overall
+      performance.
+
 
 ``command-templates``
 ---------------------
@@ -3486,3 +3493,12 @@ helps performance.
     Number of threads to process background file closes. Only relevant if
     ``backgroundclose`` is enabled.
     (default: 4)
+
+``parallel-stream-bundle-processing``
+    :config-doc:`worker.parallel-stream-bundle-processing`
+
+``parallel-stream-bundle-processing.memory-target``
+    :config-doc:`worker.parallel-stream-bundle-processing.memory-target`
+
+``parallel-stream-bundle-processing.num-writer``
+    :config-doc:`worker.parallel-stream-bundle-processing.num-writer`
