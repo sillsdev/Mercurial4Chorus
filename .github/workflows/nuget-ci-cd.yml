@@ -48,7 +48,7 @@ jobs:
     # version so we can't be automatically upgraded to a compromised package;
     # update this to the latest known-good version each time we bump Mercurial.
     - name: Install uv
-      run: pip install uv==0.12.19
+      run: pip install uv==0.13.6
     - name: Checkout Mercurial
       run: hg clone https://foss.heptapod.net/mercurial/mercurial-devel hg
     - name: Checkout hg version to build
