@@ -156,9 +156,9 @@ keyring==23.5.0 \
     --hash=sha256:9012508e141a80bd1c0b6778d5c610dd9f8c464d75ac6774248500503f972fb9 \
     --hash=sha256:b0d28928ac3ec8e42ef4cc227822647a19f1d544f21f96457965dc01cf555261
     # via twine
-paramiko==2.10.4 \
-    --hash=sha256:3c9ed6084f4b671ab66dc3c729092d32d96c3258f1426071301cb33654b09027 \
-    --hash=sha256:3d2e650b6812ce6d160abff701d6ef4434ec97934b13e95cf1ad3da70ffb5c58
+paramiko==5.0.0 \
+    --hash=sha256:36763b5b95c2a0dcfdf1abc48e48156ee425b21efe2f0e787c2dd5a95c0e5e79 \
+    --hash=sha256:b7044611c30140d9a75261653210e2002977b71a0497ff3ba0d98d7edbf62f7c
     # via -r contrib/automation/requirements.txt.in
 pkginfo==1.8.2 \
     --hash=sha256:542e0d0b6750e2e21c20179803e40ab50598d8066d51097a0e382cba9eb02bff \
